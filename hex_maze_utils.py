@@ -1,6 +1,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import random
 
 # for now this is defined here because we use it to set up constants
@@ -52,7 +53,19 @@ ILLEGAL_STRAIGHT_PATHS_INSIDE_MAZE = {tuple(path) for path in illegal_straight_p
 
 ################################# Define a bunch of functions #################################
 
-def create_hex_maze():
+
+############## Functions for generating a hex maze configuration ############## 
+
+def add_edges_to_node(graph, node, edges):
+    '''
+    Add all edges to the specified node in the graph. 
+    If the node does not yet exist in the graph, add the node.
+    '''
+    for edge in edges:
+        graph.add_edge(node, edge)
+
+
+def create_empty_hex_maze():
     '''
     Use networkx to create a graph representing the empty hex maze before any barriers are added.
     
@@ -111,16 +124,23 @@ def create_hex_maze():
     add_edges_to_node(empty_hex_maze, 43, [39, 48])
     add_edges_to_node(empty_hex_maze, 3, [48])
     return empty_hex_maze
-    
 
-def add_edges_to_node(graph, node, edges):
+
+def create_maze_graph(barrier_set):
     '''
-    Add all edges to the specified node in the graph. 
-    If the node does not yet exist in the graph, add the node.
+    Given a set of barriers defining a hex maze configuration, 
+    return a networkx graph object representing the maze.
     '''
-    for edge in edges:
-        graph.add_edge(node, edge)
-        
+    
+    # Create a new empty hex maze object
+    maze_graph = create_empty_hex_maze()
+    
+    # Remove the barriers
+    for barrier in barrier_set:
+        maze_graph.remove_node(barrier)
+    return maze_graph
+
+
 def find_all_critical_choice_points(graph):
     '''
     Given a graph representing the hex maze, 
@@ -260,7 +280,7 @@ def generate_good_maze():
     Returns: the set of barriers for the good hex maze
     '''
     # Create the empty hex maze
-    start_maze = create_hex_maze()
+    start_maze = create_empty_hex_maze()
     barriers = set()
 
     # Generate a set of 9 random barriers until we get a good maze
@@ -282,11 +302,215 @@ def generate_good_maze():
     return barriers
 
 
+############## Functions for generating a next good barrier set given an initial barrier set ############## 
+
+def single_barrier_moved(barrier_set_1, barrier_set_2):
+    ''' Check if two sets of barriers differ by only one element '''
+    
+    # The symmetric difference (XOR) between the sets must have exactly two elements
+    # because each set should have exactly one barrier not present in the other set
+    return len(barrier_set_1.symmetric_difference(barrier_set_2)) == 2
+
+
+def at_least_one_path_shorter_and_longer(paths_1, paths_2):
+    ''' 
+    Given 2 sets of 3 paths lengths (e.g. [15, 17, 19] and [17, 21, 15]),
+    check if at least one corresponding path is shorter AND at least one is longer
+    
+    Returns: 
+    True if at least one path is shorter AND at least one is longer, False otherwise
+    '''
+    return (any(a < b for a, b in zip(paths_1, paths_2)) and any(a > b for a, b in zip(paths_1, paths_2)))
+
+
+def get_next_barrier_set(df, original_barriers):
+    '''
+    Given the hex maze database (df) and set of original barriers, get a list 
+    of next barrier sets created by the movement of a single barrier where at 
+    least one path increases in length and another decreases in length 
+    compared to the original barrier set. 
+    
+    Returns:
+    a list of potential new barrier sets
+    '''
+    
+    # Find other valid mazes in the df that differ by the movement of a single barrier
+    potential_new_barriers = [b for b in df['barriers'] if single_barrier_moved(b, original_barriers)]
+    
+    # Get the lengths of paths between reward ports for the original barrier set
+    original_path_lengths = df[(df['barriers'] == original_barriers)]['reward_path_lengths'].item()
+    
+    # We only want mazes where >=1 path gets longer and >=1 gets shorter compared to the original
+    new_barriers = []
+    for bar in potential_new_barriers:
+        # Get the path lengths between reward ports for this new barrier set
+        new_path_lengths = df[(df['barriers'] == bar)]['reward_path_lengths'].item()
+        # Only add it to our list if at least one path gets longer and one gets longer
+        if at_least_one_path_shorter_and_longer(original_path_lengths, new_path_lengths):
+            new_barriers.append(bar)
+    return new_barriers
+
+
+############## Functions for maze rotations and relfections across its axis of symmetry ############## 
+
+def rotate_hex(original_hex, direction='counterclockwise'):
+    '''
+    Given a hex in the hex maze, returns the corresponding hex if the maze is rotated once
+    counterclockwise (e.g. hex 1 becomes hex 2, 4 becomes 49, etc.). Option to specify
+    direction='clockwise' to rotate clockwise instead (e.g 1 becomes 3, 4 becomes 48, etc.)
+    
+    Returns: 
+    the corresponding hex if the maze was rotated once counterclockwise (or clockwise)
+    '''
+    # Lists of corresponding hexes when the maze is rotated 120 degrees
+    hex_rotation_lists = [[1,2,3], [4,49,48], [6,47,33], [5,38,43], [8,42,28], 
+                         [7,32,39], [11,46,23], [10,37,34], [9,27,44], [14,41,19],
+                         [13,31,29], [12,22,40], [18,45,15], [17,36,24], [16,26,35],
+                         [21,30,20], [25]]
+    
+    for lst in hex_rotation_lists:
+        if original_hex in lst:
+            index = lst.index(original_hex)
+            if direction=='clockwise':
+                return lst[(index - 1) % len(lst)]
+            else: # I choose to assume any direction not specified 'clockwise' is 'counterclockwise'
+                return lst[(index + 1) % len(lst)]
+    # Return None if the hex to rotate doesn't exist in our rotation lists (all hexes should exist)
+    return None  
+
+
+def reflect_hex(original_hex, axis=1):
+    '''
+    Given a hex in the hex maze, returns the corresponding hex if the maze is reflected
+    across the axis of hex 1 (e.g. hex 6 becomes hex 5 and vice versa, 8 becomes 7, etc.). 
+    Option to specify axis=2 or axis=3 to reflect across the axis of hex 2 or 3 instead.
+    
+    Returns: 
+    the corresponding hex if the maze was reflected across the axis of hex 1 (or 2 or 3)
+    '''
+    # Lists of corresponding hexes reflected across axis 1, 2, or 3
+    reflections_ax1 = [[6,5], [8,7], [11,9], [14,12], [18,15], [17,16], [22,19], 
+                      [21,20], [27,23], [26,24], [32,28], [31,29], [38,33], [37,34],
+                      [36,35], [49,48], [42,39], [41,40],[2,3], [47,43], [46,44]]
+    reflections_ax2 = [[47,38], [42,32], [46,27], [41,22], [45,18], [36,26], [40,14], 
+                      [30,21], [44,11], [35,17], [39,8], [29,13], [43,6], [34,10], 
+                      [24,16], [48,4], [28,7], [19,12], [3,1], [33,5], [23,9]]
+    reflections_ax3 = [[43,33], [39,28], [44,23], [40,19], [45,15], [35,24], [41,12],
+                      [30,20], [46,9], [36,16], [42,7], [31,13], [47,5], [37,10],
+                      [26,17], [49,4], [32,8], [22,14], [2,1], [38,6], [27,11]]
+    # Choose the reflection list for the axis we care about
+    hex_reflections = {1: reflections_ax1, 2: reflections_ax2, 3: reflections_ax3}.get(axis, None)
+    
+    for lst in hex_reflections:
+        if original_hex in lst:
+            # Return the other hex in the reflection pair
+            return lst[1] if lst[0] == original_hex else lst[0]
+    # If the hex isn't in any list, it doesn't change when the maze is reflected along this axis
+    return original_hex  
+    
+
+def get_rotated_barriers(original_barriers, direction='counterclockwise'):
+    '''
+    Given a set of barriers in the hex maze, returns the corresponding 
+    barrier set if the maze is rotated once counterclockwise (e.g. hex 1 becomes hex 2, 
+    4 becomes 49, etc.). Option to specify direction='clockwise' to rotate clockwise 
+    instead (e.g 1 becomes 3, 4 becomes 48, etc.)
+    
+    Returns: 
+    the barrier set if the maze was rotated once counterclockwise (or clockwise)
+    '''
+    return {rotate_hex(b, direction) for b in original_barriers}
+
+
+def get_reflected_barriers(original_barriers, axis=1):
+    '''
+    Given a set of barriers in the hex maze, returns the corresponding 
+    barrier set if the maze is reflected along the axis of hex 1 
+    (e.g. hex 6 becomes hex 5 and vice versa, 8 becomes 7 and vice versa, etc.). 
+    Option to specify axis=2 or axis=3 to reflect across the axis of hex 2 or 3 instead.
+    
+    Returns: 
+    the barrier set if the maze was reflected across the axis of hex 1 (or 2 or 3)
+    '''
+    return {reflect_hex(b, axis) for b in original_barriers}
+
+
+def get_isomorphic_mazes(barriers):
+    '''
+    Given a set of barriers defining a hex maze configuration, return the
+    other 5 barrier sets that have the same graph structure (corresponding
+    to the maze rotated clockwise/counterclockwise and reflected across its
+    3 axes of symmetry)
+    
+    Returns:
+    a set of the 5 isomorphic barrier sets for this barrier set
+    '''
+    # Rotate and reflect the maze to get other barrier configs that 
+    # represent the same underlying graph structure
+    reflected_ax1 = frozenset(get_reflected_barriers(barriers, axis=1))
+    reflected_ax2 = frozenset(get_reflected_barriers(barriers, axis=2))
+    reflected_ax3 = frozenset(get_reflected_barriers(barriers, axis=3))
+    rotated_ccw = frozenset(get_rotated_barriers(barriers, direction='counterclockwise'))
+    rotated_cw = frozenset(get_rotated_barriers(barriers, direction='clockwise'))
+    
+    return {reflected_ax1, reflected_ax2, reflected_ax3, rotated_ccw, rotated_cw}
+
+
+############## Use the above functions to get all the info about a maze configuration ##############
+
+
+def get_maze_attributes(barrier_set):
+    '''
+    Given a set of barriers defining a maze, create a dictionary of attributes for that maze.
+    
+    Returns: a dictionary of maze attributes
+    '''
+    
+    # Get the graph representation of the maze for us to do calculations on
+    maze = create_maze_graph(barrier_set)
+
+    # Get length of optimal paths between reward ports
+    len12 = nx.shortest_path_length(maze, source=1, target=2)+1
+    len13 = nx.shortest_path_length(maze, source=1, target=3)+1
+    len23 = nx.shortest_path_length(maze, source=2, target=3)+1
+    reward_path_lengths = [len12, len13, len23]
+    path_length_difference = max(reward_path_lengths) - min(reward_path_lengths)
+    
+    # Get the optimal paths between reward ports
+    optimal_paths_12 = list(nx.all_shortest_paths(maze, source=1, target=2))
+    optimal_paths_13 = list(nx.all_shortest_paths(maze, source=1, target=3))
+    optimal_paths_23 = list(nx.all_shortest_paths(maze, source=2, target=3))
+    optimal_paths_all = []
+    optimal_paths_all.extend(optimal_paths_12)
+    optimal_paths_all.extend(optimal_paths_13)
+    optimal_paths_all.extend(optimal_paths_23)
+    
+    # Get critical choice points
+    choice_points = set(find_all_critical_choice_points(maze))
+    num_choice_points = len(choice_points)
+    
+    # Get information about cycles
+    cycle_basis = nx.cycle_basis(maze)
+    num_cycles = len(cycle_basis)
+    
+    # Get a list of isomorphic mazes
+    isomorphic_mazes = get_isomorphic_mazes(barrier_set)
+    
+    # Create a dictionary of attributes
+    attributes = {'barriers': barrier_set, 'len12': len12, 'len13': len13, 'len23': len23, 
+                  'reward_path_lengths': reward_path_lengths, 'path_length_difference': path_length_difference,
+                  'optimal_paths_12': optimal_paths_12, 'optimal_paths_13': optimal_paths_13,
+                  'optimal_paths_23': optimal_paths_23, 'optimal_paths_all': optimal_paths_all,
+                  'choice_points': choice_points, 'num_choice_points': num_choice_points,
+                 'cycles': cycle_basis, 'num_cycles': num_cycles, 'isomorphic_mazes':isomorphic_mazes}
+    return attributes
+
+
 def plot_hex_maze(barriers):
     ''' Given a set of barriers specifying a hex maze, plot the maze! '''
     
     # create an empty maze for graph layout
-    base_hex_maze = create_hex_maze()
+    base_hex_maze = create_empty_hex_maze()
     
     # create our actual maze
     maze = base_hex_maze.copy()
@@ -309,3 +533,43 @@ def plot_hex_maze(barriers):
         nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[choice_point], node_color='yellow', node_size=400)
     
     plt.show()
+    
+
+############## One-time use function to help ensure that our database includes all possible mazes ##############
+    
+def num_isomorphic_mazes_in_set(set_of_valid_mazes, barriers):
+    '''
+    Given a set of all valid maze configurations and a set of barriers defining 
+    a single hex maze configuration, find all isomorphic mazes for this 
+    configuration that already exist in our larger set, and which are missing.
+    
+    Returns:
+    - the number of isomorphic mazes that already exist in the set
+    - a list of isomorphic maze configurations missing from the set
+    '''
+    # Get all potential isomorphic mazes for this barrier configuration
+    all_isomorphic_barriers = get_isomorphic_mazes(barriers)
+    # Find other mazes in the dataframe that are isomorphic to the given barrier set
+    isomorphic_barriers_in_set = set([b for b in set_of_valid_mazes if b in all_isomorphic_barriers])
+    # Get the isomorphic mazes not present in the dataframe
+    isomorphic_bariers_not_in_set = all_isomorphic_barriers.difference(isomorphic_barriers_in_set)
+    return len(isomorphic_barriers_in_set), isomorphic_bariers_not_in_set
+
+
+def num_isomorphic_mazes_in_df(df, barriers):
+    '''
+    Given our maze configuration dataframe and a set of barriers defining 
+    a hex maze configuration, find all isomorphic mazes that already exist 
+    in the dataframe, and which are missing.
+    
+    Returns:
+    - the number of isomorphic mazes that already exist in the dataframe
+    - a list of isomorphic maze configurations missing from the dataframe
+    '''
+    # Get all potential isomorphic mazes for this barrier configuration
+    all_isomorphic_barriers = get_isomorphic_mazes(barriers)
+    # Find other mazes in the dataframe that are isomorphic to the given barrier set
+    isomorphic_barriers_in_df = set([b for b in df['barriers'] if b in all_isomorphic_barriers])
+    # Get the isomorphic mazes not present in the dataframe
+    isomorphic_bariers_not_in_df = all_isomorphic_barriers.difference(isomorphic_barriers_in_df)
+    return len(isomorphic_barriers_in_df), isomorphic_bariers_not_in_df
