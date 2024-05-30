@@ -1,0 +1,1 @@
+This repo provides a database of possible hex maze configurations and lots of useful hex maze functions, as well as a walkthrough of how the database was generated, tutorials on searching the database, and tutorials for all of those functions.
