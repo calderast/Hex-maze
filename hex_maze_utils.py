@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import random
+from functools import partial
 
 # for now this is defined here because we use it to set up constants
 def get_subpaths(path, length):
@@ -304,51 +305,292 @@ def generate_good_maze():
 
 ############## Functions for generating a next good barrier set given an initial barrier set ############## 
 
-def single_barrier_moved(barrier_set_1, barrier_set_2):
+def single_barrier_moved(barriers_1, barriers_2):
     ''' Check if two sets of barriers differ by only one element '''
     
     # The symmetric difference (XOR) between the sets must have exactly two elements
     # because each set should have exactly one barrier not present in the other set
-    return len(barrier_set_1.symmetric_difference(barrier_set_2)) == 2
+    return len(barriers_1.symmetric_difference(barriers_2)) == 2
 
 
-def at_least_one_path_shorter_and_longer(paths_1, paths_2):
+def have_common_path(paths1, paths2):
+    '''
+    Given 2 lists of hex paths, check if there is a common path between the 2 lists.
+    Used for determining if there are shared optimal paths between mazes.
+    
+    True if there is a common path between the 2 lists of paths, False otherwise.
+    '''
+    # Convert the path lists to tuples to make them hashable and store them in sets
+    pathset1 = set(tuple(path) for path in paths1)
+    pathset2 = set(tuple(path) for path in paths2)
+    
+    # Return True if there is 1 or more common path between the path sets, False otherwise
+    return len(pathset1.intersection(pathset2)) > 0
+
+
+def have_common_optimal_paths(df, barriers_1, barriers_2):
+    '''
+    Given the hex maze database and 2 barrier sets, check if the 2 barrier sets have at
+    least one common optimal path between every pair of reward ports (e.g. the barrier sets
+    share an optimal path between ports 1 and 2, AND ports 1 and 3, AND ports 2 and 3), 
+    meaning the rat could be running the same paths even though the barrier sets are different.
+    
+    Returns:
+    True if the barrier sets have a common optimal path between all pairs of reward ports, False otherwise
+    '''
+    # Do these barrier sets have a common optimal path from port 1 to port 2?
+    have_common_path_12 = have_common_path(
+        df_lookup(df, barriers_1, 'optimal_paths_12'), 
+        df_lookup(df, barriers_2, 'optimal_paths_12'))
+    # Do these barrier sets have a common optimal path from port 1 to port 3?
+    have_common_path_13 = have_common_path(
+        df_lookup(df, barriers_1, 'optimal_paths_13'), 
+        df_lookup(df, barriers_2, 'optimal_paths_13'))
+    # Do these barrier sets have a common optimal path from port 2 to port 3?
+    have_common_path_23 = have_common_path(
+        df_lookup(df, barriers_1, 'optimal_paths_23'), 
+        df_lookup(df, barriers_2, 'optimal_paths_23'))
+    
+    # Return True if the barrier sets have a common optimal path between all pairs of reward ports
+    return (have_common_path_12 and have_common_path_13 and have_common_path_23)
+
+
+def at_least_one_path_shorter_and_longer(df, barriers_1, barriers_2):
     ''' 
-    Given 2 sets of 3 paths lengths (e.g. [15, 17, 19] and [17, 21, 15]),
-    check if at least one corresponding path is shorter AND at least one is longer
+    Given 2 sets of barriers, check if at least one optimal path between reward ports
+    is shorter AND at least one is longer (e.g. the path length between ports 1 and 2
+    increases and the path length between ports 2 and 3 decreases.
     
     Returns: 
     True if at least one path is shorter AND at least one is longer, False otherwise
     '''
+    # Get path lengths between reward ports for each barrier set
+    paths_1 = df_lookup(df, barriers_1, 'reward_path_lengths')
+    paths_2 = df_lookup(df, barriers_2, 'reward_path_lengths')
+    
+    # Check if >=1 path is longer and >=1 path is shorter
     return (any(a < b for a, b in zip(paths_1, paths_2)) and any(a > b for a, b in zip(paths_1, paths_2)))
 
 
-def get_next_barrier_set(df, original_barriers):
+def optimal_path_order_changed(df, barriers_1, barriers_2):
+    ''' 
+    Given 2 sets of barriers, check if the length order of the optimal paths
+    between reward ports has changed (e.g. the shortest path between reward ports
+    used to be between ports 1 and 2 and is now between ports 2 and 3, etc.)
+    
+    Returns: 
+    True if the optimal path length order has changed, False otherwise
+    '''
+    
+    # Get path lengths between reward ports for each barrier set
+    paths_1 = df_lookup(df, barriers_1, 'reward_path_lengths')
+    paths_2 = df_lookup(df, barriers_2, 'reward_path_lengths')
+    
+     # Find which are the longest and shortest paths (multiple paths may tie for longest/shortest)
+    longest_paths_1 = [i for i, num in enumerate(paths_1) if num == max(paths_1)]
+    shortest_paths_1 = [i for i, num in enumerate(paths_1) if num == min(paths_1)]
+    longest_paths_2 = [i for i, num in enumerate(paths_2) if num == max(paths_2)]
+    shortest_paths_2 = [i for i, num in enumerate(paths_2) if num == min(paths_2)]
+    
+    # Check that both the longest and shortest paths are not the same
+    return not any(l in longest_paths_2 and s in shortest_paths_2 for l in longest_paths_1 for s in shortest_paths_1)
+
+
+def no_common_choice_points(df, barriers_1, barriers_2):
+    ''' 
+    Given 2 sets of barriers, ensure there are no common choice points between them.
+    
+    Returns: 
+    True if there are no common choice points, False otherwise
+    '''
+    
+    # Get the choice points for each barrier set
+    choice_points_1 = df_lookup(df, barriers_1, 'choice_points')
+    choice_points_2 = df_lookup(df, barriers_2, 'choice_points')
+    
+    # Check if there are no choice points in common
+    return choice_points_1.isdisjoint(choice_points_2)
+
+
+def get_next_barrier_sets(df, original_barriers, criteria=['one_path_shorter_and_longer', 'optimal_path_order_changed', 'no_common_choice_points'], criteria_type='ANY'):
     '''
     Given the hex maze database (df) and set of original barriers, get a list 
-    of next barrier sets created by the movement of a single barrier where at 
-    least one path increases in length and another decreases in length 
-    compared to the original barrier set. 
+    of next barrier sets created by the movement of a single barrier. The next
+    barrier set must not have the same optimal paths between all reward ports. 
+    
+    Option to specify additional criteria (as a list of strings):
+    - 'one_path_shorter_and_longer': at least one path increases in length 
+    and another decreases in length compared to the original barrier set.
+    - 'optimal_path_order_changed': the length order of the optimal paths
+    between reward ports has changed (e.g. the shortest path between reward ports
+    used to be between ports 1 and 2 and is now between ports 2 and 3, etc.)
+    - 'no_common_choice_points': the 2 configurations have no choice points
+    in common
+    
+    Option to specify criteria type:
+    - 'ANY' (default): the next barrier set is valid if it satisfies ANY of the criteria
+    - 'ALL': the next barrier set is valid if it satisfies ALL of the criteria
     
     Returns:
-    a list of potential new barrier sets
+    list of sets: a list of potential new barrier sets
+    '''
+    
+    criteria_functions = {
+        "one_path_shorter_and_longer": partial(at_least_one_path_shorter_and_longer, df, original_barriers),
+        "optimal_path_order_changed": partial(optimal_path_order_changed, df, original_barriers),
+        "no_common_choice_points": partial(no_common_choice_points, df, original_barriers)
+    }
+    
+    # Find other valid mazes in the df that differ by the movement of a single barrier
+    potential_new_barriers = [b for b in df['barriers'] if single_barrier_moved(b, original_barriers)]
+    
+    # Set up a list for the ones that meet our criteria
+    new_barriers = []
+    
+    # For each potential new barrier set, make sure it meets all of our criteria
+    for bar in potential_new_barriers:
+        # Ensure the next barrier set doesn't have the same optimal paths between all reward ports
+        if have_common_optimal_paths(df, original_barriers, bar):
+            continue
+            
+        # Check our other criteria
+        new_maze_meets_criteria = False
+        if criteria_type == "ALL":
+            new_maze_meets_criteria = all(criteria_functions[criterion](bar) for criterion in criteria)
+        else: # if not specified as "ALL", I choose to assume ANY
+            new_maze_meets_criteria = any(criteria_functions[criterion](bar) for criterion in criteria)
+        
+        # If our new maze met all of the criteria, add it!
+        if new_maze_meets_criteria:
+            new_barriers.append(bar)
+            
+    return new_barriers
+
+
+def get_next_barrier_sets_v2(df, original_barriers):
+    '''
+    Given the hex maze database (df) and set of original barriers, get a list 
+    of next barrier sets created by the movement of a single barrier. The next
+    barrier set must not have the same optimal paths between all reward ports. 
+    At least one path must be longer and one must be shorter.
+    
+    Returns:
+    list of sets: a list of potential new barrier sets
     '''
     
     # Find other valid mazes in the df that differ by the movement of a single barrier
     potential_new_barriers = [b for b in df['barriers'] if single_barrier_moved(b, original_barriers)]
     
-    # Get the lengths of paths between reward ports for the original barrier set
-    original_path_lengths = df[(df['barriers'] == original_barriers)]['reward_path_lengths'].item()
-    
-    # We only want mazes where >=1 path gets longer and >=1 gets shorter compared to the original
+    # Set up a list for the ones that meet our criteria
     new_barriers = []
+    
+    # For each potential new barrier set, make sure it meets all of our criteria
     for bar in potential_new_barriers:
-        # Get the path lengths between reward ports for this new barrier set
-        new_path_lengths = df[(df['barriers'] == bar)]['reward_path_lengths'].item()
-        # Only add it to our list if at least one path gets longer and one gets longer
-        if at_least_one_path_shorter_and_longer(original_path_lengths, new_path_lengths):
-            new_barriers.append(bar)
+        # Ensure the next barrier set doesn't have the same optimal paths between all reward ports
+        if have_common_optimal_paths(df, original_barriers, bar):
+            continue
+            
+        # check path longer and shorter 
+        if at_least_one_path_shorter_and_longer(df, original_barriers, bar):
+            new_barriers.append(bar) 
+            
     return new_barriers
+
+
+def find_all_valid_barrier_sequences(df, start_barrier_set):
+    """
+    Finds all valid sequences of barriers starting from the given start_barrier_set.
+
+    This function recursively generates all sequences of barrier sets where each barrier set
+    in the sequence differs from the previous by the movement of a single barrier.
+    The optimal paths that the rat can travel between reward ports should be different
+    for all barrier sets in a sequence.
+    It ensures that no barrier set is revisited to avoid cycles and repetitions.
+
+    Args:
+        start_barrier_set (set): The initial barrier set to start generating sequences from.
+
+    Returns:
+        list of list of sets: A list of all valid sequences of barriers. Each sequence
+                              is represented as a list of sets.
+    """
+    
+    def helper(current_barrier_set, visited):
+        """
+        A helper function to recursively find all valid sequences of barrier sets.
+
+        Args:
+            current_barrier_set (set): The current barrier set being processed.
+            visited (set): A set of barrier sets that have already been visited to avoid cycles.
+
+        Returns:
+            list of list of sets: A list of all valid sequences starting from the current_barrier_set.
+                                  Each sequence is represented as a list of sets.
+        """
+        # Search the database for all valid new barrier sets from the current barrier set
+        next_sets = get_next_barrier_sets_v2(df, current_barrier_set)
+        
+        # Remove the current barrier set from the next sets to avoid self-referencing
+        next_sets = [s for s in next_sets if s != current_barrier_set]
+        
+        # Remove barrier sets that have the same optimal paths as any set in the sequence
+        next_sets = [s for s in next_sets if not any(have_common_optimal_paths(df, s, v) for v in visited)]
+        
+        # Initialize a list to store sequences
+        sequences = []
+        
+        # Iterate over each next valid set
+        for next_set in next_sets:
+            if next_set not in visited:
+                # Mark the next set as visited
+                visited.add(next_set)
+                
+                # Recursively find sequences from the next set
+                subsequences = helper(next_set, visited)
+                
+                # Append the current set to the beginning of each subsequence
+                for subsequence in subsequences:
+                    sequences.append([current_barrier_set] + subsequence)
+                
+                # Unmark the next set as visited (backtrack)
+                visited.remove(next_set)
+        
+        # If no valid sequences were found, return the current barrier set as the only sequence
+        if not sequences:
+            return [[current_barrier_set]]
+        
+        return sequences
+    
+    # Start the recursive search with the initial barrier set and an empty visited set
+    return helper(start_barrier_set, {start_barrier_set})
+
+
+# def get_next_barrier_set_old(df, original_barriers):
+#     '''
+#     Given the hex maze database (df) and set of original barriers, get a list 
+#     of next barrier sets created by the movement of a single barrier where at 
+#     least one path increases in length and another decreases in length 
+#     compared to the original barrier set. 
+    
+#     Returns:
+#     a list of potential new barrier sets
+#     '''
+    
+#     # Find other valid mazes in the df that differ by the movement of a single barrier
+#     potential_new_barriers = [b for b in df['barriers'] if single_barrier_moved(b, original_barriers)]
+    
+#     # Get the lengths of paths between reward ports for the original barrier set
+#     original_path_lengths = df[(df['barriers'] == original_barriers)]['reward_path_lengths'].item()
+    
+#     # We only want mazes where >=1 path gets longer and >=1 gets shorter compared to the original
+#     new_barriers = []
+#     for bar in potential_new_barriers:
+#         # Get the path lengths between reward ports for this new barrier set
+#         new_path_lengths = df[(df['barriers'] == bar)]['reward_path_lengths'].item()
+#         # Only add it to our list if at least one path gets longer and one gets longer
+#         if at_least_one_path_shorter_and_longer(original_path_lengths, new_path_lengths):
+#             new_barriers.append(bar)
+#     return new_barriers
 
 
 ############## Functions for maze rotations and relfections across its axis of symmetry ############## 
@@ -457,6 +699,10 @@ def get_isomorphic_mazes(barriers):
 
 
 ############## Use the above functions to get all the info about a maze configuration ##############
+
+def df_lookup(df, barriers, attribute_name):
+    ''' Use the dataframe to look up a specified attribute of a barrier set. '''
+    return df[(df['barriers'] == barriers)][attribute_name].item()
 
 
 def get_maze_attributes(barrier_set):
