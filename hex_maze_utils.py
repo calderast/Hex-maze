@@ -591,6 +591,36 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
     return new_barriers
 
 
+def best_next_barrier_set(df, original_barriers):
+    '''
+    Given the hex maze database and an original barrier set, find the best 
+    potential next barrier set (based on the number of hexes
+    different on the optimal paths between reward ports).
+    
+    Args:
+    df (dataframe): The database of all possible maze configurations.
+    original_barriers (set): The initial barrier set.
+
+    Returns:
+    set: The "best" potential next barrier set (maximally different from the 
+    original barrier set)
+    '''
+    
+    # Get all potential next barrier sets (that differ from the original by the movement of a single barrier)
+    potential_next_barriers = get_next_barrier_sets(df, original_barriers, criteria_type='ALL')
+    max_hex_diff = 0
+    
+    # Check how different each next barrier set is from our original barrier set
+    for barriers in potential_next_barriers:
+        hex_diff = num_hexes_different_on_optimal_paths(df, original_barriers, barriers)
+        # If this barrier set is maximally different from the original, save it
+        if hex_diff > max_hex_diff:
+            max_hex_diff = hex_diff
+            best_next_barriers = barriers
+        
+    return best_next_barriers
+
+
 def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=10, max_sequence_length=5):
     '''
     Finds all valid sequences of barriers starting from the given start_barrier_set.
