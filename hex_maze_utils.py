@@ -591,7 +591,7 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
     return new_barriers
 
 
-def best_next_barrier_set(df, original_barriers):
+def get_best_next_barrier_set(df, original_barriers):
     '''
     Given the hex maze database and an original barrier set, find the best 
     potential next barrier set (based on the number of hexes
@@ -608,8 +608,12 @@ def best_next_barrier_set(df, original_barriers):
     
     # Get all potential next barrier sets (that differ from the original by the movement of a single barrier)
     potential_next_barriers = get_next_barrier_sets(df, original_barriers, criteria_type='ALL')
-    max_hex_diff = 0
     
+    # If there are no potential next barrier sets, return None
+    if not potential_next_barriers:
+        return None
+    
+    max_hex_diff = 0
     # Check how different each next barrier set is from our original barrier set
     for barriers in potential_next_barriers:
         hex_diff = num_hexes_different_on_optimal_paths(df, original_barriers, barriers)
@@ -621,7 +625,7 @@ def best_next_barrier_set(df, original_barriers):
     return best_next_barriers
 
 
-def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=10, max_sequence_length=5):
+def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=8, max_sequence_length=5):
     '''
     Finds all valid sequences of barriers starting from the given start_barrier_set.
 
@@ -656,15 +660,15 @@ def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=10, max
         list of list of sets: A list of all valid barrier sequences starting from the 
         current_barrier_set. Each sequence is represented as a list of barrier sets.
         '''
-        print(f"Current set: {current_barrier_set}")
-        print(f"Visited: {visited}")
+        #print(f"Current set: {current_barrier_set}")
+        #print(f"Visited: {visited}")
         
         # Base case: if we have reached the max sequence length, return the current barrier set
         if current_length >= max_sequence_length:
             return [[current_barrier_set]]
         
         # Search the database for all valid new barrier sets from the current barrier set
-        next_sets = get_next_barrier_sets(df, current_barrier_set, criteria_type="ALL")
+        next_sets = get_next_barrier_sets(df, current_barrier_set, criteria_type="ANY")
         
         # Remove the current barrier set from the next sets to avoid self-referencing
         next_sets = [s for s in next_sets if s != current_barrier_set]
@@ -701,11 +705,11 @@ def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=10, max
         
         return sequences
     
-    # Start the recursive search from the initial barrier set and an empty "visited" set
-    return helper(start_barrier_set, set(), 1)
+    # Start the recursive search from the initial barrier set
+    return helper(start_barrier_set, {frozenset(start_barrier_set)}, 1)
 
 
-def get_barrier_sequence(df, start_barrier_set, min_hex_diff=10, max_sequence_length=5):
+def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_length=5):
     '''
     Finds a sequence of barriers starting from the given start_barrier_set. This is a
     reasonably fast way to generate a good barrier sequence given a starting sequence 
@@ -730,6 +734,9 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=10, max_sequence_le
     sequence is found.
     '''
     
+    # Keep track of our longest sequence found in case we don't find one of max length
+    longest_sequence_found = []
+    
     def helper(current_sequence, visited, current_length):
         '''
         A helper function to recursively find a "good enough" sequence of barrier sets.
@@ -745,20 +752,31 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=10, max_sequence_le
         fulfills all our criteria but is not necessarily the best one), or None if no such 
         sequence is found.
         '''
+        # We keep track of the longest sequence found outside of the helper function
+        nonlocal longest_sequence_found
+        
+        #print("in helper")
         # Base case: if the sequence length has reached the maximum, return the current sequence
         if current_length >= max_sequence_length:
             return current_sequence
         
+        #print(f"Current sequence: {current_sequence}")
+        
+        # If this sequence is longer than our longest sequence found, it is our new longest sequence
+        if current_length > len(longest_sequence_found):
+            #print("This is our new longest sequence!")
+            longest_sequence_found = current_sequence
+        
         current_barrier_set = current_sequence[-1]
         
         # Search the database for all valid new barrier sets from the current barrier set
-        next_sets = get_next_barrier_sets(df, current_barrier_set, criteria_type="ALL")
+        next_sets = get_next_barrier_sets(df, current_barrier_set, criteria_type="ANY")
         
         # Remove the current barrier set from the next sets to avoid self-referencing
         next_sets = [s for s in next_sets if s != current_barrier_set]
         
         # Remove barrier sets with optimal paths too similar to any other barrier set in the sequence
-        next_sets = [s for s in next_sets if all(num_hexes_different_on_optimal_paths(df, s, v) >= min_hex_diff for v in visited)]
+        next_sets = [s for s in next_sets if all(num_hexes_different_on_optimal_paths(df, s, v)>=min_hex_diff for v in visited)]
         
         # Iterate over each next valid set
         for next_set in next_sets:
@@ -770,17 +788,24 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=10, max_sequence_le
                 result = helper(current_sequence + [next_set], visited, current_length+1)
                 
                 # If a sequence of the maximum length is found, return it
-                if len(result) == max_sequence_length:
+                if result and len(result) == max_sequence_length:
                     return result
                 
                 # Unmark the next set as visited (backtrack)
                 visited.remove(next_set)
         
-        # If no valid sequences were found, return None
-        return None
+        # If no valid sequences were found, return the current sequence
+        #print(f"Sequence at return: {current_sequence}")
+        return current_sequence
     
-    # Start the recursive search from the initial barrier set and an empty "visited" set
-    return helper([start_barrier_set], set(), 1)
+    # Start the recursive search from the initial barrier set
+    barrier_sequence = helper([start_barrier_set], {frozenset(start_barrier_set)}, 1)
+    
+    #print(f"Barrier sequence: {barrier_sequence}")
+    #print(f"Longest sequence: {longest_sequence_found}")
+    
+    # Return the longest sequence
+    return longest_sequence_found if len(longest_sequence_found) > len(barrier_sequence) else barrier_sequence
 
 
 ############## Functions for maze rotations and relfections across its axis of symmetry ############## 
