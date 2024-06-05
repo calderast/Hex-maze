@@ -759,8 +759,8 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_len
         # Base case: if the sequence length has reached the maximum, return the current sequence
         if current_length >= max_sequence_length:
             return current_sequence
-        
-        #print(f"Current sequence: {current_sequence}")
+       
+        print(f"Current sequence: {current_sequence}")
         
         # If this sequence is longer than our longest sequence found, it is our new longest sequence
         if current_length > len(longest_sequence_found):
@@ -967,6 +967,36 @@ def get_maze_attributes(barrier_set):
                   'choice_points': choice_points, 'num_choice_points': num_choice_points,
                  'cycles': cycle_basis, 'num_cycles': num_cycles, 'isomorphic_mazes':isomorphic_mazes}
     return attributes
+
+
+def get_barrier_sequence_attributes(df, barrier_sequence):
+    '''
+    Given the maze configuration database (df) and a sequence of barriers in the database, 
+    get the reward path lengths and choice points for all mazes in the sequence,
+    and return a dictionary of these attributes.
+    
+    Args:
+    df (dataframe): The database of all possible maze configurations.
+    barrier_sequence (list of sets): The sequence of maze configurations.
+
+    Returns:
+    dict: A dictionary of attributes of this sequence.
+    '''
+    
+    reward_path_lengths = []
+    choice_points = []
+    
+    # Get attributes for each barrier set in the sequence
+    for bars in barrier_sequence:
+        reward_path_lengths.append(df_lookup(df, bars, 'reward_path_lengths'))
+        choice_points.append(df_lookup(df, bars, 'choice_points'))
+    
+    # Set up a dictionary of attributes
+    barrier_dict = {'barrier_sequence': barrier_sequence, 
+                    'sequence_length': len(barrier_sequence),
+                    'reward_path_lengths': reward_path_lengths,
+                    'choice_points': choice_points}
+    return barrier_dict
 
 
 def plot_hex_maze(barriers):
