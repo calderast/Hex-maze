@@ -709,33 +709,42 @@ def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=8, max_
     return helper(start_barrier_set, {frozenset(start_barrier_set)}, 1)
 
 
-def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_length=5):
+def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_length=5, max_recursive_calls=40):
     '''
     Finds a sequence of barriers starting from the given start_barrier_set. This is a
     reasonably fast way to generate a good barrier sequence given a starting sequence 
-    (and is often preferable to generating all possible sequences using 
+    (and is almost always preferable to generating all possible sequences using 
     find_all_valid_barrier_sequences, which can take a very long time).
 
     This function recursively generates sequences of barrier sets where each barrier set
     in the sequence differs from the previous by the movement of a single barrier.
     The optimal paths that the rat can travel between reward ports must differ by at least 
-    min_hex_diff (default 10) hexes for all barrier sets in a sequence.
+    min_hex_diff (default 8) hexes for all barrier sets in a sequence. This function may
+    not return the best possible barrier sequence, but it wil return the longest valid
+    barrier sequence found (up to max_sequence_length, default 5).
 
     Args:
     df (dataframe): The database of all possible maze configurations.
     start_barrier_set (set): The initial barrier set to start generating a sequence from.
     min_hex_diff (int): The minimum combined number of hexes different between the most 
-    similar optimal paths between all 3 reward ports for all mazes in a sequence.
-    max_sequence_length (int): The maximum length of a sequence to generate.
+    similar optimal paths between all 3 reward ports for all mazes in a sequence (default=8).
+    max_sequence_length (int): The maximum length of a sequence to generate. Will stop 
+    searching and automatically return a sequence once we find one of this length (default=5).
+    max_recursive_calls (int): The maximum number of recursive calls to make on our search
+    for a good barrier sequence (so the function doesn't run for a really long time). Stops 
+    the search and returns the longest valid barrier sequence found by this point (default=40).
 
     Returns:
     list of sets: A valid sequence of barrier sets that is "good enough" (meaning it
-    fulfills all our criteria but is not necessarily the best one), or None if no such 
-    sequence is found.
+    fulfills all our criteria but is not necessarily the best one), or the starting barrier
+    set if no such sequence is found.
     '''
     
-    # Keep track of our longest sequence found in case we don't find one of max length
+    # Keep track of our longest sequence found in case we don't find one of max_sequence_length
     longest_sequence_found = []
+    
+    # Stop looking and return the longest sequence found after max_recursive_calls (for speed)
+    recursive_calls = 0
     
     def helper(current_sequence, visited, current_length):
         '''
@@ -749,23 +758,31 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_len
 
         Returns:
         list of sets: A valid sequence of barrier sets that is "good enough" (meaning it
-        fulfills all our criteria but is not necessarily the best one), or None if no such 
-        sequence is found.
+        fulfills all our criteria but is not necessarily the best one), or the current
+        barrier sequence if no such sequence is found.
         '''
-        # We keep track of the longest sequence found outside of the helper function
-        nonlocal longest_sequence_found
+        # We keep track of these outside of the helper function
+        nonlocal longest_sequence_found, recursive_calls
+        
+        # Keep track of how many times we have called the helper function
+        recursive_calls += 1
         
         #print("in helper")
         # Base case: if the sequence length has reached the maximum, return the current sequence
         if current_length >= max_sequence_length:
             return current_sequence
        
-        print(f"Current sequence: {current_sequence}")
+        #print(f"Current sequence: {current_sequence}")
         
         # If this sequence is longer than our longest sequence found, it is our new longest sequence
         if current_length > len(longest_sequence_found):
             #print("This is our new longest sequence!")
             longest_sequence_found = current_sequence
+            
+        # If we have reached the limit of how many times to call helper, return the longest sequence found
+        if recursive_calls >= max_recursive_calls:
+            print("Max recursive calls reached!")
+            return longest_sequence_found
         
         current_barrier_set = current_sequence[-1]
         
