@@ -1017,7 +1017,11 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
 
 
 def plot_hex_maze(barriers):
-    ''' Given a set of barriers specifying a hex maze, plot the maze! '''
+    '''
+    Given a set of barriers specifying a hex maze, plot the maze.
+    Plots open hexes in light blue, connected by thin grey lines.
+    Barriers are shown in dark grey. Choice point(s) are in yellow.
+    '''
     
     # Create an empty maze for graph layout
     base_hex_maze = create_empty_hex_maze()
