@@ -494,6 +494,48 @@ def no_common_choice_points(df, barriers_1, barriers_2):
     return choice_points_1.isdisjoint(choice_points_2)
 
 
+def get_barrier_change(barriers_1, barriers_2):
+    '''
+    Given 2 barrier sets that differ by the movement of a single barrier, 
+    find the barrier that was moved.
+    
+    Args:
+    barriers_1 (set/frozenset): The first barrier set
+    barriers_2 (set/frozenset): The second barrier set
+    
+    Returns:
+    old_barrier (int): The hex location of the barrier to be moved in the first set
+    new_barrier (int): The hex location the barrier was moved to in the second set
+    '''
+    # Find the original barrier location
+    old_barrier = barriers_1 - barriers_2
+
+    # Find the new barrier location
+    new_barrier = barriers_2 - barriers_1
+    
+    # Return as integers instead of sets/frozensets with a single element
+    return next(iter(old_barrier)), next(iter(new_barrier))
+
+
+def get_barrier_changes(barrier_sequence):
+    '''
+    Given a sequence of barrier sets that each differ by the movement of 
+    a single barrier, find the barriers moved from each barrier set to the next.
+    
+    Args:
+    barrier_sequence (list of sets): List of sequential barrier sets
+    
+    Returns:
+    list of lists: A list of [old barrier, new barrier] defining each 
+    transition between barrier sets
+    '''
+    barrier_changes = []
+    for i in range(len(barrier_sequence) - 1):
+        old_barrier, new_barrier = get_barrier_change(barrier_sequence[i], barrier_sequence[i+1])
+        barrier_changes.append([old_barrier, new_barrier])
+    return barrier_changes
+
+
 # def get_next_barrier_sets(df, original_barriers, criteria=['one_path_shorter_and_longer', 'optimal_path_order_changed', 'no_common_choice_points'], criteria_type='ANY'):
 #     '''
 #     Given the hex maze database (df) and set of original barriers, get a list 
@@ -1016,11 +1058,21 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
     return barrier_dict
 
 
-def plot_hex_maze(barriers):
-    '''
+def plot_hex_maze(barriers, old_barrier=None, new_barrier=None):
+    ''' 
     Given a set of barriers specifying a hex maze, plot the maze.
-    Plots open hexes in light blue, connected by thin grey lines.
+    Open hexes are shown in light blue, connected by thin grey lines.
     Barriers are shown in dark grey. Choice point(s) are in yellow.
+    
+    Option to specify old barrier location and new barrier location 
+    to indicate a barrier change configuration:
+    The now-open hex where the barrier used to be is shown in pale red.
+    The new barrier is shown in dark red.
+    
+    Args:
+    barriers (set): A set defining the hexes where barriers are placed in the maze.
+    old_barrier (int): Optional - The hex where the barrier was in the previous maze.
+    new_barrier (int): Optional - The hex where the new barrier is in this maze.
     '''
     
     # Create an empty maze for graph layout
@@ -1045,6 +1097,14 @@ def plot_hex_maze(barriers):
     choice_points = find_all_critical_choice_points(maze)
     for choice_point in choice_points:
         nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[choice_point], node_color='yellow', node_size=400)
+        
+    # Make the old barrier location that is now an open hex light red
+    if old_barrier is not None:
+        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[old_barrier], node_color='peachpuff', node_size=400)
+    
+    # Make the new barrier location dark red
+    if new_barrier is not None:
+        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[new_barrier], node_color='darkred', node_size=400)
     
     plt.show()
     
