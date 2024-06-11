@@ -1,0 +1,6 @@
+# Ignore all .ipynb_checkpoints
+.ipynb_checkpoints/*
+dev/.ipynb_checkpoints/*
+Tutorials/.ipynb_checkpoints/*
+__pycache__/*
+.DS_Store
