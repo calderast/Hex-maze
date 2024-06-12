@@ -1030,8 +1030,10 @@ def get_maze_attributes(barrier_set):
 
 def get_barrier_sequence_attributes(df, barrier_sequence):
     '''
-    Given the maze configuration database (df) and a sequence of barriers in the database, 
-    get the reward path lengths and choice points for all mazes in the sequence,
+    Given the maze configuration database (df) and a sequence of 
+    maze configurations that differ by the movement of a single barrier, 
+    get the barrier change between each maze, reward path lengths and 
+    choice points for all mazes in the sequence,
     and return a dictionary of these attributes.
     
     Args:
@@ -1050,13 +1052,18 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
         reward_path_lengths.append(df_lookup(df, bars, 'reward_path_lengths'))
         choice_points.append(df_lookup(df, bars, 'choice_points'))
     
+    barrier_changes = get_barrier_changes(barrier_sequence)
+    
     # Set up a dictionary of attributes
     barrier_dict = {'barrier_sequence': barrier_sequence, 
                     'sequence_length': len(barrier_sequence),
+                    'barrier_changes': barrier_changes,
                     'reward_path_lengths': reward_path_lengths,
                     'choice_points': choice_points}
     return barrier_dict
 
+
+################################ Plotting hex mazes ################################
 
 def plot_hex_maze(barriers, old_barrier=None, new_barrier=None):
     ''' 
@@ -1108,6 +1115,35 @@ def plot_hex_maze(barriers, old_barrier=None, new_barrier=None):
     
     plt.show()
     
+
+def plot_barrier_change_sequence(barrier_sequence):
+    '''
+    Given a sequence of barrier sets that each differ by the movement of 
+    a single barrier, plot each maze in the sequence with the moved barriers
+    indicated on each maze.
+    
+    Open hexes are shown in light blue, connected by thin grey lines.
+    Barriers are shown in dark grey. Choice point(s) are in yellow.
+    The now-open hex where the barrier used to be is shown in pale red.
+    The new barrier is shown in dark red.
+    
+    Args:
+    barrier_sequence (list of sets): List of sequential barrier sets
+    '''
+    
+    # Find the barriers moved from one configuration to the next
+    barrier_changes = get_barrier_changes(barrier_sequence)
+    
+    # First print and plot the first barrier set
+    print(f"Barrier set 0: {barrier_sequence[0]}")
+    plot_hex_maze(barrier_sequence[0])
+    
+    # Now print barrier change info and plot each successive barrier set
+    for i, (barriers, (old_barrier, new_barrier)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
+        print(f"Barrier change: {old_barrier} -> {new_barrier}")
+        print(f"Barrier set {i+1}: {barriers}")
+        plot_hex_maze(barriers, old_barrier, new_barrier)
+
 
 ############## One-time use functions to help ensure that our database includes all possible mazes ##############
     
