@@ -1011,7 +1011,7 @@ def df_lookup(df, barriers, attribute_name):
     Must exist as a column in the df
 
     Returns:
-    The value of the attribute fot this maze
+    The value of the attribute for this maze
     '''
     return df[(df['barriers'] == barriers)][attribute_name].item()
 
