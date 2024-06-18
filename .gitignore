@@ -4,3 +4,4 @@ dev/.ipynb_checkpoints/*
 Tutorials/.ipynb_checkpoints/*
 __pycache__/*
 .DS_Store
+venv/
