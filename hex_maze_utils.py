@@ -825,7 +825,7 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_len
             
         # If we have reached the limit of how many times to call helper, return the longest sequence found
         if recursive_calls >= max_recursive_calls:
-            print("Max recursive calls reached!")
+            #print("Max recursive calls reached!")
             return longest_sequence_found
         
         current_barrier_set = current_sequence[-1]
@@ -968,7 +968,7 @@ def get_reflected_barriers(original_barriers, axis=1):
     1, 2, or 3. Defaults to 1
     
     Returns: 
-    set: The barrier set if the maze was reflected across the axis of hex 1 (or 2 or 3)
+    set: The barrier set if the maze was reflected across the specified axis
     '''
     return {reflect_hex(b, axis) for b in original_barriers}
 
