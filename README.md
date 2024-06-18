@@ -25,7 +25,7 @@ This database was generated using the `Generate_Hex_Maze_Database.ipynb` noteboo
 `Barrier_Sequence_Databases/` contains multiple databases of barrier sequences (consecutive maze configurations that differ by the movement of a single barrier).
 I'm currently still updating/adding to these databases, but `barrier_sequences_first1000` contains 1000 possible barrier sequences and is a good place to start for now.
 
-These databses are generated using the `Generate_Barrier_Sequence_Database.ipynb` notebook available in the `Tutorials` folder.
+These databases are generated using the `Generate_Barrier_Sequence_Database.ipynb` notebook available in the `Tutorials` folder.
 
 ### Hex maze functions
 `hex_maze_utils.py` provides a bunch of functions for hex maze related tasks, including plotting hex mazes, generating new barrier sequences, calculating attributes of different mazes, and rotating and reflecting exisitng barrier configurations. All of these functions are (hopefully) well documented (if not, let me know!!). You can view the documentation for any function by running help(function_name), or just by scrolling through the `hex_maze_utils.py` file.
