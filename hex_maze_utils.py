@@ -602,8 +602,10 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
     used to be the closest together or furthest apart is now different).
     
     Optional argument criteria_type:
-    criteria_type='ANY': Accept new barrier sets that meet EITHER of these criteria
-    criteria_type='ALL': (default) Accept new barrier sets that meet BOTH of these criteria
+    criteria_type='ANY': (default) Accept new barrier sets that meet EITHER of these criteria
+    criteria_type='ALL': Accept new barrier sets that meet BOTH of these criteria
+    criteria_type='JOSE': Meet both of the above criteria + optimal path lengths are 17, 19, 21
+    + only 1 choice point
     
     Returns:
     list of sets: a list of potential new barrier sets
@@ -621,14 +623,22 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
         criteria1 = at_least_one_path_shorter_and_longer(df, original_barriers, bar)
         # Check if the optimal path order has changed
         criteria2 = optimal_path_order_changed(df, original_barriers, bar)
+        # Make sure the optimal path lengths are 17, 19, 21 (in any order)
+        criteria3 = (set(df_lookup(df, bar, 'reward_path_lengths')) == {17, 19, 21})
+        # Only 1 critical choice point
+        criteria4 = df_lookup(df, bar, 'num_choice_points')==1
         
         # Accept the potential new barrier set if it meets our criteria
         if criteria_type=='ALL':
             if (criteria1 and criteria2):
                 bar = frozenset(int(b) for b in bar) # make int instead of np.int64
                 new_barriers.append(bar)
-        else: # If not specified as "ALL", I choose to assume "ANY"
-            if (criteria1 or criteria2):
+        elif criteria_type=='JOSE':
+            if (criteria1 and criteria2 and criteria3 and criteria4):
+                bar = frozenset(int(b) for b in bar) # make int instead of np.int64
+                new_barriers.append(bar)
+        else: # I choose to assume 'ANY' as the default
+            if (criteria1 or criteria2): 
                 bar = frozenset(int(b) for b in bar) # make int instead of np.int64
                 new_barriers.append(bar)
     
@@ -698,7 +708,7 @@ def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=8, max_
         Args:
         current_barrier_set (set): The current barrier set being processed.
         visited (set): A set of barrier sets that have already been visited to avoid cycles.
-         current_length (int): The current length of our generated sequence.
+        current_length (int): The current length of our generated sequence.
 
         Returns:
         list of list of sets: A list of all valid barrier sequences starting from the 
@@ -753,7 +763,7 @@ def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=8, max_
     return helper(start_barrier_set, {frozenset(start_barrier_set)}, 1)
 
 
-def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_length=5, max_recursive_calls=40):
+def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_length=5, max_recursive_calls=40, criteria_type='ANY'):
     '''
     Finds a sequence of barriers starting from the given start_barrier_set. This is a
     reasonably fast way to generate a good barrier sequence given a starting sequence 
@@ -777,6 +787,8 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_len
     max_recursive_calls (int): The maximum number of recursive calls to make on our search
     for a good barrier sequence (so the function doesn't run for a really long time). Stops 
     the search and returns the longest valid barrier sequence found by this point (default=40).
+    criteria_type (String): The criteria type for what makes a valid next barrier set to propagate
+    to get_next_barrier_sets. Options are 'ALL', 'ANY', or 'JOSE'. Defaults to 'ANY'
 
     Returns:
     list of sets: A valid sequence of barrier sets that is "good enough" (meaning it
@@ -831,7 +843,7 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_len
         current_barrier_set = current_sequence[-1]
         
         # Search the database for all valid new barrier sets from the current barrier set
-        next_sets = get_next_barrier_sets(df, current_barrier_set, criteria_type="ANY")
+        next_sets = get_next_barrier_sets(df, current_barrier_set, criteria_type=criteria_type)
         
         # Remove the current barrier set from the next sets to avoid self-referencing
         next_sets = [s for s in next_sets if s != current_barrier_set]
