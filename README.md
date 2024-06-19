@@ -1,5 +1,5 @@
 # Hex-maze
-This repo provides a set of functions to generate and plot hex maze configurations and optimal barrier change sequences for the hex maze behavioral task used by the Berke Lab at UCSF. It also provides databases of valid maze configurations and their attributes.
+This repo provides a set of functions to generate, plot, and calculate info about hex maze configurations and optimal barrier change sequences for the hex maze behavioral task used by the Berke Lab at UCSF. It also provides databases of valid maze configurations and their attributes.
 
 ## Step 1. Fork and clone the repository
 To contribute to this project, you first need to fork the repository to your own GitHub account. This creates a copy of the project where you can make changes.
@@ -26,7 +26,7 @@ Once you have forked the repository, you need to clone it to your local machine 
     pip install -r requirements.txt
 
 ## Step 3. Start the tutorials
-Navigate to the `Tutorials/` folder and begin with the `Getting_Started.ipynb` notebook.
+Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`](Tutorials/Getting_Started.ipynb) notebook.
 
 `Tutorials/` also includes the following tutorial notebooks:
 - [Plotting hex mazes and barrier change sequences](Tutorials/Plotting_Hex_Mazes.ipynb)
