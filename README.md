@@ -29,8 +29,9 @@ Once you have forked the repository, you need to clone it to your local machine 
 Navigate to the `Tutorials/` folder and begin with the `Getting_Started.ipynb` notebook.
 
 `Tutorials/` also includes the following tutorial notebooks:
-- [Plotting hex mazes and barrier change sequences](Tutorials/Plotting_Hex_mazes.ipynb)
+- [Plotting hex mazes and barrier change sequences](Tutorials/Plotting_Hex_Mazes.ipynb)
 - [Searching the maze configuration database for the mazes you want](Tutorials/Maze_Configuration_Database_Search.ipynb)
+- [Searching the barrier sequence database for the sequence you want](Tutorials/Barrier_Sequence_Database_Search.ipynb)
 - [Demos of useful hex maze functions](Tutorials/Hex_Maze_Functions.ipynb)
 - [How the hex maze database was generated](Tutorials/Generate_Hex_Maze_Database.ipynb)
 - [How the barrier sequence database was generated](Tutorials/Generate_Barrier_Sequence_Database.ipynb)
