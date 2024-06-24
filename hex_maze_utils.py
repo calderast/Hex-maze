@@ -63,7 +63,7 @@ def add_edges_to_node(graph, node, edges):
     If the node does not yet exist in the graph, add the node.
     
     Args:
-    graph: the networkx graph object
+    graph (nx.Graph): the networkx graph object
     node: the node to add to the graph (if it does not yet exist)
     edges: the edges to the node in the graph
     '''
@@ -73,10 +73,12 @@ def add_edges_to_node(graph, node, edges):
 
 def create_empty_hex_maze():
     '''
-    Use networkx to create a graph representing the empty hex maze before any barriers are added.
+    Use networkx to create a graph object representing the empty hex maze 
+    before any barriers are added.
     
     Returns: 
-    a new networkx graph object representing all of the hexes in the hex maze
+    nx.Graph: a new networkx graph object representing all of 
+    the hexes and potential transitions between them in the hex maze
     ''' 
     empty_hex_maze = nx.Graph()
     
@@ -137,6 +139,13 @@ def create_maze_graph(barrier_set):
     '''
     Given a set of barriers defining a hex maze configuration, 
     return a networkx graph object representing the maze.
+
+    Args:
+    barrier_set (set of ints): set of hex locations
+    where barriers are placed in this hex maze configuration
+    
+    Returns:
+    nx.Graph: a networkx graph object representing the maze
     '''
     
     # Create a new empty hex maze object
@@ -148,14 +157,25 @@ def create_maze_graph(barrier_set):
     return maze_graph
 
 
-def find_all_critical_choice_points(graph):
+def find_all_critical_choice_points(maze):
     '''
-    Given a networkx graph representing the hex maze, find all 
-    critical choice points between reward ports 1, 2, and 3.
+    Given a barrier set or networkx graph representing the hex maze, 
+    find all critical choice points between reward ports 1, 2, and 3.
+    
+    Args:
+    maze (set OR nx.Graph): set of barriers representing the hex maze
+    OR networkx graph object representing the maze
     
     Returns:
     set: the critical choice points for this maze
     '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
     paths12 = list(nx.all_shortest_paths(graph, source=1, target=2))
     paths13 = list(nx.all_shortest_paths(graph, source=1, target=3))
     paths23 = list(nx.all_shortest_paths(graph, source=2, target=3))
@@ -181,13 +201,66 @@ def find_all_critical_choice_points(graph):
     return choice_points
 
 
-def has_illegal_straight_path(graph):
+def get_path_independent_hexes_to_port(maze, reward_port):
     '''
-    Given a networkx graph of the hex maze, checks if there are any illegal straight paths.
+    Find all path-independent hexes to a reward port, defined as hexes 
+    that a rat MUST run through to get to the port regardless of which 
+    path he is taking/his reward port of origin. These are the same as
+    the hexes the rat must run through when leaving this port before he
+    reaches the (first) critical choice point. 
     
+    Args:
+    maze (set OR nx.Graph): set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+    reward_port (int): The reward port: 1, 2, or 3
+    
+    Returns:
+    set of ints: the path-independent hexes the rat must always run
+    through when going to and from this reward port
+    '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # Get all shortest paths between reward_port and the other 2 ports
+    other_ports = [1, 2, 3]
+    other_ports.remove(reward_port)
+    paths_a = list(nx.all_shortest_paths(graph, source=reward_port, target=other_ports[0]))
+    paths_b = list(nx.all_shortest_paths(graph, source=reward_port, target=other_ports[1]))
+
+    # The path-independent hexes are the common hexes on the shortest 
+    # paths between the reward port and both other ports
+    path_independent_hexes = set()
+    for path_a in paths_a:
+        for path_b in paths_b:
+            shared_path = [hex for hex in path_a if hex in path_b]
+            path_independent_hexes.update(shared_path)
+
+    return path_independent_hexes
+
+
+def has_illegal_straight_path(maze):
+    '''
+    Given a barrier set or networkx graph representing the hex maze,
+    checks if there are any illegal straight paths.
+    
+    Args:
+    maze (set OR nx.Graph): set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+
     Returns: 
     the (first) offending path, or False if none
     '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+    
     optimal_paths = []
     optimal_paths.extend(list(nx.all_shortest_paths(graph, source=1, target=2)))
     optimal_paths.extend(list(nx.all_shortest_paths(graph, source=1, target=3)))
@@ -218,10 +291,10 @@ def has_illegal_straight_path(graph):
     return False
 
 
-def is_valid_maze(graph, complain=False):
+def is_valid_maze(maze, complain=False):
     '''
-    Given a graph representing a possible hex maze configuration, check if it is valid 
-    using the following criteria: 
+    Given a a barrier set or networkx graph representing a possible hex maze
+    configuration, check if it is valid using the following criteria: 
     - there are no unreachable hexes (this also ensures all reward ports are reachable)
     - path lengths between reward ports are between 15-25 hexes
     - all critical choice points are >=6 hexes away from a reward port
@@ -229,12 +302,21 @@ def is_valid_maze(graph, complain=False):
     - no straight paths >MAX_STRAIGHT_PATH_TO_PORT hexes to reward port (including port hex)
     - no straight paths >STRAIGHT_PATHS_INSIDE_MAZE in middle of maze
     
-    Optional argument complain (defaults to False):
-    - When True: If our maze configuration is invalid, print out the reason why.
+    Args:
+    maze (set OR nx.Graph): set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+    complain (bool): Optional. If our maze configuration is invalid, 
+    print out the reason why. Defaults to False
     
     Returns: 
     True if the hex maze is valid, False otherwise
     '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
 
     # Make sure all (non-barrier) hexes are reachable
     if not nx.is_connected(graph):
