@@ -242,6 +242,31 @@ def get_path_independent_hexes_to_port(maze, reward_port):
     return path_independent_hexes
 
 
+def get_hexes_from_port(maze, start_hex, reward_port):
+    '''
+    Find the minimum number of hexes from a given hex to a
+    chosen reward port for a given maze configuration.
+    
+    Args:
+    maze (set OR nx.Graph): set of barriers representing the hex maze
+    OR a networkx graph object representing the maze
+    start_hex (int): The hex to calculate distance from
+    reward_port (int): The reward port: 1, 2, or 3
+    
+    Returns:
+    int: the number of hexes from start_hex to reward_port
+    '''
+    # If our maze input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # Get the shortest path length between start_hex and the reward port
+    return nx.shortest_path_length(graph, source=start_hex, target=reward_port)
+
+
 def has_illegal_straight_path(maze):
     '''
     Given a barrier set or networkx graph representing the hex maze,
