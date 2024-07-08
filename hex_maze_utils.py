@@ -1,8 +1,10 @@
 import networkx as nx
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import numpy as np
 import pandas as pd
 import random
+import math
 from functools import partial
 
 # for now this is defined here because we use it to set up constants
@@ -1227,9 +1229,101 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
 
 ################################ Plotting hex mazes ################################
 
+def hexagon_node_shape(pos, ax, node_size, node_colors):
+    ''' Plots hexagon-shaped nodes. Helper function for plot_hex_maze. '''
+    for node, (x, y) in pos.items():
+        hexagon = patches.RegularPolygon((x, y), numVertices=6, radius=node_size / 1000,
+                                         orientation=math.pi/6, facecolor=node_colors[node], edgecolor='white')
+        ax.add_patch(hexagon)
+
+
+def generate_hexagonal_triangle_positions():
+    ''' Calculate hex positions for plot_hex_maze.
+    
+    Returns:
+    dict: a dictionary of hex: (x,y) to be used when plotting '''
+    hexes_per_row = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
+    hexes = [1,4,6,5,8,7,11,10,9,14,13,12,18,17,16,15,22,21,20,19,27,26,25,24,23,32,31,30,29,28,38,37,36,35,34,33,49,42,41,40,39,48,2,47,46,45,44,43,3]
+    hex_positions = {}
+    y_offset = math.sqrt(3) / 2  # Vertical distance between rows for touching hexagons
+    y_shift = 0
+
+    count = 0
+    for i, nodes_in_row in enumerate(hexes_per_row):
+        if i % 2 == 0 and i != 0:  # Shift even rows and all rows below them
+            y_shift += y_offset / 2
+        for j in range(nodes_in_row):
+            x = j * 3/2 - (nodes_in_row - 1) * 3/4
+            y = -i * y_offset + y_shift
+            hex_positions[hexes[count]] = (x, y)
+            count += 1
+    return hex_positions
+
+
 def plot_hex_maze(barriers, old_barrier=None, new_barrier=None):
     ''' 
-    Given a set of barriers specifying a hex maze, plot the maze.
+    Given a set of barriers specifying a hex maze, plot the maze
+    in classic hex maze style.
+    Open hexes are shown in light blue. Barriers are shown in dark grey. 
+    Choice point(s) are in yellow.
+    
+    Option to specify old barrier location and new barrier location 
+    to indicate a barrier change configuration:
+    The now-open hex where the barrier used to be is shown in pale red.
+    The new barrier is shown in dark red.
+    
+    Args:
+    barriers (set): A set defining the hexes where barriers are placed in the maze.
+    old_barrier (int): Optional. The hex where the barrier was in the previous maze.
+    new_barrier (int): Optional. The hex where the new barrier is in this maze.
+    '''
+    
+    # Create an empty hex maze
+    base_hex_maze = create_empty_hex_maze()
+    # Get custom hex positions
+    hex_positions = generate_hexagonal_triangle_positions()
+
+    # Make open hexes light blue
+    node_colors = {node: 'skyblue' for node in base_hex_maze.nodes()}
+
+    if barriers is not None:
+        for hex in barriers:
+            node_colors.update({hex: 'black'})
+
+        # Make the choice point(s) yellow
+        choice_points = find_all_critical_choice_points(barriers)
+        for hex in choice_points:
+            node_colors.update({hex: 'yellow'})
+
+        # Make the old barrier location that is now an open hex light red
+        if old_barrier is not None:
+            node_colors.update({old_barrier: 'peachpuff'})
+
+        # Make the new barrier location dark red
+        if new_barrier is not None:
+            node_colors.update({new_barrier: 'darkred'})
+
+    fig, ax = plt.subplots()
+    hexagon_node_shape(hex_positions, ax, 500, node_colors)
+
+    # Add node labels
+    nx.draw_networkx_labels(base_hex_maze, hex_positions, labels={h: h for h in base_hex_maze.nodes()}, font_color='black')
+
+    # Add the barrier labels
+    if barriers is not None:
+        nx.draw_networkx_labels(base_hex_maze, hex_positions, labels={b: b for b in barriers}, font_color='white')
+
+    # Adjust axes
+    plt.xlim(-6, 6)
+    plt.ylim(-9, 1)
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.show()
+
+
+def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None):
+    ''' 
+    Given a set of barriers specifying a hex maze, plot the maze as a 
+    networkx style graph with nodes connected by lines.
     Open hexes are shown in light blue, connected by thin grey lines.
     Barriers are shown in dark grey. Choice point(s) are in yellow.
     
