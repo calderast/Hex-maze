@@ -203,6 +203,32 @@ def find_all_critical_choice_points(maze):
     return choice_points
 
 
+def get_optimal_paths(maze):
+    '''
+    Given a barrier set or networkx graph representing the hex maze,
+    return a list of all optimal paths between reward ports in the maze.
+    
+    Args:
+    maze (set OR nx.Graph): set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+
+    Returns: 
+    list of lists: A list of all optimal paths between reward ports
+    '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+    
+    optimal_paths = []
+    optimal_paths.extend(list(nx.all_shortest_paths(graph, source=1, target=2)))
+    optimal_paths.extend(list(nx.all_shortest_paths(graph, source=1, target=3)))
+    optimal_paths.extend(list(nx.all_shortest_paths(graph, source=2, target=3)))
+    return optimal_paths
+
+
 def get_path_independent_hexes_to_port(maze, reward_port):
     '''
     Find all path-independent hexes to a reward port, defined as hexes 
@@ -1229,99 +1255,215 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
 
 ################################ Plotting hex mazes ################################
 
-def hexagon_node_shape(pos, ax, node_size, node_colors):
-    ''' Plots hexagon-shaped nodes. Helper function for plot_hex_maze. '''
-    for node, (x, y) in pos.items():
-        hexagon = patches.RegularPolygon((x, y), numVertices=6, radius=node_size / 1000,
-                                         orientation=math.pi/6, facecolor=node_colors[node], edgecolor='white')
-        ax.add_patch(hexagon)
+def get_hex_centroids(scale=1):
+    ''' 
+    Calculate the (x,y) coordinates of each hex centroid.
+    Centroids are calculated relative to the centroid of hex 1 at (0,0).
 
-
-def generate_hexagonal_triangle_positions():
-    ''' Calculate hex positions for plot_hex_maze.
+    Args:
+    scale (int): The side length of each hex. Defaults to 1
     
     Returns:
-    dict: a dictionary of hex: (x,y) to be used when plotting '''
-    hexes_per_row = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
-    hexes = [1,4,6,5,8,7,11,10,9,14,13,12,18,17,16,15,22,21,20,19,27,26,25,24,23,32,31,30,29,28,38,37,36,35,34,33,49,42,41,40,39,48,2,47,46,45,44,43,3]
-    hex_positions = {}
-    y_offset = math.sqrt(3) / 2  # Vertical distance between rows for touching hexagons
-    y_shift = 0
+    dict: a dictionary of hex: (x,y) coordinate of centroid
+    '''
 
+    # Number of hexes in each vertical row of the hex maze
+    hexes_per_row = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
+    # List of hexes in order from top to bottom, left to right
+    hex_list = [1, 4, 6, 5, 8, 7, 11, 10, 9, 14, 13, 12, 18, 17, 16, 15,
+                22, 21, 20, 19, 27, 26, 25, 24, 23, 32, 31, 30, 29, 28,
+                38, 37, 36, 35, 34, 33, 49, 42, 41, 40, 39, 48, 2, 47, 46, 45, 44, 43, 3]
+    # Vertical distance between rows for touching hexes
+    y_offset = math.sqrt(3) / 2  * scale
+    y_shift = 0
     count = 0
-    for i, nodes_in_row in enumerate(hexes_per_row):
-        if i % 2 == 0 and i != 0:  # Shift even rows and all rows below them
+    hex_positions = {}
+    for row, hexes_in_this_row in enumerate(hexes_per_row):
+        if row % 2 == 0 and row != 0:  # Every other row, shift an extra 1/2 hex down
             y_shift += y_offset / 2
-        for j in range(nodes_in_row):
-            x = j * 3/2 - (nodes_in_row - 1) * 3/4
-            y = -i * y_offset + y_shift
-            hex_positions[hexes[count]] = (x, y)
+        for hex in range(hexes_in_this_row):
+            x = hex * 3/2 * scale - (hexes_in_this_row - 1) * 3/4 * scale
+            y = -row * y_offset + y_shift
+            hex_positions[hex_list[count]] = (x, y)
             count += 1
     return hex_positions
 
 
-def plot_hex_maze(barriers, old_barrier=None, new_barrier=None):
+def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None, 
+                  show_barriers=True, show_choice_points=True,
+                  show_optimal_paths=False, show_arrow=True,
+                  show_barrier_change=True, scale=1):
     ''' 
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
-    Open hexes are shown in light blue. Barriers are shown in dark grey. 
-    Choice point(s) are in yellow.
+    Open hexes are shown in light blue. By default, barriers are shown
+    in black, and choice point(s) are shown in yellow.
     
-    Option to specify old barrier location and new barrier location 
+    Option to specify old_barrier hex and new_barrier hex 
     to indicate a barrier change configuration:
     The now-open hex where the barrier used to be is shown in pale red.
-    The new barrier is shown in dark red.
+    The new barrier is shown in dark red. An arrow indicating the movement
+    of the barrier from the old hex to the new hex is shown in pink.
     
     Args:
-    barriers (set): A set defining the hexes where barriers are placed in the maze.
-    old_barrier (int): Optional. The hex where the barrier was in the previous maze.
-    new_barrier (int): Optional. The hex where the new barrier is in this maze.
+    barriers (set of ints): A set defining the hexes where barriers are placed in the maze. \
+        If no barriers or 'None' is specifed, plots an empty hex maze
+    old_barrier (int): Optional. The hex where the barrier was in the previous maze
+    new_barrier (int): Optional. The hex where the new barrier is in this maze
+
+    Additional args to change the plot style:
+    - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
+    If False, only open hexes are shown. Defaults to True
+    - show_choice_points (bool): If the choice points should be shown in yellow. \
+    If False, the choice points are not indicated on the plot. Defaults to True
+    - show_optimal_paths (bool): Highlight the hexes on optimal paths between \
+    reward ports in light green. Defaults to False
+    - show_arrow (bool): Draw an arrow indicating barrier movement from the \
+    old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and \
+    new_barrier are not None
+    - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
+    on the maze. Defaults to True if old_barrier and new_barrier are not None. \
+    Note that highlighting choice points takes precendence over barrier change \
+    hexes, as they are also shown by the movement arrow. If show_barriers=False, \
+    the new_barrier hex will not be shown (because no barriers are shown with this option.) 
     '''
     
     # Create an empty hex maze
-    base_hex_maze = create_empty_hex_maze()
-    # Get custom hex positions
-    hex_positions = generate_hexagonal_triangle_positions()
+    hex_maze = create_empty_hex_maze()
+    # Get a dictionary of the (x,y) coordinates of each hex centroid
+    hex_coordinates = get_hex_centroids(scale)
+    # Define this for times we want to draw the arrow but not show barriers
+    new_barrier_coords = None
 
-    # Make open hexes light blue
-    node_colors = {node: 'skyblue' for node in base_hex_maze.nodes()}
+    # Make the open hexes light blue
+    hex_colors = {node: 'skyblue' for node in hex_maze.nodes()}
 
     if barriers is not None:
-        for hex in barriers:
-            node_colors.update({hex: 'black'})
+        # Make the barriers black if we want to show them
+        if show_barriers:
+            for hex in barriers:
+                hex_colors.update({hex: 'black'})
+        # Or if we don't want to show the barriers, remove them
+        else:
+            # Save the coordinates of the new barrier hex if we still want to draw the arrow
+            if new_barrier is not None and show_arrow:
+                new_barrier_coords = hex_coordinates.pop(new_barrier, None)
+            # Remove the barrier hexes from all of our dicts
+            for hex in barriers:
+                hex_coordinates.pop(hex, None)
+                hex_colors.pop(hex, None)
+                hex_maze.remove_node(hex)
+        
+        # Optional - Make the hexes on optimal paths light green
+        if show_optimal_paths:
+            hexes_on_optimal_paths = {hex for path in get_optimal_paths(barriers) for hex in path}
+            for hex in hexes_on_optimal_paths:
+                hex_colors.update({hex: 'lightgreen'})
 
-        # Make the choice point(s) yellow
-        choice_points = find_all_critical_choice_points(barriers)
-        for hex in choice_points:
-            node_colors.update({hex: 'yellow'})
+        # Optional - Make the old barrier location (now an open hex) light red to indicate barrier change
+        if old_barrier is not None and show_barrier_change:
+            hex_colors.update({old_barrier: 'peachpuff'})
 
-        # Make the old barrier location that is now an open hex light red
-        if old_barrier is not None:
-            node_colors.update({old_barrier: 'peachpuff'})
+        # Optional - Make the new barrier location dark red to indicate barrier change
+        if new_barrier is not None and show_barrier_change:
+            hex_colors.update({new_barrier: 'darkred'})
 
-        # Make the new barrier location dark red
-        if new_barrier is not None:
-            node_colors.update({new_barrier: 'darkred'})
+        # Optional - Make the choice point(s) yellow
+        if show_choice_points:
+            choice_points = find_all_critical_choice_points(barriers)
+            for hex in choice_points:
+                hex_colors.update({hex: 'gold'})
 
     fig, ax = plt.subplots()
-    hexagon_node_shape(hex_positions, ax, 500, node_colors)
+    # Add each hex to the plot
+    for hex, (x, y) in hex_coordinates.items():
+        hexagon = patches.RegularPolygon((x, y), numVertices=6, radius=scale/2,
+                                         orientation=math.pi/6, facecolor=hex_colors[hex], edgecolor='white')
+        ax.add_patch(hexagon)
 
-    # Add node labels
-    nx.draw_networkx_labels(base_hex_maze, hex_positions, labels={h: h for h in base_hex_maze.nodes()}, font_color='black')
+    # If we have a barrier change, add an arrow between the old_barrier and new_barrier to show barrier movement
+    if show_arrow and old_barrier is not None and new_barrier is not None:
+            arrow_start = hex_coordinates[old_barrier]
+            # If we removed new_barrier from our dict (because show_barriers=False), use the saved coordinates
+            arrow_end = hex_coordinates.get(new_barrier, new_barrier_coords)
+            ax.annotate("",
+                xy=arrow_end, xycoords='data',
+                xytext=arrow_start, textcoords='data',
+                arrowprops=dict(arrowstyle="-|>",
+                                connectionstyle="arc3, rad=0.2",
+                                color="salmon", linewidth=2))
 
-    # Add the barrier labels
-    if barriers is not None:
-        nx.draw_networkx_labels(base_hex_maze, hex_positions, labels={b: b for b in barriers}, font_color='white')
+    # Add hex labels
+    nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={h: h for h in hex_maze.nodes()}, font_color='black')
+
+    # Add barrier labels
+    if barriers is not None and show_barriers:
+        nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={b: b for b in barriers}, font_color='white')
 
     # Adjust axes
-    plt.xlim(-6, 6)
-    plt.ylim(-9, 1)
+    plt.xlim(-5.5*scale, 5.5*scale)
+    plt.ylim(-9*scale, 1*scale)
     plt.gca().set_aspect('equal', adjustable='box')
     plt.show()
+    
+
+def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
+                                 **kwargs):
+    '''
+    Given a sequence of barrier sets that each differ by the movement of 
+    a single barrier, plot each maze in the sequence with the moved barriers
+    indicated on each maze.
+    
+    Open hexes are shown in light blue. By default, barriers are shown
+    in black, and choice point(s) are shown in yellow.
+    The now-open hex where the barrier used to be is shown in pale red.
+    The new barrier is shown in dark red. An arrow indicating the movement
+    of the barrier from the old hex to the new hex is shown in pink.
+    
+    Args:
+    barrier_sequence (list of sets): List of sequential barrier sets
+    print_barrier_info (bool): Optional. Print each barrier set and the
+    barrier moved between barrier sets. Defaults to True
+
+    Additional args to change the plot style (same as for plot_hex_maze):
+    - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
+    If False, only open hexes are shown. Defaults to True
+    - show_choice_points (bool): If the choice points should be shown in yellow. \
+    If False, the choice points are not indicated on the plot. Defaults to True
+    - show_optimal_paths (bool): Highlight the hexes on optimal paths between \
+    reward ports in light green. Defaults to False
+    - show_arrow (bool): Draw an arrow indicating barrier movement from the \
+    old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and \
+    new_barrier are not None
+    - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
+    on the maze. Defaults to True if old_barrier and new_barrier are not None. \
+    Note that highlighting choice points takes precendence over barrier change \
+    hexes, as they are also shown by the movement arrow. If show_barriers=False, \
+    the new_barrier hex will not be shown (because no barriers are shown with this option.) 
+    '''
+    
+    # Find the barriers moved from one configuration to the next
+    barrier_changes = get_barrier_changes(barrier_sequence)
+    
+    # First print and plot the first barrier set
+    # Pass any additional style args directly to plot_hex_maze
+    if (print_barrier_info):
+        print(f"Barrier set 0: {barrier_sequence[0]}")
+    plot_hex_maze(barrier_sequence[0], **kwargs)
+    
+    # Now print barrier change info and plot each successive barrier set
+    for i, (barriers, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
+        if (print_barrier_info):
+            print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
+            print(f"Barrier set {i+1}: {barriers}")
+        plot_hex_maze(barriers, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
 
 
-def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None):
+def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None,
+                           show_barriers=True, show_choice_points=True):
     ''' 
+    ***** DEPRECATED: replaced by plot_hex_maze *****
+    
     Given a set of barriers specifying a hex maze, plot the maze as a 
     networkx style graph with nodes connected by lines.
     Open hexes are shown in light blue, connected by thin grey lines.
@@ -1333,9 +1475,9 @@ def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None):
     The new barrier is shown in dark red.
     
     Args:
-    barriers (set): A set defining the hexes where barriers are placed in the maze.
-    old_barrier (int): Optional. The hex where the barrier was in the previous maze.
-    new_barrier (int): Optional. The hex where the new barrier is in this maze.
+    barriers (set): A set defining the hexes where barriers are placed in the maze
+    old_barrier (int): Optional. The hex where the barrier was in the previous maze
+    new_barrier (int): Optional. The hex where the new barrier is in this maze
     '''
     
     # Create an empty maze for graph layout
@@ -1343,8 +1485,8 @@ def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None):
     
     # Create our actual maze
     maze = base_hex_maze.copy()
-    for barrier in barriers:
-        maze.remove_node(barrier)
+    for hex in barriers:
+        maze.remove_node(hex)
 
     # Get the graph layout of the original maze
     pos = nx.kamada_kawai_layout(base_hex_maze)
@@ -1353,13 +1495,15 @@ def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None):
     nx.draw(maze, pos, with_labels=True, node_color='skyblue', edge_color='gray', node_size=400)
 
     # Add the barriers in black
-    nx.draw_networkx_nodes(base_hex_maze, pos, nodelist={b: b for b in barriers}, node_color='black', node_size=400)   
-    nx.draw_networkx_labels(base_hex_maze, pos, labels={b: b for b in barriers}, font_color='white')
+    if show_barriers:
+        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist={b: b for b in barriers}, node_color='black', node_size=400)   
+        nx.draw_networkx_labels(base_hex_maze, pos, labels={b: b for b in barriers}, font_color='white')
 
     # Make the choice point(s) yellow
-    choice_points = find_all_critical_choice_points(maze)
-    for choice_point in choice_points:
-        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[choice_point], node_color='yellow', node_size=400)
+    if show_choice_points:
+        choice_points = find_all_critical_choice_points(maze)
+        for choice_point in choice_points:
+            nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[choice_point], node_color='yellow', node_size=400)
         
     # Make the old barrier location that is now an open hex light red
     if old_barrier is not None:
@@ -1370,39 +1514,6 @@ def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None):
         nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[new_barrier], node_color='darkred', node_size=400)
     
     plt.show()
-    
-
-def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True):
-    '''
-    Given a sequence of barrier sets that each differ by the movement of 
-    a single barrier, plot each maze in the sequence with the moved barriers
-    indicated on each maze.
-    
-    Open hexes are shown in light blue, connected by thin grey lines.
-    Barriers are shown in dark grey. Choice point(s) are in yellow.
-    The now-open hex where the barrier used to be is shown in pale red.
-    The new barrier is shown in dark red.
-    
-    Args:
-    barrier_sequence (list of sets): List of sequential barrier sets
-    print_barrier_info (bool): Optional. Print each barrier set and the
-    barrier moved between barrier sets. Defaults to True
-    '''
-    
-    # Find the barriers moved from one configuration to the next
-    barrier_changes = get_barrier_changes(barrier_sequence)
-    
-    # First print and plot the first barrier set
-    if (print_barrier_info):
-        print(f"Barrier set 0: {barrier_sequence[0]}")
-    plot_hex_maze(barrier_sequence[0])
-    
-    # Now print barrier change info and plot each successive barrier set
-    for i, (barriers, (old_barrier, new_barrier)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
-        if (print_barrier_info):
-            print(f"Barrier change: {old_barrier} -> {new_barrier}")
-            print(f"Barrier set {i+1}: {barriers}")
-        plot_hex_maze(barriers, old_barrier, new_barrier)
 
 
 ############## One-time use functions to help ensure that our database includes all possible mazes ##############
