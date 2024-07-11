@@ -758,8 +758,8 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
         criteria1 = at_least_one_path_shorter_and_longer(df, original_barriers, bar)
         # Check if the optimal path order has changed
         criteria2 = optimal_path_order_changed(df, original_barriers, bar)
-        # Make sure the optimal path lengths are 17, 19, 21 (in any order)
-        criteria3 = (set(df_lookup(df, bar, 'reward_path_lengths')) == {17, 19, 21})
+        # All 3 paths lengths are different
+        criteria3 = len(set(df_lookup(df, bar, 'reward_path_lengths'))) == 3
         # Only 1 critical choice point
         criteria4 = df_lookup(df, bar, 'num_choice_points')==1
         
@@ -770,6 +770,10 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
                 new_barriers.append(bar)
         elif criteria_type=='JOSE':
             if (criteria1 and criteria2 and criteria3 and criteria4):
+                bar = frozenset(int(b) for b in bar) # make int instead of np.int64
+                new_barriers.append(bar)
+        elif criteria_type=='SINGLE_CHOICE_POINT':
+            if (criteria1 and criteria2 and criteria4):
                 bar = frozenset(int(b) for b in bar) # make int instead of np.int64
                 new_barriers.append(bar)
         else: # I choose to assume 'ANY' as the default
