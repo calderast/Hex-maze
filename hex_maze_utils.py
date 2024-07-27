@@ -65,9 +65,9 @@ def add_edges_to_node(graph, node, edges):
     If the node does not yet exist in the graph, add the node.
     
     Args:
-    graph (nx.Graph): the networkx graph object
-    node: the node to add to the graph (if it does not yet exist)
-    edges: the edges to the node in the graph
+    graph (nx.Graph): The networkx graph object
+    node: The node to add to the graph (if it does not yet exist)
+    edges: The edges to the node in the graph
     '''
     for edge in edges:
         graph.add_edge(node, edge)
@@ -79,7 +79,7 @@ def create_empty_hex_maze():
     before any barriers are added.
     
     Returns: 
-    nx.Graph: a new networkx graph object representing all of 
+    nx.Graph: A new networkx graph object representing all of 
     the hexes and potential transitions between them in the hex maze
     ''' 
     empty_hex_maze = nx.Graph()
@@ -143,11 +143,11 @@ def create_maze_graph(barrier_set):
     return a networkx graph object representing the maze.
 
     Args:
-    barrier_set (set of ints): set of hex locations
+    barrier_set (set of ints): Set of hex locations
     where barriers are placed in this hex maze configuration
     
     Returns:
-    nx.Graph: a networkx graph object representing the maze
+    nx.Graph: A networkx graph object representing the maze
     '''
     
     # Create a new empty hex maze object
@@ -159,17 +159,17 @@ def create_maze_graph(barrier_set):
     return maze_graph
 
 
-def find_all_critical_choice_points(maze):
+def get_critical_choice_points(maze):
     '''
     Given a barrier set or networkx graph representing the hex maze, 
     find all critical choice points between reward ports 1, 2, and 3.
     
     Args:
-    maze (set OR nx.Graph): set of barriers representing the hex maze
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR networkx graph object representing the maze
     
     Returns:
-    set: the critical choice points for this maze
+    set of ints: The critical choice points for this maze
     '''
     # If our input is a barrier set, get the graph representation
     if isinstance(maze, (set, frozenset, list)):
@@ -203,17 +203,18 @@ def find_all_critical_choice_points(maze):
     return choice_points
 
 
-def get_optimal_paths(maze):
+def get_optimal_paths_between_ports(maze):
     '''
     Given a barrier set or networkx graph representing the hex maze,
     return a list of all optimal paths between reward ports in the maze.
     
     Args:
-    maze (set OR nx.Graph): set of barriers representing the hex maze
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR networkx graph object representing the maze
 
     Returns: 
-    list of lists: A list of all optimal paths between reward ports
+    list of lists: A list of all optimal paths (in hexes) from 
+    reward port 1 to 2, 1 to 3, and 2 to 3
     '''
     # If our input is a barrier set, get the graph representation
     if isinstance(maze, (set, frozenset, list)):
@@ -229,6 +230,60 @@ def get_optimal_paths(maze):
     return optimal_paths
 
 
+def get_optimal_paths(maze, start_hex, target_hex):
+    '''
+    Given a barrier set or networkx graph representing the hex maze,
+    return a list of all optimal paths from the start_hex to the target_hex
+    in the maze.
+    
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+    start_hex (int): The starting hex in the maze
+    target_hex (int): The target hex in the maze
+
+    Returns: 
+    list of lists: A list of all optimal path(s) (in hexes) from 
+    the start hex to the target hex
+    '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+    
+    return list(nx.all_shortest_paths(graph, source=start_hex, target=target_hex))
+
+
+def get_reward_path_lengths(maze):
+    '''
+    Given a barrier set or networkx graph representing the hex maze, 
+    get the minimum path lengths (in hexes) between reward ports 1, 2, and 3.
+
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+    
+    Returns:
+    list: Reward path lengths in form [length12, length13, length23]
+    '''
+
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # Get length of optimal paths between reward ports
+    len12 = nx.shortest_path_length(graph, source=1, target=2)+1
+    len13 = nx.shortest_path_length(graph, source=1, target=3)+1
+    len23 = nx.shortest_path_length(graph, source=2, target=3)+1
+
+    return [len12, len13, len23]
+
+
 def get_path_independent_hexes_to_port(maze, reward_port):
     '''
     Find all path-independent hexes to a reward port, defined as hexes 
@@ -238,12 +293,12 @@ def get_path_independent_hexes_to_port(maze, reward_port):
     reaches the (first) critical choice point. 
     
     Args:
-    maze (set OR nx.Graph): set of barriers representing the hex maze
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR networkx graph object representing the maze
     reward_port (int): The reward port: 1, 2, or 3
     
     Returns:
-    set of ints: the path-independent hexes the rat must always run
+    set of ints: The path-independent hexes the rat must always run
     through when going to and from this reward port
     '''
     # If our input is a barrier set, get the graph representation
@@ -276,13 +331,13 @@ def get_hexes_from_port(maze, start_hex, reward_port):
     chosen reward port for a given maze configuration.
     
     Args:
-    maze (set OR nx.Graph): set of barriers representing the hex maze
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR a networkx graph object representing the maze
     start_hex (int): The hex to calculate distance from
     reward_port (int): The reward port: 1, 2, or 3
     
     Returns:
-    int: the number of hexes from start_hex to reward_port
+    int: The number of hexes from start_hex to reward_port
     '''
     # If our maze input is a barrier set, get the graph representation
     if isinstance(maze, (set, frozenset, list)):
@@ -301,11 +356,11 @@ def has_illegal_straight_path(maze):
     checks if there are any illegal straight paths.
     
     Args:
-    maze (set OR nx.Graph): set of barriers representing the hex maze
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR networkx graph object representing the maze
 
     Returns: 
-    the (first) offending path, or False if none
+    The (first) offending path, or False if none
     '''
     # If our input is a barrier set, get the graph representation
     if isinstance(maze, (set, frozenset, list)):
@@ -314,10 +369,8 @@ def has_illegal_straight_path(maze):
     elif isinstance(maze, nx.Graph):
         graph = maze
     
-    optimal_paths = []
-    optimal_paths.extend(list(nx.all_shortest_paths(graph, source=1, target=2)))
-    optimal_paths.extend(list(nx.all_shortest_paths(graph, source=1, target=3)))
-    optimal_paths.extend(list(nx.all_shortest_paths(graph, source=2, target=3)))
+    # Get optimal paths between reward ports
+    optimal_paths = get_optimal_paths_between_ports(graph)
 
     # We do 2 separate checks here beacause we may have different path length critera
     # for paths to reward ports vs inside the maze
@@ -356,7 +409,7 @@ def is_valid_maze(maze, complain=False):
     - no straight paths >STRAIGHT_PATHS_INSIDE_MAZE in middle of maze
     
     Args:
-    maze (set OR nx.Graph): set of barriers representing the hex maze
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR networkx graph object representing the maze
     complain (bool): Optional. If our maze configuration is invalid, 
     print out the reason why. Defaults to False
@@ -378,25 +431,22 @@ def is_valid_maze(maze, complain=False):
         return False
     
     # Make sure path lengths are between 15-25
-    len12 = nx.shortest_path_length(graph, source=1, target=2)
-    len13 = nx.shortest_path_length(graph, source=1, target=3)
-    len23 = nx.shortest_path_length(graph, source=2, target=3)
-    reward_port_lengths = [len12, len13, len23]
-    if min(reward_port_lengths) <= 13:
+    reward_path_lengths = get_reward_path_lengths(graph)
+    if min(reward_path_lengths) <= 13:
         if complain:
             print("BAD MAZE: Path between reward ports is too short (<=13)")
         return False
-    if max(reward_port_lengths) - min(reward_port_lengths) < 4:
+    if max(reward_path_lengths) - min(reward_path_lengths) < 4:
         if complain:
             print("BAD MAZE: Distance difference in reward port paths is too small (<4)")
         return False
-    if max(reward_port_lengths) > 25:
+    if max(reward_path_lengths) > 25:
         if complain:
             print("BAD MAZE: Path between reward ports is too long (>25)")
         return False
 
     # Make sure all critical choice points are >=6 hexes away from a reward port
-    choice_points = find_all_critical_choice_points(graph)
+    choice_points = get_critical_choice_points(graph)
     if any(hex in ILLEGAL_CHOICE_POINTS_6 for hex in choice_points):
         if complain:
             print("BAD MAZE: Choice point <6 hexes away from reward port")
@@ -452,44 +502,52 @@ def generate_good_maze():
 
 ############## Functions for generating a next good barrier set given an initial barrier set ############## 
 
-def single_barrier_moved(barriers_1, barriers_2):
-    ''' Check if two sets of barriers differ by only one element. '''
+def single_barrier_moved(maze_1, maze_2):
+    ''' Check if two mazes differ by the movement of a single barrier. 
+    
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
+
+    Returns:
+    True if the mazes differ by the movement of a single barrier, False otherwise
+    '''
     
     # The symmetric difference (XOR) between the sets must have exactly two elements
     # because each set should have exactly one barrier not present in the other set
-    return len(barriers_1.symmetric_difference(barriers_2)) == 2
+    return len(maze_1.symmetric_difference(maze_2)) == 2
 
 
-def have_common_path(paths1, paths2):
+def have_common_path(paths_1, paths_2):
     '''
     Given 2 lists of hex paths, check if there is a common path between the 2 lists.
     Used for determining if there are shared optimal paths between mazes.
     
     Args:
-    paths1 (list of lists): list of optimal hex paths between 2 reward ports
-    paths2 (list of lists): list of optimal hex paths between 2 reward ports
+    paths_1 (list of lists): List of optimal hex paths between 2 reward ports
+    paths_2 (list of lists): List of optimal hex paths between 2 reward ports
 
     Returns:
     True if there is a common path between the 2 lists of paths, False otherwise.
     '''
     
     # Convert the path lists to tuples to make them hashable and store them in sets
-    pathset1 = set(tuple(path) for path in paths1)
-    pathset2 = set(tuple(path) for path in paths2)
+    pathset_1 = set(tuple(path) for path in paths_1)
+    pathset_2 = set(tuple(path) for path in paths_2)
     
     # Return True if there is 1 or more common path between the path sets, False otherwise
-    return len(pathset1.intersection(pathset2)) > 0
+    return len(pathset_1.intersection(pathset_2)) > 0
 
 
-def min_hex_diff_between_paths(paths1, paths2):
+def min_hex_diff_between_paths(paths_1, paths_2):
     '''
     Given 2 lists of hex paths, return the minimum number of hexes that differ 
     between the most similar paths in the 2 lists.
     Used for determining how different optimal paths are between mazes.
     
     Args:
-    paths1 (list of lists): list of optimal hex paths between 2 reward ports
-    paths2 (list of lists): list of optimal hex paths between 2 reward ports
+    paths_1 (list of lists): List of optimal hex paths between 2 reward ports
+    paths_2 (list of lists): List of optimal hex paths between 2 reward ports
     
     Returns:
     num_different_hexes (int): the min number of hexes different between a
@@ -498,16 +556,16 @@ def min_hex_diff_between_paths(paths1, paths2):
     '''
     
     # If there is 1 or more shared path between the path sets, the hex difference is 0
-    if have_common_path(paths1, paths2):
+    if have_common_path(paths_1, paths_2):
         return 0
     
     # Max possible number of different hexes between paths
     num_different_hexes = 25
     
-    for patha in paths1:
-        for pathb in paths2:
+    for path_a in paths_1:
+        for path_b in paths_2:
             # Get how many hexes differ between these paths
-            diff = len(set(patha).symmetric_difference(set(pathb)))
+            diff = len(set(path_a).symmetric_difference(set(path_b)))
             # Record the minimum possible difference between optimal paths
             if diff < num_different_hexes:
                 num_different_hexes = diff
@@ -515,93 +573,110 @@ def min_hex_diff_between_paths(paths1, paths2):
     return num_different_hexes
 
 
-def have_common_optimal_paths(df, barriers_1, barriers_2):
+def have_common_optimal_paths(maze_1, maze_2):
     '''
-    Given the hex maze database and 2 barrier sets, check if the 2 barrier sets have at
-    least one common optimal path between every pair of reward ports (e.g. the barrier sets
+    Given the hex maze database and 2 mazes, check if the 2 mazes have at
+    least one common optimal path between every pair of reward ports (e.g. the mazes
     share an optimal path between ports 1 and 2, AND ports 1 and 3, AND ports 2 and 3), 
-    meaning the rat could be running the same paths even though the barrier sets are different.
+    meaning the rat could be running the same paths even though the mazes are "different".
     
     (The result of this function is equivalent to checking if num_hexes_different_on_optimal_paths == 0)
+
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
     
     Returns:
-    True if the barrier sets have a common optimal path between all pairs of reward ports, False otherwise
+    True if the mazes have a common optimal path between all pairs of reward ports, False otherwise
     '''
     # Do these barrier sets have a common optimal path from port 1 to port 2?
     have_common_path_12 = have_common_path(
-        df_lookup(df, barriers_1, 'optimal_paths_12'), 
-        df_lookup(df, barriers_2, 'optimal_paths_12'))
+        get_optimal_paths(maze_1, source_hex=1, target_hex=2), 
+        get_optimal_paths(maze_2, source_hex=1, target_hex=2))
     # Do these barrier sets have a common optimal path from port 1 to port 3?
     have_common_path_13 = have_common_path(
-        df_lookup(df, barriers_1, 'optimal_paths_13'), 
-        df_lookup(df, barriers_2, 'optimal_paths_13'))
+        get_optimal_paths(maze_1, source_hex=1, target_hex=3), 
+        get_optimal_paths(maze_2, source_hex=1, target_hex=3))
     # Do these barrier sets have a common optimal path from port 2 to port 3?
     have_common_path_23 = have_common_path(
-        df_lookup(df, barriers_1, 'optimal_paths_23'), 
-        df_lookup(df, barriers_2, 'optimal_paths_23'))
+        get_optimal_paths(maze_1, source_hex=2, target_hex=3), 
+        get_optimal_paths(maze_2, source_hex=2, target_hex=3))
     
     # Return True if the barrier sets have a common optimal path between all pairs of reward ports
     return (have_common_path_12 and have_common_path_13 and have_common_path_23)
 
 
-def num_hexes_different_on_optimal_paths(df, barriers_1, barriers_2):
+def num_hexes_different_on_optimal_paths(maze_1, maze_2):
     '''
     Given the hex maze database and 2 barrier sets, find the number of hexes different
     between optimal paths between every pair of reward ports. This helps us quantify
     how different two maze configurations are.
     
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
+    
     Returns:
-    num_different_hexes (int): the min number of hexes different in the most 
+    num_different_hexes (int): The min number of hexes different in the most 
     similar optimal paths between all reward ports for the 2 mazes
     '''
     # How many hexes different are the most similar optimal paths from port 1 to port 2?
     num_hexes_different_12 = min_hex_diff_between_paths(
-        df_lookup(df, barriers_1, 'optimal_paths_12'), 
-        df_lookup(df, barriers_2, 'optimal_paths_12'))
+        get_optimal_paths(maze_1, source_hex=1, target_hex=2), 
+        get_optimal_paths(maze_2, source_hex=1, target_hex=2))
     # How many hexes different are the most similar optimal paths from port 1 to port 3?
     num_hexes_different_13 = min_hex_diff_between_paths(
-        df_lookup(df, barriers_1, 'optimal_paths_13'), 
-        df_lookup(df, barriers_2, 'optimal_paths_13'))
+        get_optimal_paths(maze_1, source_hex=1, target_hex=3), 
+        get_optimal_paths(maze_2, source_hex=1, target_hex=3))
     # How many hexes different are the most similar optimal paths from port 2 to port 3?
     num_hexes_different_23 = min_hex_diff_between_paths(
-        df_lookup(df, barriers_1, 'optimal_paths_23'), 
-        df_lookup(df, barriers_2, 'optimal_paths_23'))
+        get_optimal_paths(maze_1, source_hex=2, target_hex=3), 
+        get_optimal_paths(maze_2, source_hex=2, target_hex=3))
     
     # Return the total number of hexes different between the most similar optimal
     # paths between all 3 reward ports
     return (num_hexes_different_12 + num_hexes_different_13 + num_hexes_different_23)
 
 
-def at_least_one_path_shorter_and_longer(df, barriers_1, barriers_2):
+def at_least_one_path_shorter_and_longer(maze_1, maze_2):
     ''' 
-    Given 2 sets of barriers, check if at least one optimal path between reward ports
-    is shorter AND at least one is longer (e.g. the path length between ports 1 and 2
-    increases and the path length between ports 2 and 3 decreases.
+    Given 2 mazes, check if at least one optimal path between reward ports
+    is shorter AND at least one is longer in one of the mazes compared to the other
+    (e.g. the path length between ports 1 and 2 increases and the path length 
+    between ports 2 and 3 decreases.
+
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
     
     Returns: 
     True if at least one path is shorter AND at least one is longer, False otherwise
     '''
     # Get path lengths between reward ports for each barrier set
-    paths_1 = df_lookup(df, barriers_1, 'reward_path_lengths')
-    paths_2 = df_lookup(df, barriers_2, 'reward_path_lengths')
+    paths_1 = get_reward_path_lengths(maze_1)
+    paths_2 = get_reward_path_lengths(maze_2)
     
     # Check if >=1 path is longer and >=1 path is shorter
     return (any(a < b for a, b in zip(paths_1, paths_2)) and any(a > b for a, b in zip(paths_1, paths_2)))
 
 
-def optimal_path_order_changed(df, barriers_1, barriers_2):
+def optimal_path_order_changed(maze_1, maze_2):
     ''' 
-    Given 2 sets of barriers, check if the length order of the optimal paths
+    Given 2 mazes, check if the length order of the optimal paths
     between reward ports has changed (e.g. the shortest path between reward ports
     used to be between ports 1 and 2 and is now between ports 2 and 3, etc.)
+
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
     
     Returns: 
     True if the optimal path length order has changed, False otherwise
     '''
     
     # Get path lengths between reward ports for each barrier set
-    paths_1 = df_lookup(df, barriers_1, 'reward_path_lengths')
-    paths_2 = df_lookup(df, barriers_2, 'reward_path_lengths')
+    paths_1 = get_reward_path_lengths(maze_1)
+    paths_2 = get_reward_path_lengths(maze_2)
     
      # Find which are the longest and shortest paths (multiple paths may tie for longest/shortest)
     longest_paths_1 = [i for i, num in enumerate(paths_1) if num == max(paths_1)]
@@ -613,40 +688,44 @@ def optimal_path_order_changed(df, barriers_1, barriers_2):
     return not any(l in longest_paths_2 and s in shortest_paths_2 for l in longest_paths_1 for s in shortest_paths_1)
 
 
-def no_common_choice_points(df, barriers_1, barriers_2):
+def no_common_choice_points(maze_1, maze_2):
     ''' 
-    Given 2 sets of barriers, ensure there are no common choice points between them.
+    Given 2 mazes, check that there are no common choice points between them.
+
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
     
     Returns: 
     True if there are no common choice points, False otherwise
     '''
     
     # Get the choice points for each barrier set
-    choice_points_1 = df_lookup(df, barriers_1, 'choice_points')
-    choice_points_2 = df_lookup(df, barriers_2, 'choice_points')
+    choice_points_1 = get_critical_choice_points(maze_1)
+    choice_points_2 = get_critical_choice_points(maze_2)
     
     # Check if there are no choice points in common
     return choice_points_1.isdisjoint(choice_points_2)
 
 
-def get_barrier_change(barriers_1, barriers_2):
+def get_barrier_change(maze_1, maze_2):
     '''
-    Given 2 barrier sets that differ by the movement of a single barrier, 
+    Given 2 mazes that differ by the movement of a single barrier, 
     find the barrier that was moved.
     
     Args:
-    barriers_1 (set/frozenset): The first barrier set
-    barriers_2 (set/frozenset): The second barrier set
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
     
     Returns:
     old_barrier (int): The hex location of the barrier to be moved in the first set
     new_barrier (int): The hex location the barrier was moved to in the second set
     '''
     # Find the original barrier location
-    old_barrier = barriers_1 - barriers_2
+    old_barrier = maze_1 - maze_2
 
     # Find the new barrier location
-    new_barrier = barriers_2 - barriers_1
+    new_barrier = maze_2 - maze_1
     
     # Return as integers instead of sets/frozensets with a single element
     return next(iter(old_barrier)), next(iter(new_barrier))
@@ -755,9 +834,9 @@ def get_next_barrier_sets(df, original_barriers, criteria_type='ALL'):
     # Check each potential new barrier set
     for bar in potential_new_barriers:      
         # Check if at least one path gets longer and at least one path gets shorter 
-        criteria1 = at_least_one_path_shorter_and_longer(df, original_barriers, bar)
+        criteria1 = at_least_one_path_shorter_and_longer(original_barriers, bar)
         # Check if the optimal path order has changed
-        criteria2 = optimal_path_order_changed(df, original_barriers, bar)
+        criteria2 = optimal_path_order_changed(original_barriers, bar)
         # Make sure the optimal path lengths are 17, 19, 21 (in any order)
         criteria3 = (set(df_lookup(df, bar, 'reward_path_lengths')) == {17, 19, 21})
         # Only 1 critical choice point
@@ -805,7 +884,7 @@ def get_best_next_barrier_set(df, original_barriers):
     max_hex_diff = 0
     # Check how different each next barrier set is from our original barrier set
     for barriers in potential_next_barriers:
-        hex_diff = num_hexes_different_on_optimal_paths(df, original_barriers, barriers)
+        hex_diff = num_hexes_different_on_optimal_paths(original_barriers, barriers)
         # If this barrier set is maximally different from the original, save it
         if hex_diff > max_hex_diff:
             max_hex_diff = hex_diff
@@ -867,7 +946,7 @@ def find_all_valid_barrier_sequences(df, start_barrier_set, min_hex_diff=8, max_
         # next_sets = [s for s in next_sets if not any(have_common_optimal_paths(df, s, v) for v in visited)]
         
         # Remove barrier sets with optimal paths too similar to any other barrier set in the sequence
-        next_sets = [s for s in next_sets if all(num_hexes_different_on_optimal_paths(df, s, v)>=min_hex_diff for v in visited)]
+        next_sets = [s for s in next_sets if all(num_hexes_different_on_optimal_paths(s, v)>=min_hex_diff for v in visited)]
         
         # Initialize a list to store sequences
         sequences = []
@@ -984,7 +1063,7 @@ def get_barrier_sequence(df, start_barrier_set, min_hex_diff=8, max_sequence_len
         next_sets = [s for s in next_sets if s != current_barrier_set]
         
         # Remove barrier sets with optimal paths too similar to any other barrier set in the sequence
-        next_sets = [s for s in next_sets if all(num_hexes_different_on_optimal_paths(df, s, v)>=min_hex_diff for v in visited)]
+        next_sets = [s for s in next_sets if all(num_hexes_different_on_optimal_paths(s, v)>=min_hex_diff for v in visited)]
         
         # Iterate over each next valid set
         for next_set in next_sets:
@@ -1120,15 +1199,15 @@ def get_reflected_barriers(original_barriers, axis=1):
     return {reflect_hex(b, axis) for b in original_barriers}
 
 
-def get_isomorphic_mazes(barriers):
+def get_isomorphic_mazes(maze):
     '''
     Given a set of barriers defining a hex maze configuration, return the
-    other 5 barrier sets that have the same graph structure (corresponding
+    other 5 mazes that have the same graph structure (corresponding
     to the maze rotated clockwise/counterclockwise and reflected across its
     3 axes of symmetry)
 
     Args:
-    barriers (set/frozenset): A set of barriers defining a hex maze
+    maze (set/frozenset): A set of barriers defining a hex maze
     
     Returns:
     set of frozensets: a set of the 5 barrier sets defining mazes isomorphic 
@@ -1136,11 +1215,11 @@ def get_isomorphic_mazes(barriers):
     '''
     # Rotate and reflect the maze to get other barrier configs that 
     # represent the same underlying graph structure
-    reflected_ax1 = frozenset(get_reflected_barriers(barriers, axis=1))
-    reflected_ax2 = frozenset(get_reflected_barriers(barriers, axis=2))
-    reflected_ax3 = frozenset(get_reflected_barriers(barriers, axis=3))
-    rotated_ccw = frozenset(get_rotated_barriers(barriers, direction='counterclockwise'))
-    rotated_cw = frozenset(get_rotated_barriers(barriers, direction='clockwise'))
+    reflected_ax1 = frozenset(get_reflected_barriers(maze, axis=1))
+    reflected_ax2 = frozenset(get_reflected_barriers(maze, axis=2))
+    reflected_ax3 = frozenset(get_reflected_barriers(maze, axis=3))
+    rotated_ccw = frozenset(get_rotated_barriers(maze, direction='counterclockwise'))
+    rotated_cw = frozenset(get_rotated_barriers(maze, direction='clockwise'))
     
     return {reflected_ax1, reflected_ax2, reflected_ax3, rotated_ccw, rotated_cw}
 
@@ -1158,9 +1237,21 @@ def df_lookup(df, barriers, attribute_name):
     Must exist as a column in the df
 
     Returns:
-    The value of the attribute for this maze
+    The value of the attribute for this maze, or None if the maze isn't in the df
     '''
-    return df[(df['barriers'] == barriers)][attribute_name].item()
+    # Check if the attribute_name exists as a column in the DataFrame
+    if attribute_name not in df.columns:
+        raise ValueError(f"Column '{attribute_name}' does not exist in the DataFrame.")
+    
+    # Filter the DataFrame
+    filtered_df = df[df['barriers'] == barriers][attribute_name]
+
+    # If this maze isn't found in the dataframe, return None
+    if filtered_df.empty:
+        return None
+    # Otherwise return the value of the attribute
+    else:
+        return filtered_df.iloc[0]
 
 
 def get_maze_attributes(barrier_set):
@@ -1198,7 +1289,7 @@ def get_maze_attributes(barrier_set):
     optimal_paths_all.extend(optimal_paths_23)
     
     # Get critical choice points
-    choice_points = set(find_all_critical_choice_points(maze))
+    choice_points = set(get_critical_choice_points(maze))
     num_choice_points = len(choice_points)
     
     # Get information about cycles
@@ -1218,7 +1309,7 @@ def get_maze_attributes(barrier_set):
     return attributes
 
 
-def get_barrier_sequence_attributes(df, barrier_sequence):
+def get_barrier_sequence_attributes(barrier_sequence):
     '''
     Given the maze configuration database (df) and a sequence of 
     maze configurations that differ by the movement of a single barrier, 
@@ -1227,7 +1318,6 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
     and return a dictionary of these attributes.
     
     Args:
-    df (dataframe): The database of all possible maze configurations.
     barrier_sequence (list of sets): The sequence of maze configurations.
 
     Returns:
@@ -1239,8 +1329,8 @@ def get_barrier_sequence_attributes(df, barrier_sequence):
     
     # Get attributes for each barrier set in the sequence
     for bars in barrier_sequence:
-        reward_path_lengths.append(df_lookup(df, bars, 'reward_path_lengths'))
-        choice_points.append(df_lookup(df, bars, 'choice_points'))
+        reward_path_lengths.append(get_reward_path_lengths(bars))
+        choice_points.append(get_critical_choice_points(bars))
     
     barrier_changes = get_barrier_changes(barrier_sequence)
     
@@ -1356,7 +1446,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
         
         # Optional - Make the hexes on optimal paths light green
         if show_optimal_paths:
-            hexes_on_optimal_paths = {hex for path in get_optimal_paths(barriers) for hex in path}
+            hexes_on_optimal_paths = {hex for path in get_optimal_paths_between_ports(barriers) for hex in path}
             for hex in hexes_on_optimal_paths:
                 hex_colors.update({hex: 'lightgreen'})
 
@@ -1370,7 +1460,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
 
         # Optional - Make the choice point(s) yellow
         if show_choice_points:
-            choice_points = find_all_critical_choice_points(barriers)
+            choice_points = get_critical_choice_points(barriers)
             for hex in choice_points:
                 hex_colors.update({hex: 'gold'})
 
@@ -1501,7 +1591,7 @@ def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None,
 
     # Make the choice point(s) yellow
     if show_choice_points:
-        choice_points = find_all_critical_choice_points(maze)
+        choice_points = get_critical_choice_points(maze)
         for choice_point in choice_points:
             nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[choice_point], node_color='yellow', node_size=400)
         
@@ -1518,7 +1608,7 @@ def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None,
 
 ############## One-time use functions to help ensure that our database includes all possible mazes ##############
     
-def num_isomorphic_mazes_in_set(set_of_valid_mazes, barriers):
+def num_isomorphic_mazes_in_set(set_of_valid_mazes, maze):
     '''
     Given a set of all valid maze configurations and a set of barriers defining 
     a single hex maze configuration, find all isomorphic mazes for this 
@@ -1526,14 +1616,14 @@ def num_isomorphic_mazes_in_set(set_of_valid_mazes, barriers):
 
     Args:
     set_of_valid_mazes (set of frozensets): Set of all valid maze configurations
-    barriers (set/frozenset): Set of barriers defining a single maze configuration
+    maze (set/frozenset): Set of barriers defining a single maze configuration
     
     Returns:
     int: The number of isomorphic mazes that already exist in the set
     list of sets: A list of isomorphic maze configurations missing from the set
     '''
     # Get all potential isomorphic mazes for this barrier configuration
-    all_isomorphic_barriers = get_isomorphic_mazes(barriers)
+    all_isomorphic_barriers = get_isomorphic_mazes(maze)
     # Find other mazes in the dataframe that are isomorphic to the given barrier set
     isomorphic_barriers_in_set = set([b for b in set_of_valid_mazes if b in all_isomorphic_barriers])
     # Get the isomorphic mazes not present in the dataframe
@@ -1541,7 +1631,7 @@ def num_isomorphic_mazes_in_set(set_of_valid_mazes, barriers):
     return len(isomorphic_barriers_in_set), isomorphic_bariers_not_in_set
 
 
-def num_isomorphic_mazes_in_df(df, barriers):
+def num_isomorphic_mazes_in_df(df, maze):
     '''
     Given our maze configuration database and a set of barriers defining 
     a hex maze configuration, find all isomorphic mazes that already exist 
@@ -1550,14 +1640,14 @@ def num_isomorphic_mazes_in_df(df, barriers):
     Args:
     df (DataFrame): DataFrame containing all valid maze configurations in the
     column 'barriers'
-    barriers (set/frozenset): Set of barriers defining a single maze configuration
+    maze (set/frozenset): Set of barriers defining a single maze configuration
     
     Returns:
     int: the number of isomorphic mazes that already exist in the dataframe
     list of sets: a list of isomorphic maze configurations missing from the dataframe
     '''
     # Get all potential isomorphic mazes for this barrier configuration
-    all_isomorphic_barriers = get_isomorphic_mazes(barriers)
+    all_isomorphic_barriers = get_isomorphic_mazes(maze)
     # Find other mazes in the dataframe that are isomorphic to the given barrier set
     isomorphic_barriers_in_df = set([b for b in df['barriers'] if b in all_isomorphic_barriers])
     # Get the isomorphic mazes not present in the dataframe
