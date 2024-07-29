@@ -591,16 +591,16 @@ def have_common_optimal_paths(maze_1, maze_2):
     '''
     # Do these barrier sets have a common optimal path from port 1 to port 2?
     have_common_path_12 = have_common_path(
-        get_optimal_paths(maze_1, source_hex=1, target_hex=2), 
-        get_optimal_paths(maze_2, source_hex=1, target_hex=2))
+        get_optimal_paths(maze_1, start_hex=1, target_hex=2), 
+        get_optimal_paths(maze_2, start_hex=1, target_hex=2))
     # Do these barrier sets have a common optimal path from port 1 to port 3?
     have_common_path_13 = have_common_path(
-        get_optimal_paths(maze_1, source_hex=1, target_hex=3), 
-        get_optimal_paths(maze_2, source_hex=1, target_hex=3))
+        get_optimal_paths(maze_1, start_hex=1, target_hex=3), 
+        get_optimal_paths(maze_2, start_hex=1, target_hex=3))
     # Do these barrier sets have a common optimal path from port 2 to port 3?
     have_common_path_23 = have_common_path(
-        get_optimal_paths(maze_1, source_hex=2, target_hex=3), 
-        get_optimal_paths(maze_2, source_hex=2, target_hex=3))
+        get_optimal_paths(maze_1, start_hex=2, target_hex=3), 
+        get_optimal_paths(maze_2, start_hex=2, target_hex=3))
     
     # Return True if the barrier sets have a common optimal path between all pairs of reward ports
     return (have_common_path_12 and have_common_path_13 and have_common_path_23)
@@ -622,16 +622,16 @@ def num_hexes_different_on_optimal_paths(maze_1, maze_2):
     '''
     # How many hexes different are the most similar optimal paths from port 1 to port 2?
     num_hexes_different_12 = min_hex_diff_between_paths(
-        get_optimal_paths(maze_1, source_hex=1, target_hex=2), 
-        get_optimal_paths(maze_2, source_hex=1, target_hex=2))
+        get_optimal_paths(maze_1, start_hex=1, target_hex=2), 
+        get_optimal_paths(maze_2, start_hex=1, target_hex=2))
     # How many hexes different are the most similar optimal paths from port 1 to port 3?
     num_hexes_different_13 = min_hex_diff_between_paths(
-        get_optimal_paths(maze_1, source_hex=1, target_hex=3), 
-        get_optimal_paths(maze_2, source_hex=1, target_hex=3))
+        get_optimal_paths(maze_1, start_hex=1, target_hex=3), 
+        get_optimal_paths(maze_2, start_hex=1, target_hex=3))
     # How many hexes different are the most similar optimal paths from port 2 to port 3?
     num_hexes_different_23 = min_hex_diff_between_paths(
-        get_optimal_paths(maze_1, source_hex=2, target_hex=3), 
-        get_optimal_paths(maze_2, source_hex=2, target_hex=3))
+        get_optimal_paths(maze_1, start_hex=2, target_hex=3), 
+        get_optimal_paths(maze_2, start_hex=2, target_hex=3))
     
     # Return the total number of hexes different between the most similar optimal
     # paths between all 3 reward ports
