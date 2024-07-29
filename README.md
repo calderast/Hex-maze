@@ -34,11 +34,10 @@ Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`]
 - [Searching the barrier sequence database for the sequence you want](Tutorials/Barrier_Sequence_Database_Search.ipynb)
 - [Demos of useful hex maze functions](Tutorials/Hex_Maze_Functions.ipynb)
 - [How the hex maze database was generated](Tutorials/Generate_Hex_Maze_Database.ipynb)
-- [How the barrier sequence database was generated](Tutorials/Generate_Barrier_Sequence_Database.ipynb)
+- [Generating barrier sequences with custom criteria](Tutorials/Generate_Custom_Barrier_Sequence_Database.ipynb)
 
 Coming soon:
-- Additional demos for other hex maze functions
-- Generating barrier sequences with more specific criteria
+- Additional demos for other hex maze functions, including comparing hex mazes and other similarity metrics
 
 Note that some of these tutorials are currently in progress, LMK if you need one asap and I'll make it a priority!
 
@@ -68,9 +67,9 @@ This database was generated using the `Generate_Hex_Maze_Database.ipynb` noteboo
 
 ### Database of barrier sequences
 The `Barrier_Sequence_Databases/` folder contains multiple databases of barrier sequences (consecutive maze configurations that differ by the movement of a single barrier).
-I'm currently still updating/adding to these databases, but `barrier_sequences_first1000` contains 1000 possible barrier sequences and is a good place to start for now.
+I'm currently still updating/adding to these databases, but `single_choice_point` contains 3720 barrier sequences where all mazes in the sequence have a single choice point and is a good place to start for now. The `Barrier_Sequence_Database_Search.ipynb` notebook has more information about the available databases.
 
-These databases are generated using the `Generate_Barrier_Sequence_Database.ipynb` notebook available in the `Tutorials/` folder.
+Custom databases can be generated using the `Generate_Custom_Barrier_Sequence_Database.ipynb` notebook available in the `Tutorials/` folder.
 
 ## Other info
 
