@@ -67,7 +67,11 @@ This database was generated using the `Generate_Hex_Maze_Database.ipynb` noteboo
 
 ### Database of barrier sequences
 The `Barrier_Sequence_Databases/` folder contains multiple databases of barrier sequences (consecutive maze configurations that differ by the movement of a single barrier).
-I'm currently still updating/adding to these databases, but `single_choice_point` contains 3720 barrier sequences where all mazes in the sequence have a single choice point and is a good place to start for now. The `Barrier_Sequence_Database_Search.ipynb` notebook has more information about the available databases.
+
+- `barrier_sequence_database` contains 3126 barrier sequences that are 4-6 mazes long, and is a good place to start. 
+- `single_choice_point` contains 3720 barrier sequences >= 3 mazes long where all mazes in the sequence have a single choice point.
+
+The `Barrier_Sequence_Database_Search.ipynb` notebook in the `Tutorials/` folder has more information about the other available databases, and how to search these databases for a barrier sequence that fits your criteria.
 
 Custom databases can be generated using the `Generate_Custom_Barrier_Sequence_Database.ipynb` notebook available in the `Tutorials/` folder.
 
