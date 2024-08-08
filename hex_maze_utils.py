@@ -607,86 +607,6 @@ def min_hex_diff_between_paths(paths_1, paths_2):
     return num_different_hexes
 
 
-# def hexes_different_between_paths(paths_1, paths_2):
-#     '''
-#     Given 2 lists of hex paths, return the hexes that differ 
-#     between the most similar paths in the 2 lists. First, finds the most
-#     similar paths between the 2 lists (There may be multiple paths in each list
-#     because there may be multiple optimal paths between 2 hexes in a maze).
-#     Given these most similar paths, then returns a set of hexes on the first path
-#     but not the second, and a set of hexes on the second path but not the first.
-#     Used for determining how different optimal paths are between mazes.
-    
-#     Args:
-#     paths_1 (list of lists): List of optimal hex paths (between 2 reward ports)
-#     paths_2 (list of lists): List of optimal hex paths (between 2 reward ports)
-    
-#     Returns:
-#     hexes_on_path_1_not_path_2 (set): The set of hexes on path 1 not on path 2
-#     hexes_on_path_2_not_path_1 (set): The set of hexes on path 2 not on path 1
-
-#     If there is 1 or more shared path between the path lists, both sets are empty.
-#     '''
-#     hexes_on_path_1_not_path_2 = set()
-#     hexes_on_path_2_not_path_1 = set()
-    
-#     # If there is 1 or more shared path between the path sets, the hex difference is 0
-#     if have_common_path(paths_1, paths_2):
-#         return hexes_on_path_1_not_path_2, hexes_on_path_2_not_path_1
-    
-#     # Max possible number of different hexes between paths
-#     num_different_hexes = 25
-    
-#     # Find the most similar path between the path lists, and get the different hexes on it
-#     for path_a in paths_1:
-#         for path_b in paths_2:
-#             # Get how many hexes differ between these paths
-#             diff = len(set(path_a).symmetric_difference(set(path_b)))
-#             # Record the minimum possible difference between optimal paths
-#             if diff < num_different_hexes:
-#                 num_different_hexes = diff
-#                 hexes_on_path_1_not_path_2 = set([hex for hex in path_a if hex not in path_b])
-#                 hexes_on_path_2_not_path_1 = set([hex for hex in path_b if hex not in path_a])
-    
-#     return hexes_on_path_1_not_path_2, hexes_on_path_2_not_path_1
-
-
-# def hexes_different_on_optimal_paths(maze_1, maze_2):
-#     '''
-#     Given 2 mazes, find the set of hexes different on optimal 
-#     paths between every pair of reward ports. This helps us quantify
-#     how different two maze configurations are.
-    
-#     Args:
-#     maze_1 (set/frozenset): Set of barriers representing the first hex maze
-#     maze_2 (set/frozenset): Set of barriers representing the second hex maze
-    
-#     Returns:
-#     num_different_hexes (int): The min number of hexes different in the most 
-#     similar optimal paths between all reward ports for the 2 mazes
-#     '''
-
-#     # Get which hexes are different on the most similar optimal paths from port 1 to port 2
-#     maze1_hexes_path12, maze2_hexes_path12 = hexes_different_between_paths(
-#         get_optimal_paths(maze_1, start_hex=1, target_hex=2), 
-#         get_optimal_paths(maze_2, start_hex=1, target_hex=2))
-#     # Get which hexes are different on the most similar optimal paths from port 1 to port 3
-#     maze1_hexes_path13, maze2_hexes_path13 = hexes_different_between_paths(
-#         get_optimal_paths(maze_1, start_hex=1, target_hex=3), 
-#         get_optimal_paths(maze_2, start_hex=1, target_hex=3))
-#     # Get which hexes are different on the most similar optimal paths from port 2 to port 3
-#     maze1_hexes_path23, maze2_hexes_path23 = hexes_different_between_paths(
-#         get_optimal_paths(maze_1, start_hex=2, target_hex=3), 
-#         get_optimal_paths(maze_2, start_hex=2, target_hex=3))
-    
-#     # Get the combined set of hexes different between the most similar optimal
-#     # paths between all 3 reward ports
-#     hexes_on_optimal_paths_maze_1_not_2 = maze1_hexes_path12 | maze1_hexes_path13 | maze1_hexes_path23
-#     hexes_on_optimal_paths_maze_2_not_1 = maze2_hexes_path12 | maze2_hexes_path13 | maze2_hexes_path23
-#     # Return hexes exlusively on optimal paths in maze 1, and hexes exclusively on optimal paths in maze 2
-#     return hexes_on_optimal_paths_maze_1_not_2, hexes_on_optimal_paths_maze_2_not_1
-
-
 def hexes_different_on_optimal_paths(maze_1, maze_2):
     '''
     Given 2 mazes, find the set of hexes different on optimal 
@@ -716,6 +636,40 @@ def hexes_different_on_optimal_paths(maze_1, maze_2):
 
 def num_hexes_different_on_optimal_paths(maze_1, maze_2):
     '''
+    Given 2 mazes, find the numer of hexes different on the optimal 
+    paths between every pair of reward ports. This difference is equal to
+    (# of hexes on optimal paths in maze_1 but not maze_2 + 
+    # # of hexes on optimal paths in maze_2 but not maze_1)
+    
+    This helps us quantify
+    how different two maze configurations are.
+    
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
+    
+    Returns:
+    num_different_hexes (int): The number of hexes different on optimal paths
+    between reward ports for maze_1 and maze_2
+    '''
+
+    # Get the hexes different on optimal paths between these 2 mazes
+    hexes_maze1_not_maze2, hexes_maze2_not_maze1 = hexes_different_on_optimal_paths(maze_1, maze_2)
+
+    # Return the combined number of hexes different on the optimal paths
+    return len(hexes_maze1_not_maze2 | hexes_maze2_not_maze1)
+
+
+def num_hexes_different_on_optimal_paths_OLD(maze_1, maze_2):
+    '''
+    *** DEPRECATED: We have moved away from this method of counting in favor of 
+    counting all hexes different on optimal paths between ports exactly once 
+    (regardless of if they appear on multiple optimal paths). 
+
+    Keeping this function for now for posterity. Note that for barrier sequences generated prior
+    to this deprecation, the `min_hex_diff` count used in `get_barrier_sequence` and related
+    functions refers to the count using this method. ***
+
     Given 2 mazes, find the number of hexes different between optimal paths 
     between every pair of reward ports. Note that this version of the function
     "double-counts" path-independent hexes. For example, hexes that are different 
