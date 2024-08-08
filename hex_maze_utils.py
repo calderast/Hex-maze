@@ -1416,7 +1416,8 @@ def get_hex_centroids(scale=1):
     Centroids are calculated relative to the centroid of hex 1 at (0,0).
 
     Args:
-    scale (int): The side length of each hex. Defaults to 1
+    scale (int): The width of each hex (aka the length of the long diagonal, 
+    aka 2x the length of a single side). Defaults to 1
     
     Returns:
     dict: a dictionary of hex: (x,y) coordinate of centroid
@@ -1444,10 +1445,40 @@ def get_hex_centroids(scale=1):
     return hex_positions
 
 
+def get_stats_coords(hex_centroids):
+    '''
+    When plotting a hex maze with additional stats (such as path lengths), get the
+    graph coordinates of where to display those stats based on the hex centroids.
+
+    Args:
+    hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+
+    Returns:
+    stats_coords (dict): Dictionary of stat_id: (x, y) coordinates of where to plot it.
+    The stat_id should be the same as a key returned by `get_maze_attributes`
+    '''
+    stats_coords = {}
+
+    # Height of a hex can be calculated by abs(y coord of hex 1 - y coord of hex 4)
+    hex_height = abs(hex_centroids[1][1] - hex_centroids[4][1])
+
+    # Path length for port 1 to port 2 is (x coord of hex 38, y coord of hex 18)
+    stats_coords['len12'] = (hex_centroids[38][0], hex_centroids[18][1])
+
+    # Path length for port 1 to port 3 is (x coord of hex 33, y coord of hex 15)
+    stats_coords['len13'] = (hex_centroids[33][0], hex_centroids[15][1])
+
+    # Path length for port 2 to port 3 is (x coord of hex 45, y coord of hex 45 - 1.5 hex)
+    stats_coords['len23'] = (hex_centroids[45][0], hex_centroids[45][1] - 1.5*hex_height)
+
+    return stats_coords
+
+
+
 def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None, 
                   show_barriers=True, show_choice_points=True,
                   show_optimal_paths=False, show_arrow=True,
-                  show_barrier_change=True, scale=1):
+                  show_barrier_change=True, show_stats=False, scale=1):
     ''' 
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
@@ -1478,6 +1509,8 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     new_barrier are not None
     - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
     on the maze. Defaults to True if old_barrier and new_barrier are not None. \
+    - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
+    on the graph. Defaults to False
     Note that highlighting choice points takes precendence over barrier change \
     hexes, as they are also shown by the movement arrow. If show_barriers=False, \
     the new_barrier hex will not be shown (because no barriers are shown with this option.) 
@@ -1487,6 +1520,9 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     hex_maze = create_empty_hex_maze()
     # Get a dictionary of the (x,y) coordinates of each hex centroid
     hex_coordinates = get_hex_centroids(scale)
+    # Get a dictionary of stats coordinates based on hex coordinates
+    if show_stats:
+        stats_coordinates = get_stats_coords(hex_coordinates)
     # Define this for times we want to draw the arrow but not show barriers
     new_barrier_coords = None
 
@@ -1555,9 +1591,22 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     if barriers is not None and show_barriers:
         nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={b: b for b in barriers}, font_color='white')
 
+    # Add stats
+    if show_stats:
+        # Get stats for this maaze
+        maze_attributes = get_maze_attributes(barriers)
+        # For all stats that we have display coordinates for, print them on the graph
+        for stat in maze_attributes:
+            if stat in stats_coordinates:
+                ax.annotate(maze_attributes[stat], 
+                            stats_coordinates[stat],
+                            ha='center', # Horizontal alignment
+                            fontsize=12  # Font size
+                )
+
     # Adjust axes
     plt.xlim(-5.5*scale, 5.5*scale)
-    plt.ylim(-9*scale, 1*scale)
+    plt.ylim(-9.5*scale, 1*scale) if show_stats else plt.ylim(-9*scale, 1*scale)
     plt.gca().set_aspect('equal', adjustable='box')
     plt.show()
     
