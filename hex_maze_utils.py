@@ -607,30 +607,83 @@ def min_hex_diff_between_paths(paths_1, paths_2):
     return num_different_hexes
 
 
+def hexes_different_between_paths(paths_1, paths_2):
+    '''
+    Given 2 lists of hex paths, return the hexes that differ 
+    between the most similar paths in the 2 lists. First, finds the most
+    similar paths between the 2 lists (There may be multiple paths in each list
+    because there may be multiple optimal paths between 2 hexes in a maze).
+    Given these most similar paths, then returns a set of hexes on the first path
+    but not the second, and a set of hexes on the second path but not the first.
+    Used for determining how different optimal paths are between mazes.
+
+    Args:
+    paths_1 (list of lists): List of optimal hex paths (between 2 reward ports)
+    paths_2 (list of lists): List of optimal hex paths (between 2 reward ports)
+
+    Returns:
+    hexes_on_path_1_not_path_2 (set): The set of hexes on path 1 not on path 2
+    hexes_on_path_2_not_path_1 (set): The set of hexes on path 2 not on path 1
+
+    If there is 1 or more shared path between the path lists, both sets are empty.
+    '''
+    hexes_on_path_1_not_path_2 = set()
+    hexes_on_path_2_not_path_1 = set()
+
+    # If there is 1 or more shared path between the path sets, the hex difference is 0
+    if have_common_path(paths_1, paths_2):
+        return hexes_on_path_1_not_path_2, hexes_on_path_2_not_path_1
+
+    # Max possible number of different hexes between paths
+    num_different_hexes = 25
+
+    # Find the most similar path between the path lists, and get the different hexes on it
+    for path_a in paths_1:
+        for path_b in paths_2:
+            # Get how many hexes differ between these paths
+            diff = len(set(path_a).symmetric_difference(set(path_b)))
+            # Record the minimum possible difference between optimal paths
+            if diff < num_different_hexes:
+                num_different_hexes = diff
+                hexes_on_path_1_not_path_2 = set([hex for hex in path_a if hex not in path_b])
+                hexes_on_path_2_not_path_1 = set([hex for hex in path_b if hex not in path_a])
+
+    return hexes_on_path_1_not_path_2, hexes_on_path_2_not_path_1
+
+
 def hexes_different_on_optimal_paths(maze_1, maze_2):
     '''
     Given 2 mazes, find the set of hexes different on optimal 
     paths between every pair of reward ports. This helps us quantify
     how different two maze configurations are.
-    
+
     Args:
     maze_1 (set/frozenset): Set of barriers representing the first hex maze
     maze_2 (set/frozenset): Set of barriers representing the second hex maze
-    
+
     Returns:
-    hexes_on_optimal_paths_maze_1_not_2 (set): The set of hexes on optimal paths in maze_1 but 1 not maze_2
-    hexes_on_optimal_paths_maze_2_not_1 (set): The set of hexes on optimal paths in maze_2 but 1 not maze_1
+    num_different_hexes (int): The min number of hexes different in the most 
+    similar optimal paths between all reward ports for the 2 mazes
     '''
 
-    # Get the set of all hexes on optimal paths for maze 1
-    hexes_on_optimal_paths_maze1 = {hex for path in get_optimal_paths_between_ports(maze_1) for hex in path}
-    
-    # Get the set of all hexes on optimal paths for maze 2
-    hexes_on_optimal_paths_maze2 = {hex for path in get_optimal_paths_between_ports(maze_2) for hex in path}
-    
+    # Get which hexes are different on the most similar optimal paths from port 1 to port 2
+    maze1_hexes_path12, maze2_hexes_path12 = hexes_different_between_paths(
+        get_optimal_paths(maze_1, start_hex=1, target_hex=2), 
+        get_optimal_paths(maze_2, start_hex=1, target_hex=2))
+    # Get which hexes are different on the most similar optimal paths from port 1 to port 3
+    maze1_hexes_path13, maze2_hexes_path13 = hexes_different_between_paths(
+        get_optimal_paths(maze_1, start_hex=1, target_hex=3), 
+        get_optimal_paths(maze_2, start_hex=1, target_hex=3))
+    # Get which hexes are different on the most similar optimal paths from port 2 to port 3
+    maze1_hexes_path23, maze2_hexes_path23 = hexes_different_between_paths(
+        get_optimal_paths(maze_1, start_hex=2, target_hex=3), 
+        get_optimal_paths(maze_2, start_hex=2, target_hex=3))
+
+    # Get the combined set of hexes different between the most similar optimal
+    # paths between all 3 reward ports
+    hexes_on_optimal_paths_maze_1_not_2 = maze1_hexes_path12 | maze1_hexes_path13 | maze1_hexes_path23
+    hexes_on_optimal_paths_maze_2_not_1 = maze2_hexes_path12 | maze2_hexes_path13 | maze2_hexes_path23
     # Return hexes exlusively on optimal paths in maze 1, and hexes exclusively on optimal paths in maze 2
-    hexes_on_optimal_paths_maze_1_not_2 = hexes_on_optimal_paths_maze1 - hexes_on_optimal_paths_maze2
-    hexes_on_optimal_paths_maze_2_not_1 = hexes_on_optimal_paths_maze2 - hexes_on_optimal_paths_maze1
     return hexes_on_optimal_paths_maze_1_not_2, hexes_on_optimal_paths_maze_2_not_1
 
 
@@ -639,10 +692,9 @@ def num_hexes_different_on_optimal_paths(maze_1, maze_2):
     Given 2 mazes, find the numer of hexes different on the optimal 
     paths between every pair of reward ports. This difference is equal to
     (# of hexes on optimal paths in maze_1 but not maze_2 + 
-    # # of hexes on optimal paths in maze_2 but not maze_1)
+    # of hexes on optimal paths in maze_2 but not maze_1)
     
-    This helps us quantify
-    how different two maze configurations are.
+    This helps us quantify how different two maze configurations are.
     
     Args:
     maze_1 (set/frozenset): Set of barriers representing the first hex maze
@@ -660,47 +712,81 @@ def num_hexes_different_on_optimal_paths(maze_1, maze_2):
     return len(hexes_maze1_not_maze2 | hexes_maze2_not_maze1)
 
 
-def num_hexes_different_on_optimal_paths_OLD(maze_1, maze_2):
-    '''
-    *** DEPRECATED: We have moved away from this method of counting in favor of 
-    counting all hexes different on optimal paths between ports exactly once 
-    (regardless of if they appear on multiple optimal paths). 
+# def hexes_different_on_optimal_paths_2(maze_1, maze_2):
+#     '''
+#     *** CURRENTLY UNUSED. Keeping this function for posterity for now. 
+#      I don't like this method of counting hex differences because it
+#      underestimates the differences in paths experienced by the rat. A
+#      path that used to be 25 hexes long can become 15 hexes with only
+#      one hex being "different" on optimal paths, because those hexes are 
+#      still optimal on paths to other ports. ***
 
-    Keeping this function for now for posterity. Note that for barrier sequences generated prior
-    to this deprecation, the `min_hex_diff` count used in `get_barrier_sequence` and related
-    functions refers to the count using this method. ***
+#     Given 2 mazes, find the set of hexes different on optimal 
+#     paths between every pair of reward ports. This helps us quantify
+#     how different two maze configurations are.
+    
+#     Args:
+#     maze_1 (set/frozenset): Set of barriers representing the first hex maze
+#     maze_2 (set/frozenset): Set of barriers representing the second hex maze
+    
+#     Returns:
+#     hexes_on_optimal_paths_maze_1_not_2 (set): The set of hexes on optimal paths in maze_1 but not maze_2
+#     hexes_on_optimal_paths_maze_2_not_1 (set): The set of hexes on optimal paths in maze_2 but not maze_1
+#     '''
 
-    Given 2 mazes, find the number of hexes different between optimal paths 
-    between every pair of reward ports. Note that this version of the function
-    "double-counts" path-independent hexes. For example, hexes that are different 
-    on a path to port 1 are double counted because they are different on the 
-    optimal path from port 1 to port 2 AND different on the optimal path from port 1 to port 3. 
-    This helps us quantify how different two maze configurations are.
+#     # Get the set of all hexes on optimal paths for maze 1
+#     hexes_on_optimal_paths_maze1 = {hex for path in get_optimal_paths_between_ports(maze_1) for hex in path}
     
-    Args:
-    maze_1 (set/frozenset): Set of barriers representing the first hex maze
-    maze_2 (set/frozenset): Set of barriers representing the second hex maze
+#     # Get the set of all hexes on optimal paths for maze 2
+#     hexes_on_optimal_paths_maze2 = {hex for path in get_optimal_paths_between_ports(maze_2) for hex in path}
     
-    Returns:
-    num_different_hexes (int): The min number of hexes different in the most 
-    similar optimal paths between all reward ports for the 2 mazes
-    '''
-    # How many hexes different are the most similar optimal paths from port 1 to port 2?
-    num_hexes_different_12 = min_hex_diff_between_paths(
-        get_optimal_paths(maze_1, start_hex=1, target_hex=2), 
-        get_optimal_paths(maze_2, start_hex=1, target_hex=2))
-    # How many hexes different are the most similar optimal paths from port 1 to port 3?
-    num_hexes_different_13 = min_hex_diff_between_paths(
-        get_optimal_paths(maze_1, start_hex=1, target_hex=3), 
-        get_optimal_paths(maze_2, start_hex=1, target_hex=3))
-    # How many hexes different are the most similar optimal paths from port 2 to port 3?
-    num_hexes_different_23 = min_hex_diff_between_paths(
-        get_optimal_paths(maze_1, start_hex=2, target_hex=3), 
-        get_optimal_paths(maze_2, start_hex=2, target_hex=3))
+#     # Return hexes exlusively on optimal paths in maze 1, and hexes exclusively on optimal paths in maze 2
+#     hexes_on_optimal_paths_maze_1_not_2 = hexes_on_optimal_paths_maze1 - hexes_on_optimal_paths_maze2
+#     hexes_on_optimal_paths_maze_2_not_1 = hexes_on_optimal_paths_maze2 - hexes_on_optimal_paths_maze1
+#     return hexes_on_optimal_paths_maze_1_not_2, hexes_on_optimal_paths_maze_2_not_1
+
+
+# def num_hexes_different_on_optimal_paths_OLD(maze_1, maze_2):
+#     '''
+#     *** DEPRECATED: We have moved away from this method of counting in favor of 
+#     counting all hexes different on optimal paths between ports exactly once 
+#     (regardless of if they appear on multiple optimal paths). 
+
+#     Keeping this function for now for posterity. Note that for barrier sequences generated prior
+#     to this deprecation, the `min_hex_diff` count used in `get_barrier_sequence` and related
+#     functions refers to the count using this method. ***
+
+#     Given 2 mazes, find the number of hexes different between optimal paths 
+#     between every pair of reward ports. Note that this version of the function
+#     "double-counts" path-independent hexes. For example, hexes that are different 
+#     on a path to port 1 are double counted because they are different on the 
+#     optimal path from port 1 to port 2 AND different on the optimal path from port 1 to port 3. 
+#     This helps us quantify how different two maze configurations are.
     
-    # Return the total number of hexes different between the most similar optimal
-    # paths between all 3 reward ports
-    return (num_hexes_different_12 + num_hexes_different_13 + num_hexes_different_23)
+#     Args:
+#     maze_1 (set/frozenset): Set of barriers representing the first hex maze
+#     maze_2 (set/frozenset): Set of barriers representing the second hex maze
+    
+#     Returns:
+#     num_different_hexes (int): The min number of hexes different in the most 
+#     similar optimal paths between all reward ports for the 2 mazes
+#     '''
+#     # How many hexes different are the most similar optimal paths from port 1 to port 2?
+#     num_hexes_different_12 = min_hex_diff_between_paths(
+#         get_optimal_paths(maze_1, start_hex=1, target_hex=2), 
+#         get_optimal_paths(maze_2, start_hex=1, target_hex=2))
+#     # How many hexes different are the most similar optimal paths from port 1 to port 3?
+#     num_hexes_different_13 = min_hex_diff_between_paths(
+#         get_optimal_paths(maze_1, start_hex=1, target_hex=3), 
+#         get_optimal_paths(maze_2, start_hex=1, target_hex=3))
+#     # How many hexes different are the most similar optimal paths from port 2 to port 3?
+#     num_hexes_different_23 = min_hex_diff_between_paths(
+#         get_optimal_paths(maze_1, start_hex=2, target_hex=3), 
+#         get_optimal_paths(maze_2, start_hex=2, target_hex=3))
+    
+#     # Return the total number of hexes different between the most similar optimal
+#     # paths between all 3 reward ports
+#     return (num_hexes_different_12 + num_hexes_different_13 + num_hexes_different_23)
 
 
 def at_least_one_path_shorter_and_longer(maze_1, maze_2):
@@ -1478,7 +1564,8 @@ def get_stats_coords(hex_centroids):
 def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None, 
                   show_barriers=True, show_choice_points=True,
                   show_optimal_paths=False, show_arrow=True,
-                  show_barrier_change=True, show_stats=False, scale=1):
+                  show_barrier_change=True, show_stats=False, 
+                  highlight_hexes=None, scale=1):
     ''' 
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
@@ -1508,9 +1595,13 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and \
     new_barrier are not None
     - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
-    on the maze. Defaults to True if old_barrier and new_barrier are not None. \
+    on the maze. Defaults to True if old_barrier and new_barrier are not None.
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to False
+    - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
+    Often used to highlight hexes different between mazes. Takes precedence over other highlights. \
+    Defaults to None.
+
     Note that highlighting choice points takes precendence over barrier change \
     hexes, as they are also shown by the movement arrow. If show_barriers=False, \
     the new_barrier hex will not be shown (because no barriers are shown with this option.) 
@@ -1565,6 +1656,11 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
             for hex in choice_points:
                 hex_colors.update({hex: 'gold'})
 
+    # Optional - highlight specific hexes on the plot
+    if highlight_hexes is not None:
+        for hex in highlight_hexes:
+                hex_colors.update({hex: 'darkorange'})
+
     fig, ax = plt.subplots()
     # Add each hex to the plot
     for hex, (x, y) in hex_coordinates.items():
@@ -1591,8 +1687,8 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     if barriers is not None and show_barriers:
         nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={b: b for b in barriers}, font_color='white')
 
-    # Add stats
-    if show_stats:
+    # Optional - Add stats to the graph
+    if show_stats and barriers is not None:
         # Get stats for this maaze
         maze_attributes = get_maze_attributes(barriers)
         # For all stats that we have display coordinates for, print them on the graph
@@ -1629,7 +1725,7 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
     print_barrier_info (bool): Optional. Print each barrier set and the
     barrier moved between barrier sets. Defaults to True
 
-    Additional args to change the plot style (same as for plot_hex_maze):
+    Additional args to change the plot style (passed directly to `plot_hex_maze`):
     - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
     If False, only open hexes are shown. Defaults to True
     - show_choice_points (bool): If the choice points should be shown in yellow. \
@@ -1640,7 +1736,13 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
     old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and \
     new_barrier are not None
     - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
-    on the maze. Defaults to True if old_barrier and new_barrier are not None. \
+    on the maze. Defaults to True if old_barrier and new_barrier are not None.
+    - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
+    on the graph. Defaults to False
+    - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
+    Often used to highlight hexes different between mazes. Takes precedence over other highlights. \
+    Defaults to None.
+
     Note that highlighting choice points takes precendence over barrier change \
     hexes, as they are also shown by the movement arrow. If show_barriers=False, \
     the new_barrier hex will not be shown (because no barriers are shown with this option.) 
@@ -1661,6 +1763,60 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
             print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
             print(f"Barrier set {i+1}: {barriers}")
         plot_hex_maze(barriers, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
+
+
+def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
+    '''
+    Given 2 hex mazes, plot each maze highlighting the different hexes the 
+    rat must run through on optimal paths between reward ports. Used for comparing
+    how different 2 mazes are.
+    
+    Open hexes are shown in light blue. By default, barriers are not shown.
+    Changes in optimal paths between the mazes are highlighted in orange.
+    
+    Args:
+    maze_1 (set of ints):  A set defining the hexes where barriers are placed in the first maze
+    maze_2 (set of ints):  A set defining the hexes where barriers are placed in the second maze
+    print_info (bool): Optional. Print the hexes different on optimal paths between the mazes.
+    Defaults to True
+
+    Additional args to change the plot style (passed directly to `plot_hex_maze`):
+    - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
+    If False, only open hexes are shown. Defaults to False
+    - show_choice_points (bool): If the choice points should be shown in yellow. \
+    If False, the choice points are not indicated on the plot. Defaults to True
+    - show_optimal_paths (bool): Highlight the hexes on optimal paths between \
+    reward ports in light green. Defaults to False
+    - show_arrow (bool): Draw an arrow indicating barrier movement from the \
+    old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and \
+    new_barrier are not None
+    - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
+    on the maze. Defaults to True if old_barrier and new_barrier are not None.
+    - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
+    on the graph. Defaults to True
+    - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
+    This is calculated automatically for this function to show hexes different on optimal \
+    paths.  Setting it will render this function pointless. So don't. Thanks. Defaults to None.
+
+    Note that highlighting choice points takes precendence over barrier change \
+    hexes, as they are also shown by the movement arrow. If show_barriers=False, \
+    the new_barrier hex will not be shown (because no barriers are shown with this option.) 
+    '''
+    
+    # Get the hexes different on optimal paths between these 2 mazes
+    hexes_maze1_not_maze2, hexes_maze2_not_maze1 = hexes_different_on_optimal_paths(maze_1, maze_2)
+
+    # Print the different hexes
+    if (print_info):
+        print(f"Hexes on optimal paths in the first maze but not the second: {hexes_maze1_not_maze2}")
+        print(f"Hexes on optimal paths in the second maze but not the first: {hexes_maze2_not_maze1}")
+
+        hex_diff = num_hexes_different_on_optimal_paths(maze_1, maze_2)
+        print(f"There are {hex_diff} hexes different on optimal paths between the 2 mazes.")
+
+    # Plot the mazes ighlighting different hexes
+    plot_hex_maze(maze_1, show_barriers=False, show_stats=True, highlight_hexes=hexes_maze1_not_maze2, **kwargs)
+    plot_hex_maze(maze_2, show_barriers=False, show_stats=True, highlight_hexes=hexes_maze2_not_maze1, **kwargs)
 
 
 def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None,
