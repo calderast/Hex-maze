@@ -1564,8 +1564,8 @@ def get_stats_coords(hex_centroids):
 def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None, 
                   show_barriers=True, show_choice_points=True,
                   show_optimal_paths=False, show_arrow=True,
-                  show_barrier_change=True, show_stats=False, 
-                  highlight_hexes=None, scale=1):
+                  show_barrier_change=True, show_hex_labels=True,
+                  show_stats=False, highlight_hexes=None, ax=None, scale=1):
     ''' 
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
@@ -1583,6 +1583,8 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
         If no barriers or 'None' is specifed, plots an empty hex maze
     old_barrier (int): Optional. The hex where the barrier was in the previous maze
     new_barrier (int): Optional. The hex where the new barrier is in this maze
+    ax (matplotlib.axes.Axes): Optional. The axis on which to plot the hex maze. \
+    When no axis (or None) is specified, the function creates a new figure and shows the plot.
 
     Additional args to change the plot style:
     - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
@@ -1596,6 +1598,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     new_barrier are not None
     - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
     on the maze. Defaults to True if old_barrier and new_barrier are not None.
+    - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to False
     - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
@@ -1661,7 +1664,13 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
         for hex in highlight_hexes:
                 hex_colors.update({hex: 'darkorange'})
 
-    fig, ax = plt.subplots()
+    # If no axis was provided, create a new figure and axis to use
+    if ax is None:
+        fig, ax = plt.subplots()
+        show_plot = True
+    else:
+        show_plot = False
+
     # Add each hex to the plot
     for hex, (x, y) in hex_coordinates.items():
         hexagon = patches.RegularPolygon((x, y), numVertices=6, radius=scale/2,
@@ -1681,30 +1690,37 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
                                 color="salmon", linewidth=2))
 
     # Add hex labels
-    nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={h: h for h in hex_maze.nodes()}, font_color='black')
+    if show_hex_labels:
+        nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={h: h for h in hex_maze.nodes()}, font_color='black', ax=ax)
 
     # Add barrier labels
-    if barriers is not None and show_barriers:
-        nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={b: b for b in barriers}, font_color='white')
+    if barriers is not None and show_barriers and show_hex_labels:
+        nx.draw_networkx_labels(hex_maze, hex_coordinates, labels={b: b for b in barriers}, font_color='white', ax=ax)
 
     # Optional - Add stats to the graph
     if show_stats and barriers is not None:
-        # Get stats for this maaze
+        # Get stats for this maze
         maze_attributes = get_maze_attributes(barriers)
         # For all stats that we have display coordinates for, print them on the graph
+        # (Currently this is just optimal path lengths, but it would be easy to add others!)
         for stat in maze_attributes:
             if stat in stats_coordinates:
                 ax.annotate(maze_attributes[stat], 
                             stats_coordinates[stat],
-                            ha='center', # Horizontal alignment
-                            fontsize=12  # Font size
+                            ha='center',
+                            fontsize=12
                 )
 
-    # Adjust axes
-    plt.xlim(-5.5*scale, 5.5*scale)
-    plt.ylim(-9.5*scale, 1*scale) if show_stats else plt.ylim(-9*scale, 1*scale)
-    plt.gca().set_aspect('equal', adjustable='box')
-    plt.show()
+    # Adjust axis limits
+    ax.set_xlim(-5.5*scale, 5.5*scale)
+    ax.set_ylim(-9.5*scale, 1*scale) if show_stats else ax.set_ylim(-9*scale, 1*scale)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect('equal', adjustable='box')
+
+    # If no axis was provided as an argument, show the plot now
+    if show_plot:
+        plt.show()
     
 
 def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
@@ -1737,6 +1753,7 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
     new_barrier are not None
     - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
     on the maze. Defaults to True if old_barrier and new_barrier are not None.
+    - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to False
     - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
@@ -1792,6 +1809,7 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
     new_barrier are not None
     - show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes \
     on the maze. Defaults to True if old_barrier and new_barrier are not None.
+    - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to True
     - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
@@ -1814,9 +1832,75 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
         hex_diff = num_hexes_different_on_optimal_paths(maze_1, maze_2)
         print(f"There are {hex_diff} hexes different on optimal paths between the 2 mazes.")
 
-    # Plot the mazes ighlighting different hexes
-    plot_hex_maze(maze_1, show_barriers=False, show_stats=True, highlight_hexes=hexes_maze1_not_maze2, **kwargs)
-    plot_hex_maze(maze_2, show_barriers=False, show_stats=True, highlight_hexes=hexes_maze2_not_maze1, **kwargs)
+    # By default, make show_stats=True and show_barriers=False
+    kwargs.setdefault('show_barriers', False)
+    kwargs.setdefault('show_stats', True)
+
+    # Plot the mazes in side-by-side subplots highlighting different hexes
+    fig, axs = plt.subplots(1, 2, figsize=(8, 4))
+    plot_hex_maze(maze_1, ax=axs[0], highlight_hexes=hexes_maze1_not_maze2, **kwargs)
+    plot_hex_maze(maze_2, ax=axs[1], highlight_hexes=hexes_maze2_not_maze1, **kwargs)
+    axs[0].set_title(f'Maze 1')
+    axs[1].set_title(f'Maze 2')
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_evaluate_barrier_sequence(barrier_sequence, **kwargs):
+    '''
+    Given a sequence of barrier sets that each differ by the movement of 
+    a single barrier, plot each maze in the sequence showing a comparison of
+    how different it is from every other maze in the sequence. 
+    
+    Open hexes are shown in light blue. By default, barriers are not shown.
+    The reference maze has optimal paths highlighted in green. It is shown
+    in a row compared to all other mazes in the sequence, where hexes on
+    optimal paths in the other maze that are not on optimal paths in the 
+    reference maze are highlighted in orange. 
+    
+    Args:
+    barrier_sequence (list of sets): List of sequential barrier sets
+
+    Additional args to change the plot style (passed directly to `plot_hex_maze`):
+    - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
+    If False, only open hexes are shown. Defaults to False
+    - show_choice_points (bool): If the choice points should be shown in yellow. \
+    If False, the choice points are not indicated on the plot. Defaults to False
+    - show_optimal_paths (bool): Highlight the hexes on optimal paths between \
+    reward ports in light green. Defaults to True for the reference maze, False otherwise
+    - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to False
+    - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
+    on the graph. Defaults to True
+    '''
+
+    # Change some default plotting options for clarity
+    kwargs.setdefault('show_barriers', False)
+    kwargs.setdefault('show_stats', True)
+    kwargs.setdefault('show_choice_points', False)
+    kwargs.setdefault('show_hex_labels', False)
+
+    # Loop through each maze in the sequence
+    for ref, maze in enumerate(barrier_sequence):
+
+        # Compare the maze with each other maze in the sequence
+        fig, axs = plt.subplots(1, len(barrier_sequence), figsize=(18, 3)) 
+
+        for i, other_maze in enumerate(barrier_sequence):
+            if i == ref:
+                # If this maze is the reference for this row, highlight optimal paths
+                plot_hex_maze(maze, ax=axs[i], show_optimal_paths=True, **kwargs)
+                axs[i].set_title(f'Maze {i+1}')
+            else:
+                # Otherwise, get the hexes different on optimal paths between the reference maze and another maze in the sequence
+                _ , optimal_hexes_other_maze_not_reference_maze = hexes_different_on_optimal_paths(maze, other_maze)
+
+                # Plot the other maze highlighting the hexes different from the reference maze
+                plot_hex_maze(other_maze, ax=axs[i], highlight_hexes=optimal_hexes_other_maze_not_reference_maze, **kwargs)
+                axs[i].set_title(f'Maze {i+1} compared to Maze {ref+1}')
+
+        # Adjust layout to ensure plots don't overlap
+        plt.tight_layout()
+        plt.show()
 
 
 def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None,
