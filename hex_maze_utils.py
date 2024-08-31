@@ -1724,7 +1724,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     
 
 def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
-                                 **kwargs):
+                                 same_plot=False, **kwargs):
     '''
     Given a sequence of barrier sets that each differ by the movement of 
     a single barrier, plot each maze in the sequence with the moved barriers
@@ -1738,8 +1738,11 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
     
     Args:
     barrier_sequence (list of sets): List of sequential barrier sets
-    print_barrier_info (bool): Optional. Print each barrier set and the
+    print_barrier_info (bool): Optional. Print each barrier set and the \
     barrier moved between barrier sets. Defaults to True
+    same_plot (bool). Optional. Prints all mazes in a single row as \
+    subplots in the same plot (instead of as separate figures). Defaults \
+    to False
 
     Additional args to change the plot style (passed directly to `plot_hex_maze`):
     - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
@@ -1767,19 +1770,41 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
     
     # Find the barriers moved from one configuration to the next
     barrier_changes = get_barrier_changes(barrier_sequence)
-    
-    # First print and plot the first barrier set
-    # Pass any additional style args directly to plot_hex_maze
-    if (print_barrier_info):
-        print(f"Barrier set 0: {barrier_sequence[0]}")
-    plot_hex_maze(barrier_sequence[0], **kwargs)
-    
-    # Now print barrier change info and plot each successive barrier set
-    for i, (barriers, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
+
+    # If we want all mazes in a row on the same plot, use this
+    if same_plot:
+        # Set up a 1x(num mazes) plot so we can put each maze in a subplot
+        fig, axs = plt.subplots(1, len(barrier_sequence), figsize=((len(barrier_sequence)*4, 4))) 
+
+        # Plot the first maze in the sequence (no barrier changes to show for Maze 1)
+        plot_hex_maze(barrier_sequence[0], ax=axs[0], **kwargs)
+        axs[0].set_title(f'Maze 1')
+
+        # Loop through each successive maze in the sequence and plot it with barrier changes
+        for i, (maze, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes), start=1):
+            # Plot the hex maze (pass any additional style args directly to plot_hex_maze)
+            plot_hex_maze(maze, ax=axs[i], old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
+            axs[i].set_title(f'Maze {i+1}')
+            if print_barrier_info:
+                axs[i].set_xlabel(f"Barrier change: {old_barrier_hex} → {new_barrier_hex}")
+
+        # Adjust layout to ensure plots don't overlap
+        plt.tight_layout()
+        plt.show()
+
+    # Otherwise, plot each maze separately
+    else:
+        # First print info for and plot the first maze (no barrier changes for Maze 1)
         if (print_barrier_info):
-            print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
-            print(f"Barrier set {i+1}: {barriers}")
-        plot_hex_maze(barriers, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
+            print(f"Maze 0: {barrier_sequence[0]}")
+        plot_hex_maze(barrier_sequence[0], **kwargs)
+    
+        # Now plot each successive maze (and print barrier change info)
+        for i, (barriers, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
+            if (print_barrier_info):
+                print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
+                print(f"Maze {i+1}: {barriers}")
+            plot_hex_maze(barriers, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
 
 
 def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
