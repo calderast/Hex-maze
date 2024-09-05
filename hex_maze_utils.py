@@ -203,6 +203,32 @@ def get_critical_choice_points(maze):
     return choice_points
 
 
+def get_all_choice_points(maze):
+    '''
+    Given a barrier set or networkx graph representing the hex maze, 
+    find all potential choice points (hexes connected to 3 other 
+    hexes, where a rat coming from a neighboring hex faces a 
+    left/right choice of 2 other neighboring hexes)
+    
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+    
+    Returns:
+    set of ints: All hexes that are choice points for this maze
+    '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # Choice hexes are all hexes with exactly 3 neighbors
+    choice_hexes = {hex for hex, degree in graph.degree() if degree == 3}
+    return choice_hexes
+
+
 def get_optimal_paths_between_ports(maze):
     '''
     Given a barrier set or networkx graph representing the hex maze,
@@ -348,6 +374,128 @@ def get_hexes_from_port(maze, start_hex, reward_port):
 
     # Get the shortest path length between start_hex and the reward port
     return nx.shortest_path_length(graph, source=start_hex, target=reward_port)
+
+
+def get_hexes_within_distance(maze, start_hex, max_distance=math.inf, min_distance=1):
+    '''
+    Find all hexes within a certain hex distance from the start_hex
+    (inclusive). Hexes directly adjacent to the start_hex are 
+    considered 1 hex away, hexes adjacent to those are 2 hexes
+    away, etc. 
+    
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze \
+    OR a networkx graph object representing the maze
+    start_hex (int): The hex to calculate distance from
+    max_distance (int): Maximum distance in hexes from the start hex (inclusive)
+    min_distance (int): Minimum distance in hexes from the start hex (inclusive).\
+    Defaults to 1 to not include the start_hex
+    
+    Returns:
+    set of ints: Set of hexes in the maze that are within the specified
+    distance from the start_hex
+    '''
+    # If our maze input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # Get a dict of shortest path lengths from the start_hex to all other hexes
+    shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
+
+    # Get hexes that are between min_distance and max_distance (inclusive)
+    hexes_within_distance = {
+        hex for hex, dist in shortest_paths.items() 
+        if min_distance <= dist <= max_distance
+    }
+    return hexes_within_distance
+
+
+def is_valid_path(maze, hex_path):
+    '''
+    Checks if the given hex_path is a valid path through the maze,
+    meaning all consecutive hexes exist in the maze and are connected.
+    
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze \
+    OR a networkx graph object representing the maze
+    hex_path (list): List of hexes defining a potential path through the maze
+    
+    Returns:
+    bool: True if the hex_path is valid in the maze, False otherwise.
+    '''
+    # If our maze input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # If the path has only one hex, check if it exists in the maze
+    if len(hex_path) == 1:
+        return hex_path[0] in graph 
+    
+    # Iterate over consecutive hexes in the path
+    for i in range(len(hex_path) - 1):
+        # If any consecutive hexes are not connected, the path is invalid
+        if not graph.has_edge(hex_path[i], hex_path[i + 1]):
+            return False
+    
+    return True  # All consecutive hexes exist and are connected
+
+
+def divide_into_thirds(maze):
+    '''
+    Given a maze with a single critical choice point, divide the
+    open hexes in the maze into 3 sets: hexes between the choice point
+    and port 1, hexes between the choice point and port 2, and hexes
+    between the choice point and port 3.
+
+    NOT CURRENTLY IMPLEMENTED FOR MAZES WITH MULTIPLE CHOICE POINTS,
+    AS DIVIDING HEXES INTO 3 GROUPS IS NOT WELL DEFINED IN THIS CASE.
+    
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze \
+    OR a networkx graph object representing the maze
+    
+    Returns:
+    list of sets: [{hexes between the choice point and port 1}, \
+    {between choice and port 2}, {between choice and port 3}]
+    '''
+    # If our maze input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that (but make a copy to avoid modifying the original)
+    elif isinstance(maze, nx.Graph):
+        graph = maze.copy()
+
+    # Get choice points for this maze and ensure there is only one
+    choice_points = get_critical_choice_points(maze)
+    if len(choice_points) != 1:
+        print(f"The given maze has {len(choice_points)} choice points: {choice_points}")
+        print("This function is not currently implemented for mazes with multiple choice points!")
+        return None
+    
+    # Remove the choice point from the maze graph to split it into 3 components
+    graph.remove_node(next(iter(choice_points)))
+    
+    # Get the 3 components of the split graph (each containing a reward port)
+    components = list(nx.connected_components(graph))
+    if len(components) != 3:
+        print(f"The choice point {choice_points} does not split the maze into 3 distinct components!")
+        return None
+    
+    # Find each component containing hex 1, hex 2, and hex 3 (in that order)
+    thirds = []
+    for hex in [1, 2, 3]:
+        for maze_component in components:
+            if hex in maze_component:
+                thirds.append(maze_component)
+                break
+    
+    return thirds
 
 
 def has_illegal_straight_path(maze):
