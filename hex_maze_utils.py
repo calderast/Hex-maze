@@ -498,6 +498,35 @@ def divide_into_thirds(maze):
     return thirds
 
 
+def get_choice_direction(start_port, end_port):
+    '''
+    Get the direction of the rat's port choice ('left' or 'right')
+    given the rat's start and end port.
+    
+    Args:
+    start_port (int or String): The port the rat started form (1, 2, 3, or A, B, C)
+    end_port (int or String): The port the rat ended at (1, 2, 3, or A, B, C)
+    
+    Returns:
+    String: 'left' or 'right' based on the direction of the rat's choice
+    '''
+    # Create a mapping so we can handle 1, 2, 3 or A, B, C to specify ports
+    location_map = {'A': 1, 'B': 2, 'C': 3, 1: 1, 2: 2, 3: 3}
+    start = location_map[start_port]
+    end = location_map[end_port]
+    
+    # Calculate diff mod 3 to handle circular wrapping (1 -> 2 -> 3 in ccw direction)
+    diff = (end - start) % 3
+    
+    if diff == 1:
+        return "right"
+    elif diff == 2:
+        return "left"
+    else:
+        # Return None if start_port == end_port
+        return None
+
+
 def has_illegal_straight_path(maze):
     '''
     Given a barrier set or networkx graph representing the hex maze,
