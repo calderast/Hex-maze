@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import random
 import math
-from functools import partial
+from itertools import chain
 
 # for now this is defined here because we use it to set up constants
 def get_subpaths(path, length):
@@ -1565,7 +1565,8 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
                   show_barriers=True, show_choice_points=True,
                   show_optimal_paths=False, show_arrow=True,
                   show_barrier_change=True, show_hex_labels=True,
-                  show_stats=False, highlight_hexes=None, ax=None, scale=1):
+                  show_stats=False, highlight_hexes=None, highlight_colors=None,
+                  ax=None, scale=1):
     ''' 
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
@@ -1601,9 +1602,11 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to False
-    - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
-    Often used to highlight hexes different between mazes. Takes precedence over other highlights. \
-    Defaults to None.
+    - highlight_hexes (set of ints or list of sets): A set (or list of sets), of hexes to highlight. \
+    Takes precedence over other hex highlights (choice points, etc). Defaults to None.
+    - highlight_colors (string or list of strings): Color (or list of colors) to highlight highlight_hexes. \
+    Each color in this list applies to the respective set of hexes in highlight_hexes. \
+    Defaults to 'darkorange' for a single group.
 
     Note that highlighting choice points takes precendence over barrier change \
     hexes, as they are also shown by the movement arrow. If show_barriers=False, \
@@ -1661,8 +1664,25 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
 
     # Optional - highlight specific hexes on the plot
     if highlight_hexes is not None:
-        for hex in highlight_hexes:
-                hex_colors.update({hex: 'darkorange'})
+        # If highlight_hexes is a single set (or a list of length 1 containing a set), default to dark orange if no colors are provided
+        if isinstance(highlight_hexes, set) or (isinstance(highlight_hexes, list) and len(highlight_hexes) == 1 and isinstance(highlight_hexes[0], set)):
+            if highlight_colors is None:
+                highlight_colors = ['darkorange']
+            
+            # If it's a single set, wrap it in a list for consistency
+            if isinstance(highlight_hexes, set):
+                highlight_hexes = [highlight_hexes]
+
+        # If highlight_hexes is a list, ensure highlight_colors is the same length
+        # (We actually just check if len(colors) is >= len(hexes) and ignore any extra colors)
+        elif isinstance(highlight_hexes, list):
+            if highlight_colors is None or len(highlight_hexes) > len(highlight_colors):
+                raise ValueError("Length of highlight_colors and highlight_hexes must match.")
+
+        # Apply the specified or default color to the hexes
+        for hexes, color in zip(highlight_hexes, highlight_colors):
+            for hex in hexes:
+                hex_colors.update({hex: color})
 
     # If no axis was provided, create a new figure and axis to use
     if ax is None:
@@ -1840,10 +1860,94 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
     fig, axs = plt.subplots(1, 2, figsize=(8, 4))
     plot_hex_maze(maze_1, ax=axs[0], highlight_hexes=hexes_maze1_not_maze2, **kwargs)
     plot_hex_maze(maze_2, ax=axs[1], highlight_hexes=hexes_maze2_not_maze1, **kwargs)
-    axs[0].set_title(f'Maze 1')
-    axs[1].set_title(f'Maze 2')
+    axs[0].set_title('Maze 1')
+    axs[1].set_title('Maze 2')
     plt.tight_layout()
     plt.show()
+
+
+def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
+    '''
+    Given 2 hex mazes, plot each maze highlighting the different hexes the 
+    rat must run through on optimal paths between reward ports. Creates a 2x3
+    plot, with each column highlighting the differences in paths between each
+    pair of reward ports. Used for comparing how different 2 mazes are.
+    
+    Open hexes are shown in light blue. By default, barriers are not shown.
+    Optimal paths between ports are highlighted in light green.
+    Changes in optimal paths between the mazes are highlighted in orange.
+    
+    Args:
+    maze_1 (set of ints):  A set defining the hexes where barriers are placed in the first maze
+    maze_2 (set of ints):  A set defining the hexes where barriers are placed in the second maze
+    print_info (bool): Optional. Print the hexes different on optimal paths between the mazes.
+    Defaults to True
+
+    Additional args to change the plot style (passed directly to `plot_hex_maze`):
+    - show_barriers (bool): If the barriers should be shown as black hexes and labeled. \
+    If False, only open hexes are shown. Defaults to False
+    - show_choice_points (bool): If the choice points should be shown in yellow. \
+    If False, the choice points are not indicated on the plot. Defaults to False
+    - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
+    - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
+    on the graph. Defaults to True
+    '''
+    
+    # Get which hexes are different on the most similar optimal paths from port 1 to port 2
+    maze1_optimal_12 = get_optimal_paths(maze_1, start_hex=1, target_hex=2)
+    maze2_optimal_12 = get_optimal_paths(maze_2, start_hex=1, target_hex=2)
+    maze1_hexes_path12, maze2_hexes_path12 = hexes_different_between_paths(maze1_optimal_12, maze2_optimal_12)
+    num_hexes_different_path12 = len(maze1_hexes_path12 | maze2_hexes_path12)
+    # Get which hexes are different on the most similar optimal paths from port 1 to port 3
+    maze1_optimal_13 = get_optimal_paths(maze_1, start_hex=1, target_hex=3)
+    maze2_optimal_13 = get_optimal_paths(maze_2, start_hex=1, target_hex=3)
+    maze1_hexes_path13, maze2_hexes_path13 = hexes_different_between_paths(maze1_optimal_13, maze2_optimal_13)
+    num_hexes_different_path13 = len(maze1_hexes_path13 | maze2_hexes_path13)
+    # Get which hexes are different on the most similar optimal paths from port 2 to port 3
+    maze1_optimal_23 = get_optimal_paths(maze_1, start_hex=2, target_hex=3)
+    maze2_optimal_23 = get_optimal_paths(maze_2, start_hex=2, target_hex=3)
+    maze1_hexes_path23, maze2_hexes_path23 = hexes_different_between_paths(maze1_optimal_23, maze2_optimal_23)
+    num_hexes_different_path23 = len(maze1_hexes_path23 | maze2_hexes_path23)
+
+    # By default, make show_stats=True, show_barriers=False, show_choice_points=False
+    kwargs.setdefault('show_barriers', False)
+    kwargs.setdefault('show_choice_points', False)
+    kwargs.setdefault('show_stats', True)
+
+    # Plot the mazes in side-by-side subplots highlighting different hexes
+    fig, axs = plt.subplots(2, 3, figsize=(14, 8))
+    plot_hex_maze(maze_1, ax=axs[0, 0], highlight_hexes=[set(chain.from_iterable(maze1_optimal_12)), maze1_hexes_path12], 
+                  highlight_colors=['lightgreen', 'darkorange'], **kwargs)
+    plot_hex_maze(maze_2, ax=axs[1, 0], highlight_hexes=[set(chain.from_iterable(maze2_optimal_12)), maze2_hexes_path12], 
+                  highlight_colors=['lightgreen', 'darkorange'], **kwargs)
+    plot_hex_maze(maze_1, ax=axs[0, 1], highlight_hexes=[set(chain.from_iterable(maze1_optimal_13)), maze1_hexes_path13], 
+                  highlight_colors=['lightgreen', 'darkorange'], **kwargs)
+    plot_hex_maze(maze_2, ax=axs[1, 1], highlight_hexes=[set(chain.from_iterable(maze2_optimal_13)), maze2_hexes_path13], 
+                  highlight_colors=['lightgreen', 'darkorange'], **kwargs)
+    plot_hex_maze(maze_1, ax=axs[0, 2], highlight_hexes=[set(chain.from_iterable(maze1_optimal_23)), maze1_hexes_path23], 
+                  highlight_colors=['lightgreen', 'darkorange'], **kwargs)
+    plot_hex_maze(maze_2, ax=axs[1, 2], highlight_hexes=[set(chain.from_iterable(maze2_optimal_23)), maze2_hexes_path23], 
+                  highlight_colors=['lightgreen', 'darkorange'], **kwargs)
+    axs[0, 0].set_ylabel('Maze 1')
+    axs[1, 0].set_ylabel('Maze 2')
+    axs[0, 0].set_title(f'Hexes different between port 1 and 2')
+    axs[1, 0].set_xlabel(f"{num_hexes_different_path12} hexes different between port 1 and 2")
+    axs[0, 1].set_title(f'Hexes different between port 1 and 3')
+    axs[1, 1].set_xlabel(f"{num_hexes_different_path13} hexes different between port 1 and 3")
+    axs[0, 2].set_title(f'Hexes different between port 2 and 3')
+    axs[1, 2].set_xlabel(f"{num_hexes_different_path23} hexes different between port 2 and 3")
+    plt.tight_layout()
+    plt.show()
+
+    # Print the different hexes
+    if (print_info):
+        # Get the hexes different on optimal paths between these 2 mazes
+        hexes_maze1_not_maze2, hexes_maze2_not_maze1 = hexes_different_on_optimal_paths(maze_1, maze_2)
+
+        print(f"Hexes on optimal paths in maze 1 but not maze 2: {hexes_maze1_not_maze2}")
+        print(f"Hexes on optimal paths in maze 2 but not maze 1: {hexes_maze2_not_maze1}")
+        hex_diff = num_hexes_different_on_optimal_paths(maze_1, maze_2)
+        print(f"There are {hex_diff} hexes different across all optimal paths (not double counting hexes).")
 
 
 def plot_evaluate_barrier_sequence(barrier_sequence, **kwargs):
