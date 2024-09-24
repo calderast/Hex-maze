@@ -2295,7 +2295,6 @@ def plot_evaluate_barrier_sequence(barrier_sequence, **kwargs):
                 axs[i].set_title(f'Maze {i+1} compared to Maze {ref+1}')
                 axs[i].set_xlabel(f'{len(optimal_hexes_other_maze_not_reference_maze)} hexes different')
             
-
         # Adjust layout to ensure plots don't overlap
         plt.tight_layout()
         plt.show()
