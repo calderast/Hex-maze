@@ -1676,7 +1676,7 @@ def get_barrier_sequence_attributes(barrier_sequence):
 def get_hex_centroids(view_angle=1, scale=1):
     ''' 
     Calculate the (x,y) coordinates of each hex centroid.
-    Centroids are calculated relative to the centroid of hex 1 at (0,0).
+    Centroids are calculated relative to the centroid of the topmost hex at (0,0).
 
     Args:
     view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
@@ -2072,9 +2072,18 @@ def plot_barrier_change_sequence(barrier_sequence, print_barrier_info=True,
     - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to False
-    - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
-    Often used to highlight hexes different between mazes. Takes precedence over other highlights. \
-    Defaults to None.
+    - show_permanent_barriers (bool): If the permanent barriers should be shown \
+    as black hexes. Includes edge barriers. Defaults to False
+    - show_edge_barriers (bool): Only an option if show_permanent_barriers=True. \
+    Gives the option to exclude edge barriers when showing permanent barriers. \
+    Defaults to True if show_permanent_barriers=True
+    - view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle \
+    when viewing the hex maze. Defaults to 1
+    - highlight_hexes (set of ints or list of sets): A set (or list of sets), of hexes to highlight. \
+    Takes precedence over other hex highlights (choice points, etc). Defaults to None.
+    - highlight_colors (string or list of strings): Color (or list of colors) to highlight highlight_hexes. \
+    Each color in this list applies to the respective set of hexes in highlight_hexes. \
+    Defaults to 'darkorange' for a single group.
 
     Note that highlighting choice points takes precendence over barrier change \
     hexes, as they are also shown by the movement arrow. If show_barriers=False, \
@@ -2150,9 +2159,20 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
     - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to True
+    - show_permanent_barriers (bool): If the permanent barriers should be shown \
+    as black hexes. Includes edge barriers. Defaults to False
+    - show_edge_barriers (bool): Only an option if show_permanent_barriers=True. \
+    Gives the option to exclude edge barriers when showing permanent barriers. \
+    Defaults to True if show_permanent_barriers=True
+    - view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle \
+    when viewing the hex maze. Defaults to 1
     - highlight_hexes (set of ints): Set defining which hexes to highlight on the maze. \
     This is calculated automatically for this function to show hexes different on optimal \
     paths.  Setting it will render this function pointless. So don't. Thanks. Defaults to None.
+    - highlight_colors (string or list of strings): Color (or list of colors) to highlight highlight_hexes. \
+    Each color in this list applies to the respective set of hexes in highlight_hexes. \
+    If you want changes in optimal paths to be in a different color than default orange, \
+    set that here.
 
     Note that highlighting choice points takes precendence over barrier change \
     hexes, as they are also shown by the movement arrow. If show_barriers=False, \
@@ -2209,6 +2229,17 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
     - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to True
+    - show_permanent_barriers (bool): If the permanent barriers should be shown \
+    as black hexes. Includes edge barriers. Defaults to False
+    - show_edge_barriers (bool): Only an option if show_permanent_barriers=True. \
+    Gives the option to exclude edge barriers when showing permanent barriers. \
+    Defaults to True if show_permanent_barriers=True
+    - view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle \
+    when viewing the hex maze. Defaults to 1
+
+    Note that this function passes the arguments highlight_hexes and highlight_colors \
+    directly to plot_hex_maze to show differences in optimal paths. \
+    Setting these arguments will render this function pointless, so don't. 
     '''
     
     # Get which hexes are different on the most similar optimal paths from port 1 to port 2
@@ -2293,6 +2324,13 @@ def plot_evaluate_barrier_sequence(barrier_sequence, **kwargs):
     - show_hex_labels (bool): Show the number of each hex on the plot. Defaults to False
     - show_stats (bool): Print maze stats (lengths of optimal paths between ports) \
     on the graph. Defaults to True
+    - show_permanent_barriers (bool): If the permanent barriers should be shown \
+    as black hexes. Includes edge barriers. Defaults to False
+    - show_edge_barriers (bool): Only an option if show_permanent_barriers=True. \
+    Gives the option to exclude edge barriers when showing permanent barriers. \
+    Defaults to True if show_permanent_barriers=True
+    - view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle \
+    when viewing the hex maze. Defaults to 1
     '''
 
     # Change some default plotting options for clarity
@@ -2324,63 +2362,6 @@ def plot_evaluate_barrier_sequence(barrier_sequence, **kwargs):
         # Adjust layout to ensure plots don't overlap
         plt.tight_layout()
         plt.show()
-
-
-def plot_hex_maze_networkx(barriers, old_barrier=None, new_barrier=None,
-                           show_barriers=True, show_choice_points=True):
-    ''' 
-    ***** DEPRECATED: replaced by plot_hex_maze *****
-    
-    Given a set of barriers specifying a hex maze, plot the maze as a 
-    networkx style graph with nodes connected by lines.
-    Open hexes are shown in light blue, connected by thin grey lines.
-    Barriers are shown in dark grey. Choice point(s) are in yellow.
-    
-    Option to specify old barrier location and new barrier location 
-    to indicate a barrier change configuration:
-    The now-open hex where the barrier used to be is shown in pale red.
-    The new barrier is shown in dark red.
-    
-    Args:
-    barriers (set): A set defining the hexes where barriers are placed in the maze
-    old_barrier (int): Optional. The hex where the barrier was in the previous maze
-    new_barrier (int): Optional. The hex where the new barrier is in this maze
-    '''
-    
-    # Create an empty maze for graph layout
-    base_hex_maze = create_empty_hex_maze()
-    
-    # Create our actual maze
-    maze = base_hex_maze.copy()
-    for hex in barriers:
-        maze.remove_node(hex)
-
-    # Get the graph layout of the original maze
-    pos = nx.kamada_kawai_layout(base_hex_maze)
-
-    # Draw the available hexes in our maze using this layout
-    nx.draw(maze, pos, with_labels=True, node_color='skyblue', edge_color='gray', node_size=400)
-
-    # Add the barriers in black
-    if show_barriers:
-        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist={b: b for b in barriers}, node_color='black', node_size=400)   
-        nx.draw_networkx_labels(base_hex_maze, pos, labels={b: b for b in barriers}, font_color='white')
-
-    # Make the choice point(s) yellow
-    if show_choice_points:
-        choice_points = get_critical_choice_points(maze)
-        for choice_point in choice_points:
-            nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[choice_point], node_color='yellow', node_size=400)
-        
-    # Make the old barrier location that is now an open hex light red
-    if old_barrier is not None:
-        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[old_barrier], node_color='peachpuff', node_size=400)
-    
-    # Make the new barrier location dark red
-    if new_barrier is not None:
-        nx.draw_networkx_nodes(base_hex_maze, pos, nodelist=[new_barrier], node_color='darkred', node_size=400)
-    
-    plt.show()
 
 
 ############## One-time use functions to help ensure that our database includes all possible mazes ##############
