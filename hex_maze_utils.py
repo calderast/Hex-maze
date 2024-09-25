@@ -1673,12 +1673,14 @@ def get_barrier_sequence_attributes(barrier_sequence):
 
 ################################ Plotting hex mazes ################################
 
-def get_hex_centroids(scale=1):
+def get_hex_centroids(view_angle=1, scale=1):
     ''' 
     Calculate the (x,y) coordinates of each hex centroid.
     Centroids are calculated relative to the centroid of hex 1 at (0,0).
 
     Args:
+    view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
+    when viewing the hex maze. Defaults to 1
     scale (int): The width of each hex (aka the length of the long diagonal, 
     aka 2x the length of a single side). Defaults to 1
     
@@ -1688,10 +1690,17 @@ def get_hex_centroids(scale=1):
 
     # Number of hexes in each vertical row of the hex maze
     hexes_per_row = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
-    # List of hexes in order from top to bottom, left to right
+    # List of hexes in order from top to bottom, left to right (assuming view_angle=1)
     hex_list = [1, 4, 6, 5, 8, 7, 11, 10, 9, 14, 13, 12, 18, 17, 16, 15,
                 22, 21, 20, 19, 27, 26, 25, 24, 23, 32, 31, 30, 29, 28,
                 38, 37, 36, 35, 34, 33, 49, 42, 41, 40, 39, 48, 2, 47, 46, 45, 44, 43, 3]
+    # If hex 2 should be on top instead, rotate hexes counterclockwise
+    if view_angle == 2:
+        hex_list = [rotate_hex(hex, direction='counterclockwise') for hex in hex_list]
+    # If hex 3 should be on top instead, rotate hexes clockwise
+    elif view_angle == 3:
+        hex_list = [rotate_hex(hex, direction='clockwise') for hex in hex_list]
+
     # Vertical distance between rows for touching hexes
     y_offset = math.sqrt(3) / 2  * scale
     y_shift = 0
@@ -1780,32 +1789,47 @@ def get_base_triangle_coords(hex_positions, scale=1, chop_vertices=True,
         return vertices
 
 
-def get_stats_coords(hex_centroids):
+def get_stats_coords(hex_centroids, view_angle=1):
     '''
     When plotting a hex maze with additional stats (such as path lengths), get the
     graph coordinates of where to display those stats based on the hex centroids.
 
     Args:
     hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+    view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle \
+    when viewing the hex maze. Defaults to 1
 
     Returns:
     stats_coords (dict): Dictionary of stat_id: (x, y) coordinates of where to plot it.
     The stat_id should be the same as a key returned by `get_maze_attributes`
     '''
+    # Get sorted list of x and y coordinates for all hexes in the maze
+    x_coords = sorted(set([coords[0] for coords in hex_centroids.values()]))
+    y_coords = sorted(set([coords[1] for coords in hex_centroids.values()]))
+    # Get the flat-to-flat height of a hex
+    hex_height = abs(y_coords[-1] - y_coords[-2])
+    # Get coordinates to plot path length stats (assuming hex 1 is on top)
     stats_coords = {}
+    stats_coords['len12'] = (x_coords[1], y_coords[6])
+    stats_coords['len13'] = (x_coords[-2], y_coords[6])
+    stats_coords['len23'] = (x_coords[6], y_coords[0] - 1.5*hex_height)
 
-    # Height of a hex can be calculated by abs(y coord of hex 1 - y coord of hex 4)
-    hex_height = abs(hex_centroids[1][1] - hex_centroids[4][1])
+    # If hex 2 or 3 is on top instead, rotate the coordinates accordingly
+    keys = list(stats_coords.keys())
+    n = len(keys)
+    rotated_stats_coords = {}
 
-    # Path length for port 1 to port 2 is (x coord of hex 38, y coord of hex 18)
-    stats_coords['len12'] = (hex_centroids[38][0], hex_centroids[18][1])
+    if view_angle == 2:  # Rotate clockwise
+        for i in range(n):
+            next_key = keys[(i + 1) % n]
+            rotated_stats_coords[keys[i]] = stats_coords[next_key]
+    elif view_angle == 3:  # Rotate counterclockwise
+        for i in range(n):
+            prev_key = keys[(i - 1) % n] 
+            rotated_stats_coords[keys[i]] = stats_coords[prev_key]
 
-    # Path length for port 1 to port 3 is (x coord of hex 33, y coord of hex 15)
-    stats_coords['len13'] = (hex_centroids[33][0], hex_centroids[15][1])
-
-    # Path length for port 2 to port 3 is (x coord of hex 45, y coord of hex 45 - 1.5 hex)
-    stats_coords['len23'] = (hex_centroids[45][0], hex_centroids[45][1] - 1.5*hex_height)
-
+    # If needed, update the original dictionary with the rotated coordinates
+    stats_coords.update(rotated_stats_coords)
     return stats_coords
 
 
@@ -1814,7 +1838,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
                   show_optimal_paths=False, show_arrow=True,
                   show_barrier_change=True, show_hex_labels=True,
                   show_stats=True, show_permanent_barriers=False,
-                  show_edge_barriers=True,
+                  show_edge_barriers=True, view_angle=1,
                   highlight_hexes=None, highlight_colors=None,
                   scale=1, ax=None):
     ''' 
@@ -1857,6 +1881,8 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     - show_edge_barriers (bool): Only an option if show_permanent_barriers=True. \
     Gives the option to exclude edge barriers when showing permanent barriers. \
     Defaults to True if show_permanent_barriers=True
+    - view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle \
+    when viewing the hex maze. Defaults to 1
     - highlight_hexes (set of ints or list of sets): A set (or list of sets), of hexes to highlight. \
     Takes precedence over other hex highlights (choice points, etc). Defaults to None.
     - highlight_colors (string or list of strings): Color (or list of colors) to highlight highlight_hexes. \
@@ -1874,11 +1900,11 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
-    # Get a dictionary of the (x,y) coordinates of each hex centroid
-    hex_coordinates = get_hex_centroids(scale=scale)
+    # Get a dictionary of the (x,y) coordinates of each hex centroid based on maze view angle
+    hex_coordinates = get_hex_centroids(scale=scale, view_angle=view_angle)
     # Get a dictionary of stats coordinates based on hex coordinates
     if show_stats:
-        stats_coordinates = get_stats_coords(hex_coordinates)
+        stats_coordinates = get_stats_coords(hex_coordinates, view_angle=view_angle)
     # Define this for times we want to draw the arrow but not show barriers
     new_barrier_coords = None
 
