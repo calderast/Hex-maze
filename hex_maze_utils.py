@@ -889,38 +889,64 @@ def num_hexes_different_on_optimal_paths(maze_1, maze_2):
     return len(hexes_maze1_not_maze2 | hexes_maze2_not_maze1)
 
 
-# def hexes_different_on_optimal_paths_2(maze_1, maze_2):
-#     '''
-#     *** CURRENTLY UNUSED. Keeping this function for posterity for now. 
-#      I don't like this method of counting hex differences because it
-#      underestimates the differences in paths experienced by the rat. A
-#      path that used to be 25 hexes long can become 15 hexes with only
-#      one hex being "different" on optimal paths, because those hexes are 
-#      still optimal on paths to other ports. ***
+def num_hexes_different_on_optimal_paths_isomorphic(maze_1, maze_2, type='all'):
+    '''
+    Given 2 mazes, find the numer of hexes different on the optimal 
+    paths between every pair of reward ports. This difference is equal to
+    (# of hexes on optimal paths in maze_1 but not maze_2 + 
+    # of hexes on optimal paths in maze_2 but not maze_1).
+    Returns the minimum number of hexes different on optimal paths across
+    all isomorphic configurations (checks maze similarity against rotated
+    and flipped versions of these hex mazes)
+    
+    This helps us quantify how different two maze configurations are.
+    
+    Args:
+    maze_1 (set/frozenset): Set of barriers representing the first hex maze
+    maze_2 (set/frozenset): Set of barriers representing the second hex maze
+    type (String): Type of isomorphic mazes to check: \
+    'all' = all isomorphic mazes, both rotations and flips (default) \
+    'rotation' = only rotations \
+    'reflection' or 'flip' = only reflections \
+    
+    Returns:
+    min_num_different_hexes (int): The minimum number of hexes different on 
+    optimal paths between reward ports for all isomorphic versions of maze_1 and maze_2
+    most_similar_maze (set): The (rotated, flipped) version of maze_1 that is 
+    most similar to maze_2
+    '''
 
-#     Given 2 mazes, find the set of hexes different on optimal 
-#     paths between every pair of reward ports. This helps us quantify
-#     how different two maze configurations are.
-    
-#     Args:
-#     maze_1 (set/frozenset): Set of barriers representing the first hex maze
-#     maze_2 (set/frozenset): Set of barriers representing the second hex maze
-    
-#     Returns:
-#     hexes_on_optimal_paths_maze_1_not_2 (set): The set of hexes on optimal paths in maze_1 but not maze_2
-#     hexes_on_optimal_paths_maze_2_not_1 (set): The set of hexes on optimal paths in maze_2 but not maze_1
-#     '''
+    # Start by comparing the normal versions of maze_1 and maze_2
+    min_num_different_hexes = num_hexes_different_on_optimal_paths(maze_1, maze_2)
+    # Also track which version of maze_1 is most similar to maze_2
+    most_similar_maze = maze_1
 
-#     # Get the set of all hexes on optimal paths for maze 1
-#     hexes_on_optimal_paths_maze1 = {hex for path in get_optimal_paths_between_ports(maze_1) for hex in path}
+    type = type.lower()
+    isomorphic_mazes = []
+
+    # If we only care about rotations, only add those to the comparison list
+    if type == 'rotation':
+        isomorphic_mazes.append(get_rotated_barriers(maze_1, direction='clockwise'))
+        isomorphic_mazes.append(get_rotated_barriers(maze_1, direction='counterclockwise'))
+
+    # Or if we only care about reflections, only add those
+    elif type in {'reflection', 'flip'}:
+        isomorphic_mazes.append(get_reflected_barriers(maze_1, axis=1))
+        isomorphic_mazes.append(get_reflected_barriers(maze_1, axis=2))
+        isomorphic_mazes.append(get_reflected_barriers(maze_1, axis=3))
     
-#     # Get the set of all hexes on optimal paths for maze 2
-#     hexes_on_optimal_paths_maze2 = {hex for path in get_optimal_paths_between_ports(maze_2) for hex in path}
-    
-#     # Return hexes exlusively on optimal paths in maze 1, and hexes exclusively on optimal paths in maze 2
-#     hexes_on_optimal_paths_maze_1_not_2 = hexes_on_optimal_paths_maze1 - hexes_on_optimal_paths_maze2
-#     hexes_on_optimal_paths_maze_2_not_1 = hexes_on_optimal_paths_maze2 - hexes_on_optimal_paths_maze1
-#     return hexes_on_optimal_paths_maze_1_not_2, hexes_on_optimal_paths_maze_2_not_1
+    # Otherwise, consider all isomorphic mazes
+    else:
+        isomorphic_mazes = list(get_isomorphic_mazes(maze_1))
+
+    # Compare each isomorphic maze with maze_2 and update the minimum number of different hexes
+    for iso_maze_1 in isomorphic_mazes:
+        num_different_hexes = num_hexes_different_on_optimal_paths(iso_maze_1, maze_2)
+        if num_different_hexes < min_num_different_hexes:
+            min_num_different_hexes = num_different_hexes
+            most_similar_maze = iso_maze_1
+
+    return min_num_different_hexes, most_similar_maze
 
 
 # def num_hexes_different_on_optimal_paths_OLD(maze_1, maze_2):
