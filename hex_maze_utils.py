@@ -2325,7 +2325,7 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
         print(f"There are {hex_diff} hexes different across all optimal paths (not double counting hexes).")
 
 
-def plot_evaluate_barrier_sequence(barrier_sequence, **kwargs):
+def plot_evaluate_maze_sequence(barrier_sequence, **kwargs):
     '''
     Given a sequence of barrier sets that each differ by the movement of 
     a single barrier, plot each maze in the sequence showing a comparison of
