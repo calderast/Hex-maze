@@ -33,9 +33,12 @@ Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`]
 - [Searching the maze configuration database for the mazes you want](Tutorials/Maze_Configuration_Database_Search.ipynb)
 - [Searching the barrier sequence database for the sequence you want](Tutorials/Barrier_Sequence_Database_Search.ipynb)
 - [Demos of useful hex maze functions](Tutorials/Hex_Maze_Functions.ipynb)
+- [Generating barrier sequences with custom criteria](Tutorials/Generate_Custom_Barrier_Sequence_Database.ipynb)
+
+These 3 are also provided for reference:
 - [How the hex maze database was generated](Tutorials/Generate_Hex_Maze_Database.ipynb)
 - [How the probability change database was generated](Tutorials/Generate_Probability_Change_Database.ipynb)
-- [Generating barrier sequences with custom criteria](Tutorials/Generate_Custom_Barrier_Sequence_Database.ipynb)
+- [How the training maze database was generated](Tutorials/Generate_Training_Maze_Database.ipynb)
 
 Note that some of these tutorials are currently in progress, LMK if you need one asap and I'll make it a priority!
 
@@ -74,9 +77,14 @@ The `Barrier_Sequence_Database_Search.ipynb` notebook in the `Tutorials/` folder
 Custom databases can be generated using the `Generate_Custom_Barrier_Sequence_Database.ipynb` notebook available in the `Tutorials/` folder.
 
 ### Database of mazes for probability change experiments
-The `Maze_Databases/` folder contains a database of mazes good for probability change experiments. These mazes are grouped such that all mazes in a group differ by at least 10 hexes on optimal paths.
+`Maze_Databases/probability_change_mazes` contains a database of mazes good for probability change experiments. These mazes are grouped such that all mazes in a group differ by at least 10 hexes on optimal paths.
 
 This database was generated using the `Generate_Probability_Change_Database.ipynb` notebook available in the `Tutorials/` folder.
+
+### Database of mazes for early stages of training
+`Maze_Databases/training_maze_database` contains a database of mazes good for training. There are 5-6 barriers and all paths are the same length (either 15 or 17 hexes).
+
+This database was generated using the `Generate_Training_Maze_Database.ipynb` notebook available in the `Tutorials/` folder.
 
 ## Other info
 

@@ -35,6 +35,8 @@ STRAIGHT_PATHS_INSIDE_MAZE = [[5, 7, 10, 13, 17, 21, 26, 31, 37, 42, 47],
                               [11, 14, 17, 21, 25, 30, 35, 40, 44],
                               [38, 32, 37, 31, 36, 30, 35, 29, 34, 28, 33],
                               [27, 22, 26, 21, 25, 20, 24, 19, 23]]
+# For training mazes, the max straight path length = 8 hexes (illegal paths are 9+)
+MAX_STRAIGHT_PATH_TRAINING = 8
 
 # Get all illegal straight paths to ports
 illegal_straight_paths_list = []
@@ -53,6 +55,18 @@ for path in STRAIGHT_PATHS_INSIDE_MAZE:
 
 # Store illegal straight paths as a set of tuples for O(1) lookup time
 ILLEGAL_STRAIGHT_PATHS_INSIDE_MAZE = {tuple(path) for path in illegal_straight_paths_list}
+
+# Get all illegal straight paths for training mazes
+illegal_straight_paths_list_training = []
+for path in STRAIGHT_PATHS_TO_PORTS:
+    for sub_path in get_subpaths(path, MAX_STRAIGHT_PATH_TRAINING+1):
+        illegal_straight_paths_list_training.append(sub_path)
+for path in STRAIGHT_PATHS_INSIDE_MAZE:
+    for sub_path in get_subpaths(path, MAX_STRAIGHT_PATH_TRAINING+1):
+        illegal_straight_paths_list_training.append(sub_path)
+
+# Store illegal straight paths as a set of tuples for O(1) lookup time
+ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_paths_list_training}
 
 ################################# Define a bunch of functions #################################
 
@@ -527,7 +541,7 @@ def get_choice_direction(start_port, end_port):
         return None
 
 
-def has_illegal_straight_path(maze):
+def has_illegal_straight_path(maze, training_maze=False):
     '''
     Given a barrier set or networkx graph representing the hex maze,
     checks if there are any illegal straight paths.
@@ -535,6 +549,9 @@ def has_illegal_straight_path(maze):
     Args:
     maze (set OR nx.Graph): Set of barriers representing the hex maze
     OR networkx graph object representing the maze
+    training_maze (bool): True if this maze will be used for training,
+    meaning the straight path criteria is relaxed slightly.
+    Defaults to False
 
     Returns: 
     The (first) offending path, or False if none
@@ -549,26 +566,35 @@ def has_illegal_straight_path(maze):
     # Get optimal paths between reward ports
     optimal_paths = get_optimal_paths_between_ports(graph)
 
-    # We do 2 separate checks here beacause we may have different path length critera
-    # for paths to reward ports vs inside the maze
-    
-    # First check all subpaths against illegal paths to a reward port
-    subpaths1 = set()
-    for path in optimal_paths:
-        subpaths1.update(get_subpaths(path, MAX_STRAIGHT_PATH_TO_PORT+1))
+    # Check if we have any illegal straight paths
+    if training_maze:
+        # If this is a training maze, use the training maze criteria
+        subpaths = set()
+        for path in optimal_paths:
+            subpaths.update(get_subpaths(path, MAX_STRAIGHT_PATH_TRAINING+1))
+        for path in subpaths:
+            if path in ILLEGAL_STRAIGHT_PATHS_TRAINING:
+                return path # (equivalent to returning True)
+    else:
+        # Otherwise, use the regular criteria
+        # We do 2 separate checks here because we may have different 
+        # path length critera for paths to reward ports vs inside the maze
 
-    for path in subpaths1:
-        if path in ILLEGAL_STRAIGHT_PATHS_TO_PORT:
-            return path # (equivalent to returning True)
+        # First check all subpaths against illegal paths to a reward port
+        subpaths1 = set()
+        for path in optimal_paths:
+            subpaths1.update(get_subpaths(path, MAX_STRAIGHT_PATH_TO_PORT+1))
+        for path in subpaths1:
+            if path in ILLEGAL_STRAIGHT_PATHS_TO_PORT:
+                return path # (equivalent to returning True)
         
-    # Now check all subpaths against illegal paths inside the maze
-    subpaths2 = set()
-    for path in optimal_paths:
-        subpaths2.update(get_subpaths(path, MAX_STRAIGHT_PATH_INSIDE_MAZE+1))
-
-    for path in subpaths2:
-        if path in ILLEGAL_STRAIGHT_PATHS_INSIDE_MAZE:
-            return path # (equivalent to returning True)
+        # Now check all subpaths against illegal paths inside the maze
+        subpaths2 = set()
+        for path in optimal_paths:
+            subpaths2.update(get_subpaths(path, MAX_STRAIGHT_PATH_INSIDE_MAZE+1))
+        for path in subpaths2:
+            if path in ILLEGAL_STRAIGHT_PATHS_INSIDE_MAZE:
+                return path # (equivalent to returning True)
     
     # If we did all of those checks and found no straight paths, we're good to go!
     return False
@@ -645,11 +671,73 @@ def is_valid_maze(maze, complain=False):
     return True
 
 
-def generate_good_maze():
+def is_valid_training_maze(maze, complain=False):
+    '''
+    Given a a barrier set or networkx graph representing a possible hex maze
+    configuration, check if it is valid for training using the following criteria: 
+    - there are no unreachable hexes (this also ensures all reward ports are reachable)
+    - all paths between reward ports are the same length
+    - path lengths are between 15-23 hexes
+    - no straight paths >8 hexes long
+    
+    Args:
+    maze (set OR nx.Graph): Set of barriers representing the hex maze
+    OR networkx graph object representing the maze
+    complain (bool): Optional. If our maze configuration is invalid, 
+    print out the reason why. Defaults to False
+    
+    Returns: 
+    True if the hex maze is valid, False otherwise
+    '''
+    # If our input is a barrier set, get the graph representation
+    if isinstance(maze, (set, frozenset, list)):
+        graph = create_maze_graph(maze)
+    # If our input is already a graph, use that
+    elif isinstance(maze, nx.Graph):
+        graph = maze
+
+    # Make sure all (non-barrier) hexes are reachable
+    if not nx.is_connected(graph):
+        if complain:
+            print("BAD MAZE: At least one (non-barrier) hex is unreachable")
+        return False
+    
+    # Make sure path lengths are equal and between 15-21 hexes
+    reward_path_lengths = get_reward_path_lengths(graph)
+    if min(reward_path_lengths) <= 13:
+        if complain:
+            print("BAD MAZE: Path between reward ports is too short (<=13)")
+        return False
+    if max(reward_path_lengths) != min(reward_path_lengths):
+        if complain:
+            print("BAD MAZE: All paths must be the same length")
+        return False
+    if max(reward_path_lengths) > 23:
+        if complain:
+            print("BAD MAZE: Path between reward ports is too long (>23)")
+        return False
+    
+    # Make sure there are no straight paths
+    illegal_path = has_illegal_straight_path(graph, training_maze=True)
+    if illegal_path:
+        if complain:
+            print("BAD MAZE: Straight path ", illegal_path)
+        return False
+    
+    return True
+
+
+def generate_good_maze(num_barriers=9, training_maze=False):
     '''
     Generates a "good" hex maze as defined by the function is_valid_maze.
-    Uses a naive generation approach (randomly generates sets of 9 barriers
+    Uses a naive generation approach (randomly generates sets of barriers
     until we get a valid maze configuration).
+
+    Args:
+    num_barriers (int): How many barriers to place in the maze. Default 9
+    training_maze (bool): If this maze is to be used for training,
+    meaning it is valid based on a different set of criteria. Uses
+    is_valid_training_maze instead of is_valid_maze. Defaults to False
 
     Returns: 
     set: the set of barriers defining the hex maze
@@ -658,21 +746,21 @@ def generate_good_maze():
     start_maze = create_empty_hex_maze()
     barriers = set()
 
-    # Generate a set of 9 random barriers until we get a good maze
+    # Generate a set of random barriers until we get a good maze
     is_good_maze = False
     while not is_good_maze:
         # Start with an empty hex maze (no barriers)
         test_maze = start_maze.copy()
 
-        # Randomly select 9 barriers
-        barriers = set(np.random.choice(POSSIBLE_BARRIERS, size=9, replace=False))
+        # Randomly select some barriers (generally 9 for normal maze, 5/6 for a training maze)
+        barriers = set(np.random.choice(POSSIBLE_BARRIERS, size=num_barriers, replace=False))
 
         # Add the barriers to the empty maze
         for barrier in barriers:
             test_maze.remove_node(barrier)
 
         # Check if this is a good maze
-        is_good_maze = is_valid_maze(test_maze)
+        is_good_maze = is_valid_maze(test_maze) if not training_maze else is_valid_training_maze(test_maze)
 
     return barriers
 
