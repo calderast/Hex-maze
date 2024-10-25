@@ -1787,7 +1787,7 @@ def get_barrier_sequence_attributes(barrier_sequence):
 
 ################################ Plotting hex mazes ################################
 
-def get_hex_centroids(view_angle=1, scale=1):
+def get_hex_centroids(view_angle=1, scale=1, shift=[0,0]):
     ''' 
     Calculate the (x,y) coordinates of each hex centroid.
     Centroids are calculated relative to the centroid of the topmost hex at (0,0).
@@ -1797,6 +1797,8 @@ def get_hex_centroids(view_angle=1, scale=1):
     when viewing the hex maze. Defaults to 1
     scale (int): The width of each hex (aka the length of the long diagonal, 
     aka 2x the length of a single side). Defaults to 1
+    shift (list): The x shift and y shift of the coordinates (after scaling),
+    such that the topmost hex sits at (x_shift, y_shift) instead of (0,0).
     
     Returns:
     dict: a dictionary of hex: (x,y) coordinate of centroid
@@ -1828,6 +1830,12 @@ def get_hex_centroids(view_angle=1, scale=1):
             y = -row * y_offset + y_shift
             hex_positions[hex_list[count]] = (x, y)
             count += 1
+
+    # Shift the coordinates by [x_shift, y_shift]
+    x_shift = shift[0]
+    y_shift = shift[1]
+    hex_positions = {hex: (x + x_shift, y + y_shift) for hex, (x, y) in hex_positions.items()}
+    
     return hex_positions
 
 
@@ -1954,7 +1962,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
                   show_stats=True, show_permanent_barriers=False,
                   show_edge_barriers=True, view_angle=1,
                   highlight_hexes=None, highlight_colors=None,
-                  scale=1, ax=None):
+                  scale=1, shift=[0,0], ax=None):
     ''' 
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
@@ -2015,7 +2023,7 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
     # Get a dictionary of the (x,y) coordinates of each hex centroid based on maze view angle
-    hex_coordinates = get_hex_centroids(scale=scale, view_angle=view_angle)
+    hex_coordinates = get_hex_centroids(view_angle=view_angle, scale=scale, shift=shift)
     # Get a dictionary of stats coordinates based on hex coordinates
     if show_stats:
         stats_coordinates = get_stats_coords(hex_coordinates, view_angle=view_angle)
@@ -2139,8 +2147,8 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
                 )
 
     # Adjust axis limits
-    ax.set_xlim(-5.5*scale, 5.5*scale)
-    ax.set_ylim(-9.5*scale, 1*scale) if show_stats else ax.set_ylim(-9*scale, 1*scale)
+    ax.set_xlim(-5.5*scale+shift[0], 5.5*scale+shift[0])
+    ax.set_ylim(-9.5*scale+shift[1], 1*scale+shift[1]) if show_stats else ax.set_ylim(-9*scale+shift[1], 1*scale+shift[1])
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_aspect('equal', adjustable='box')
