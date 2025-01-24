@@ -71,6 +71,25 @@ ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_path
 ################################# Define a bunch of functions #################################
 
 
+############## Helper functions for spyglass compatibility ##############
+
+def to_string(barrier_set):
+    '''
+    Converts a set of ints to a sorted, comma-separated string.
+    Used for going from a set of barrier locations to a query-able config_id
+    for compatibility with HexMazeConfig in spyglass.
+    '''
+    return ",".join(map(str, sorted(barrier_set)))
+
+def to_set(string):
+    '''
+    Converts a sorted, comma-separated string (used as a config_id for the 
+    HexMazeConfig in spyglass) to a set of ints (for compatability with hex maze functions)
+    '''
+    string = string.strip("{}[]()") # strip just in case, to handle more variable inputs
+    return set(map(int, string.split(",")))
+
+
 ############## Functions for generating a hex maze configuration ############## 
 
 def add_edges_to_node(graph, node, edges):
@@ -179,17 +198,23 @@ def get_critical_choice_points(maze):
     find all critical choice points between reward ports 1, 2, and 3.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     
     Returns:
     set of ints: The critical choice points for this maze
     '''
-    # If our input is a barrier set, get the graph representation
+
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     paths12 = list(nx.all_shortest_paths(graph, source=1, target=2))
@@ -225,17 +250,22 @@ def get_all_choice_points(maze):
     left/right choice of 2 other neighboring hexes)
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     
     Returns:
     set of ints: All hexes that are choice points for this maze
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Choice hexes are all hexes with exactly 3 neighbors
@@ -249,18 +279,23 @@ def get_optimal_paths_between_ports(maze):
     return a list of all optimal paths between reward ports in the maze.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
 
     Returns: 
     list of lists: A list of all optimal paths (in hexes) from 
     reward port 1 to 2, 1 to 3, and 2 to 3
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
     
     optimal_paths = []
@@ -277,8 +312,9 @@ def get_optimal_paths(maze, start_hex, target_hex):
     in the maze.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     start_hex (int): The starting hex in the maze
     target_hex (int): The target hex in the maze
 
@@ -286,11 +322,15 @@ def get_optimal_paths(maze, start_hex, target_hex):
     list of lists: A list of all optimal path(s) (in hexes) from 
     the start hex to the target hex
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
     
     return list(nx.all_shortest_paths(graph, source=start_hex, target=target_hex))
@@ -302,18 +342,22 @@ def get_reward_path_lengths(maze):
     get the minimum path lengths (in hexes) between reward ports 1, 2, and 3.
 
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     
     Returns:
     list: Reward path lengths in form [length12, length13, length23]
     '''
-
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Get length of optimal paths between reward ports
@@ -333,19 +377,24 @@ def get_path_independent_hexes_to_port(maze, reward_port):
     reaches the (first) critical choice point. 
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     reward_port (int): The reward port: 1, 2, or 3
     
     Returns:
     set of ints: The path-independent hexes the rat must always run
     through when going to and from this reward port
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Get all shortest paths between reward_port and the other 2 ports
@@ -371,19 +420,24 @@ def get_hexes_from_port(maze, start_hex, reward_port):
     chosen reward port for a given maze configuration.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR a networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     start_hex (int): The hex to calculate distance from
     reward_port (int): The reward port: 1, 2, or 3
     
     Returns:
     int: The number of hexes from start_hex to reward_port
     '''
-    # If our maze input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Get the shortest path length between start_hex and the reward port
@@ -398,8 +452,9 @@ def get_hexes_within_distance(maze, start_hex, max_distance=math.inf, min_distan
     away, etc. 
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze \
-    OR a networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     start_hex (int): The hex to calculate distance from
     max_distance (int): Maximum distance in hexes from the start hex (inclusive)
     min_distance (int): Minimum distance in hexes from the start hex (inclusive).\
@@ -409,11 +464,15 @@ def get_hexes_within_distance(maze, start_hex, max_distance=math.inf, min_distan
     set of ints: Set of hexes in the maze that are within the specified
     distance from the start_hex
     '''
-    # If our maze input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Get a dict of shortest path lengths from the start_hex to all other hexes
@@ -433,18 +492,23 @@ def is_valid_path(maze, hex_path):
     meaning all consecutive hexes exist in the maze and are connected.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze \
-    OR a networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     hex_path (list): List of hexes defining a potential path through the maze
     
     Returns:
     bool: True if the hex_path is valid in the maze, False otherwise.
     '''
-    # If our maze input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # If the path has only one hex, check if it exists in the maze
@@ -471,18 +535,23 @@ def divide_into_thirds(maze):
     AS DIVIDING HEXES INTO 3 GROUPS IS NOT WELL DEFINED IN THIS CASE.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze \
-    OR a networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     
     Returns:
     list of sets: [{hexes between the choice point and port 1}, \
     {between choice and port 2}, {between choice and port 3}]
     '''
-    # If our maze input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that (but make a copy to avoid modifying the original)
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that (but make a copy to avoid modifying the original)
         graph = maze.copy()
 
     # Get choice points for this maze and ensure there is only one
@@ -547,8 +616,9 @@ def has_illegal_straight_path(maze, training_maze=False):
     checks if there are any illegal straight paths.
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     training_maze (bool): True if this maze will be used for training,
     meaning the straight path criteria is relaxed slightly.
     Defaults to False
@@ -556,11 +626,15 @@ def has_illegal_straight_path(maze, training_maze=False):
     Returns: 
     The (first) offending path, or False if none
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
     
     # Get optimal paths between reward ports
@@ -602,7 +676,7 @@ def has_illegal_straight_path(maze, training_maze=False):
 
 def is_valid_maze(maze, complain=False):
     '''
-    Given a a barrier set or networkx graph representing a possible hex maze
+    Given a a barrier set, networkx graph, or string representing a possible hex maze
     configuration, check if it is valid using the following criteria: 
     - there are no unreachable hexes (this also ensures all reward ports are reachable)
     - path lengths between reward ports are between 15-25 hexes
@@ -612,19 +686,24 @@ def is_valid_maze(maze, complain=False):
     - no straight paths >STRAIGHT_PATHS_INSIDE_MAZE in middle of maze
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     complain (bool): Optional. If our maze configuration is invalid, 
     print out the reason why. Defaults to False
     
     Returns: 
     True if the hex maze is valid, False otherwise
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Make sure all (non-barrier) hexes are reachable
@@ -681,19 +760,24 @@ def is_valid_training_maze(maze, complain=False):
     - no straight paths >8 hexes long
     
     Args:
-    maze (set OR nx.Graph): Set of barriers representing the hex maze
-    OR networkx graph object representing the maze
+    maze (set OR nx.Graph OR string): Set of barriers representing the hex maze \
+    OR networkx graph object representing the maze \
+    OR comma-separated string representing the maze
     complain (bool): Optional. If our maze configuration is invalid, 
     print out the reason why. Defaults to False
     
     Returns: 
     True if the hex maze is valid, False otherwise
     '''
-    # If our input is a barrier set, get the graph representation
+    # Allow compatability with a variety of input types
+    if isinstance(maze, str):
+        # Convert string to a set of barriers
+        maze = to_set(maze)
     if isinstance(maze, (set, frozenset, list)):
+        # Convert barrier set to a graph
         graph = create_maze_graph(maze)
-    # If our input is already a graph, use that
     elif isinstance(maze, nx.Graph):
+        # If it's already a graph, use that
         graph = maze
 
     # Make sure all (non-barrier) hexes are reachable
@@ -1700,16 +1784,20 @@ def get_maze_attributes(barrier_set):
     '''
     Given a set of barriers defining a maze, create a dictionary of attributes for that maze.
     Includes the length of the optimal paths between reward ports, the optimal paths
-    between these ports, ther path length difference between optimal paths, 
+    between these ports, the path length difference between optimal paths, 
     critical choice points, the number of cycles and the hexes defining these cycles, 
     and a set of other maze configurations isomorphic to this maze.
 
     Args:
-    barrier_set (set/frozenset): A set of barriers defining a hex maze
-    
-    Returns: 
+    barrier_set (set/frozenset OR string): A set of barriers defining a hex maze \
+    OR comma-separated string representing the maze
+
+    Returns:
     dict: A dictionary of attributes of this maze
     '''
+    # If maze is a string, convert it to a set of barriers
+    if isinstance(barrier_set, str):
+        barrier_set = to_set(barrier_set)
     
     # Get the graph representation of the maze for us to do calculations on
     maze = create_maze_graph(barrier_set)
@@ -1840,7 +1928,7 @@ def get_hex_centroids(view_angle=1, scale=1, shift=[0,0]):
 
 
 def get_base_triangle_coords(hex_positions, scale=1, chop_vertices=True,
-                             show_edge_barriers=True):
+                             chop_vertices_2=False, show_edge_barriers=True):
     '''
     Calculate the coordinates of the vertices of the base triangle that
     surrounds all of the hexes in the maze. 
@@ -1848,14 +1936,18 @@ def get_base_triangle_coords(hex_positions, scale=1, chop_vertices=True,
 
     Args:
     hex_positions (dict): A dictionary of hex: (x,y) coordinates of centroids.
-    scale (int): The width of each hex (aka the length of the long diagonal, 
+    scale (int): The width of each hex (aka the length of the long diagonal, \
     aka 2x the length of a single side). Defaults to 1
-    chop_vertices (bool): If the vertices of the triangle should be chopped off
-    (because there are no permanent barriers behind the reward ports).
-    If True, returns 6 coords of a chopped triangle instead of just 3.
+    chop_vertices (bool): If the vertices of the triangle should be chopped off \
+    (because there are no permanent barriers behind the reward ports). \
+    If True, returns 6 coords of a chopped triangle instead of just 3. \
     Defaults to True (assuming exclude_edge_barriers is False)
-    show_edge_barriers (bool): If False, returns a smaller triangle
-    to plot the maze base without showing the permanent edge barriers.
+    chop_vertices_2 (bool): If the vertices of the triangle should be chopped off \
+    twice as far as chop_vertices (to show 4 edge barriers instead of 6 per side). \
+    If True, returns 6 coords of a chopped triangle instead of just 3. \
+    Defaults to False. If True, makes chop_vertices False (both cannot be True)
+    show_edge_barriers (bool): If False, returns a smaller triangle \
+    to plot the maze base without showing the permanent edge barriers. \
     Defaults to True (bc why would you show the permanent barriers but not edges??)
 
     Returns:
@@ -1887,9 +1979,14 @@ def get_base_triangle_coords(hex_positions, scale=1, chop_vertices=True,
             for vertex in vertices
         ]
         return small_triangle_vertices
-    
+
+    # Both cannot be True.
+    if chop_vertices_2:
+        chop_vertices = False
+
     # Chop off the tips of the triangle because there aren't barriers by reward ports
     # Returns 6 coordinates defining a chopped triangle instead of 3
+    # This is used for defining the base footprint of the hex maze
     if chop_vertices:
         # Calculate new vertices for chopped corners
         chopped_vertices=[]
@@ -1905,7 +2002,26 @@ def get_base_triangle_coords(hex_positions, scale=1, chop_vertices=True,
             chopped_vertices.append(tuple(chop_vertex1))
             chopped_vertices.append(tuple(chop_vertex2))
         return chopped_vertices
-    
+
+    # Chop off the tips of the triangle because there aren't barriers by reward ports
+    # Returns 6 coordinates defining a chopped triangle instead of 3
+    # This is used for defining the footprint of the permanent barriers
+    if chop_vertices_2:
+        # Calculate new vertices for chopped corners
+        chopped_vertices=[]
+        for i in range(3):
+            p1 = np.array(vertices[i])  # Current vertex
+            p2 = np.array(vertices[(i + 1) % 3])  # Next vertex
+        
+            # Calculate the new vertex by moving back from the current vertex
+            unit_direction_vector = (p2 - p1) / np.linalg.norm(p1-p2)
+            # Chop amount shows 4 edge barriers instead of 6 (per side)
+            chop_vertex1 = p1 + unit_direction_vector * scale*2
+            chop_vertex2 = p2 - unit_direction_vector * scale*2
+            chopped_vertices.append(tuple(chop_vertex1))
+            chopped_vertices.append(tuple(chop_vertex2))
+        return chopped_vertices
+
     # Return the 3 vertices of the maze base
     else:
         return vertices
@@ -1976,8 +2092,9 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     of the barrier from the old hex to the new hex is shown in pink.
     
     Args:
-    barriers (set of ints): A set defining the hexes where barriers are placed in the maze. \
-        If no barriers or 'None' is specifed, plots an empty hex maze
+    barriers (set OR string): A set defining the hexes where barriers are placed in the maze \
+    OR comma-separated string representing the maze. \
+    If no barriers or 'None' is specifed, plots an empty hex maze
     old_barrier (int): Optional. The hex where the barrier was in the previous maze
     new_barrier (int): Optional. The hex where the new barrier is in this maze
     ax (matplotlib.axes.Axes): Optional. The axis on which to plot the hex maze. \
@@ -2034,6 +2151,10 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     hex_colors = {node: 'skyblue' for node in hex_maze.nodes()}
 
     if barriers is not None:
+        # If barriers is a string, convert to a set
+        if isinstance(barriers, str):
+            barriers = to_set(barriers)
+
         # Make the barriers black if we want to show them
         if show_barriers:
             for hex in barriers:
@@ -2101,9 +2222,14 @@ def plot_hex_maze(barriers=None, old_barrier=None, new_barrier=None,
     # Show permanent barriers by adding a barrier-colored background
     # before plotting the maze
     if show_barriers and show_permanent_barriers:
-        base_vertices = get_base_triangle_coords(hex_coordinates, show_edge_barriers=show_edge_barriers)
-        maze_base = patches.Polygon(base_vertices, closed=True, facecolor='black', fill=True)
-        ax.add_patch(maze_base)
+        # Add a big triangle in light blue to color the open half-hexes next to reward ports
+        base_vertices1 = get_base_triangle_coords(hex_coordinates, show_edge_barriers=show_edge_barriers)
+        maze_base1 = patches.Polygon(base_vertices1, closed=True, facecolor='skyblue', fill=True)
+        ax.add_patch(maze_base1)
+        # Add a big triangle with the edges cut off in black to color the other half-hexes on the side as barriers
+        base_vertices2 = get_base_triangle_coords(hex_coordinates, show_edge_barriers=show_edge_barriers, chop_vertices_2=True)
+        maze_base2 = patches.Polygon(base_vertices2, closed=True, facecolor='black', fill=True)
+        ax.add_patch(maze_base2)
 
     # Add each hex to the plot
     for hex, (x, y) in hex_coordinates.items():
