@@ -1,6 +1,22 @@
 # Hex-maze
 This repo provides a set of functions to generate, plot, and calculate info about hex maze configurations and optimal barrier change sequences for the hex maze behavioral task used by the Berke Lab at UCSF. It also provides databases of valid maze configurations and their attributes.
 
+## Using the Hex Maze Utils functions
+To simply use the functions in this repo, install the latest version of this Python package with the following command:
+
+    ```sh
+    pip install hex-maze-utils
+    ```
+
+Then import functions from the package in your Python script or Jupyter notebook:
+
+    ```python
+    from hex_maze_utils import plot_hex_maze
+    plot_hex_maze(barriers=[5, 17, 22, 30, 45, 19], show_optimal_paths=True)
+    ```
+
+Note that installing the package via pip does not make the databases in this repo available.
+
 ## Step 1. Fork and clone the repository
 To contribute to this project, you first need to fork the repository to your own GitHub account. This creates a copy of the project where you can make changes.
 Do this by clicking the "Fork" button at the top-right corner of the repository page and following the instructions.
@@ -18,7 +34,7 @@ Once you have forked the repository, you need to clone it to your local machine 
     cd Hex-maze
 
 ## Step 2. Install dependencies
-1. First, make sure you are in the repo inside a terminal or command prompt (Step 3 above). 
+1. First, make sure you are in the repo inside a terminal or command prompt (Step 3 above).
 
 2. To install all necessary dependencies for this project, run the following command:
 
@@ -69,7 +85,7 @@ This database was generated using the `Generate_Hex_Maze_Database.ipynb` noteboo
 ### Database of mazes for barrier change experiments
 The `Barrier_Sequence_Databases/` folder contains multiple databases of barrier sequences (consecutive maze configurations that differ by the movement of a single barrier).
 
-- `barrier_sequence_database` contains 3126 barrier sequences that are 4-6 mazes long, and is a good place to start. 
+- `barrier_sequence_database` contains 3126 barrier sequences that are 4-6 mazes long, and is a good place to start.
 - `single_choice_point` contains 3720 barrier sequences >= 3 mazes long where all mazes in the sequence have a single choice point.
 
 The `Barrier_Sequence_Database_Search.ipynb` notebook in the `Tutorials/` folder has more information about the other available databases, and how to search these databases for a barrier sequence that fits your criteria.
@@ -89,11 +105,11 @@ This database was generated using the `Generate_Training_Maze_Database.ipynb` no
 ## Other info
 
 ### Hex maze functions
-`hex_maze_utils.py` provides all of the functions for hex maze related tasks. 
+`hex_maze_utils.py` provides all of the functions for hex maze related tasks.
 
-All of these functions are (hopefully) well documented (if not, let me know!!). 
+All of these functions are (hopefully) well documented (if not, let me know!!).
 
-A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`. 
+A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`.
 For functions without tutorials, you can view the documentation running `help(function_name)`, or just by scrolling through the `hex_maze_utils.py` file.
 
 ### dev
