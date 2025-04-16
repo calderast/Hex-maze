@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hex-maze-utils"
+version = "0.1.0"
+description = "Functions to generate, plot, and calculate info about hex maze configurations"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    { name="Stephanie Crater", email="stephcrater@berkeley.edu" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "networkx>=3.3",
+    "matplotlib>=3.9.0",
+    "numpy>=2.0.0",
+    "pandas>=2.2.2",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/calderast/Hex-maze"
+"Bug Tracker" = "https://github.com/calderast/Hex-maze/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["hex_maze_utils"]
