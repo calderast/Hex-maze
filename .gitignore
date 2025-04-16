@@ -1,8 +1,59 @@
-# Ignore all .ipynb_checkpoints
-.ipynb_checkpoints/*
-dev/.ipynb_checkpoints/*
-Tutorials/.ipynb_checkpoints/*
-__pycache__/*
-.DS_Store
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+dev/.ipynb_checkpoints/
+Tutorials/.ipynb_checkpoints/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
 venv/
+ENV/
 clean_env/
+env.bak/
+venv.bak/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sqlite3
