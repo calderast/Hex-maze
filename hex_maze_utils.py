@@ -79,7 +79,7 @@ ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_path
 ############## Helper functions for spyglass compatibility ##############
 
 
-def to_string(barrier_set: set[int]) -> str:
+def set_to_string(barrier_set: set[int]) -> str:
     """
     Converts a set of ints to a sorted, comma-separated string.
     Used for going from a set of barrier locations to a query-able config_id
@@ -94,7 +94,7 @@ def to_string(barrier_set: set[int]) -> str:
     return ",".join(map(str, sorted(barrier_set)))
 
 
-def to_set(string: str) -> set[int]:
+def string_to_set(string: str) -> set[int]:
     """
     Converts a sorted, comma-separated string (used as a config_id for the
     HexMazeConfig in spyglass) to a set of ints (for compatability with hex maze functions)
@@ -235,7 +235,7 @@ def maze_to_graph(maze) -> nx.Graph:
 
     if isinstance(maze, str):
         # Convert string to a set of barriers
-        maze = to_set(maze)
+        maze = string_to_set(maze)
     if isinstance(maze, (set, frozenset, list, np.ndarray)):
         if isinstance(maze, np.ndarray):
             if maze.ndim != 1:
@@ -278,7 +278,7 @@ def maze_to_barrier_set(maze) -> set[int]:
 
     # If it's a string, convert to a set
     elif isinstance(maze, str):
-        barrier_set = to_set(maze)
+        barrier_set = string_to_set(maze)
 
     # If it's a graph, the barrier locations are the nodes not present in the maze graph
     elif isinstance(maze, nx.Graph):
@@ -286,7 +286,40 @@ def maze_to_barrier_set(maze) -> set[int]:
         open_hexes = set(maze.nodes)
         barrier_set = all_possible_hexes - open_hexes
 
+    else:
+        raise TypeError(f"Unsupported maze format: {type(maze)}")
+
+    # Make sure it's a set of ints (not int64)
+    barrier_set = {int(x) for x in barrier_set}
     return barrier_set
+
+
+def maze_to_string(maze) -> str:
+    """
+    Converts a hex maze represented in any valid format (list, set, frozenset, numpy
+    array, string, or networkx graph) to a sorted, comma-separated string.
+    Used for converting to a query-able config_id for compatibility with HexMazeConfig in spyglass.
+
+    Processes the following maze formats:
+        - list: A list of barrier hexes
+        - set/frozenset: A set of barrier hexes
+        - numpy array: A 1D numpy array of barrier hexes
+        - str: A comma-separated string of barrier hexes
+        - nx.Graph: A networkx graph object representing the maze structure
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        str: A sorted, comma-separated string representing where barriers are placed in the maze
+    """
+
+    # Convert all valid maze representations to a set of ints representing barrier hexes
+    barrier_set = maze_to_barrier_set(maze)
+
+    # Convert barrier set to string
+    return set_to_string(barrier_set)
 
 
 def get_critical_choice_points(maze) -> set[int]:

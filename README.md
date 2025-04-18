@@ -91,7 +91,7 @@ This database was generated using the `Generate_Training_Maze_Database.ipynb` no
 ### Hex maze functions
 `hex_maze_utils.py` provides all of the functions for hex maze related tasks. 
 
-All of these functions are (hopefully) well documented (if not, let me know!!). 
+If you'd like any extra functionality, let me know (or feel free to add it and submit a PR)!
 
 A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`. 
 For functions without tutorials, you can view the documentation running `help(function_name)`, or just by scrolling through the `hex_maze_utils.py` file.
