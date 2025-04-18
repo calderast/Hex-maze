@@ -95,6 +95,3 @@ All of these functions are (hopefully) well documented (if not, let me know!!).
 
 A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`. 
 For functions without tutorials, you can view the documentation running `help(function_name)`, or just by scrolling through the `hex_maze_utils.py` file.
-
-### dev
-The `dev` folder is my sandbox/trashcan for things I'm currently working on or have abandoned. You can ignore it :)
