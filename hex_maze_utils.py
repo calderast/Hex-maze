@@ -246,10 +246,7 @@ def maze_to_graph(maze) -> nx.Graph:
     elif isinstance(maze, nx.Graph):
         # If it's already a graph, use that (but return a copy to avoid modifying the original)
         return maze.copy()
-    raise TypeError(
-        "Expected maze to be a set, frozenset, list, "
-        f"1D numpy array, or nx.Graph, got {type(maze)}"
-    )
+    raise TypeError(f"Expected maze to be a set, frozenset, list, 1D numpy array, or nx.Graph, got {type(maze)}")
 
 
 def maze_to_barrier_set(maze) -> set[int]:
@@ -903,18 +900,15 @@ def have_common_optimal_paths(maze_1, maze_2) -> bool:
     """
     # Do these barrier sets have a common optimal path from port 1 to port 2?
     have_common_path_12 = have_common_path(
-        get_optimal_paths(maze_1, start_hex=1, target_hex=2),
-        get_optimal_paths(maze_2, start_hex=1, target_hex=2)
+        get_optimal_paths(maze_1, start_hex=1, target_hex=2), get_optimal_paths(maze_2, start_hex=1, target_hex=2)
     )
     # Do these barrier sets have a common optimal path from port 1 to port 3?
     have_common_path_13 = have_common_path(
-        get_optimal_paths(maze_1, start_hex=1, target_hex=3),
-        get_optimal_paths(maze_2, start_hex=1, target_hex=3)
+        get_optimal_paths(maze_1, start_hex=1, target_hex=3), get_optimal_paths(maze_2, start_hex=1, target_hex=3)
     )
     # Do these barrier sets have a common optimal path from port 2 to port 3?
     have_common_path_23 = have_common_path(
-        get_optimal_paths(maze_1, start_hex=2, target_hex=3),
-        get_optimal_paths(maze_2, start_hex=2, target_hex=3)
+        get_optimal_paths(maze_1, start_hex=2, target_hex=3), get_optimal_paths(maze_2, start_hex=2, target_hex=3)
     )
 
     # Return True if the barrier sets have a common optimal path between all pairs of reward ports
@@ -1020,18 +1014,15 @@ def hexes_different_on_optimal_paths(maze_1, maze_2) -> tuple[set, set]:
 
     # Get which hexes are different on the most similar optimal paths from port 1 to port 2
     maze1_hexes_path12, maze2_hexes_path12 = hexes_different_between_paths(
-        get_optimal_paths(maze_1, start_hex=1, target_hex=2),
-        get_optimal_paths(maze_2, start_hex=1, target_hex=2)
+        get_optimal_paths(maze_1, start_hex=1, target_hex=2), get_optimal_paths(maze_2, start_hex=1, target_hex=2)
     )
     # Get which hexes are different on the most similar optimal paths from port 1 to port 3
     maze1_hexes_path13, maze2_hexes_path13 = hexes_different_between_paths(
-        get_optimal_paths(maze_1, start_hex=1, target_hex=3),
-        get_optimal_paths(maze_2, start_hex=1, target_hex=3)
+        get_optimal_paths(maze_1, start_hex=1, target_hex=3), get_optimal_paths(maze_2, start_hex=1, target_hex=3)
     )
     # Get which hexes are different on the most similar optimal paths from port 2 to port 3
     maze1_hexes_path23, maze2_hexes_path23 = hexes_different_between_paths(
-        get_optimal_paths(maze_1, start_hex=2, target_hex=3),
-        get_optimal_paths(maze_2, start_hex=2, target_hex=3)
+        get_optimal_paths(maze_1, start_hex=2, target_hex=3), get_optimal_paths(maze_2, start_hex=2, target_hex=3)
     )
 
     # Get the combined set of hexes different between the most similar optimal
@@ -2193,12 +2184,10 @@ def plot_hex_maze(
 
     # Optional - highlight specific hexes on the plot
     if highlight_hexes is not None:
-        # If highlight_hexes is a single set (or a list of length 1 containing a set), 
+        # If highlight_hexes is a single set (or a list of length 1 containing a set),
         # default to dark orange if no colors are provided
         if isinstance(highlight_hexes, set) or (
-            isinstance(highlight_hexes, list) and 
-            len(highlight_hexes) == 1 and 
-            isinstance(highlight_hexes[0], set)
+            isinstance(highlight_hexes, list) and len(highlight_hexes) == 1 and isinstance(highlight_hexes[0], set)
         ):
             if highlight_colors is None:
                 highlight_colors = ["darkorange"]
@@ -2546,28 +2535,46 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
     # Plot the mazes in side-by-side subplots highlighting different hexes
     fig, axs = plt.subplots(2, 3, figsize=(14, 8))
     plot_hex_maze(
-        maze_1, ax=axs[0, 0], highlight_hexes=[set(chain.from_iterable(maze1_optimal_12)), maze1_hexes_path12],
-        highlight_colors=["lightgreen", "darkorange"], **kwargs,
+        maze_1,
+        ax=axs[0, 0],
+        highlight_hexes=[set(chain.from_iterable(maze1_optimal_12)), maze1_hexes_path12],
+        highlight_colors=["lightgreen", "darkorange"],
+        **kwargs,
     )
     plot_hex_maze(
-        maze_2, ax=axs[1, 0], highlight_hexes=[set(chain.from_iterable(maze2_optimal_12)), maze2_hexes_path12],
-        highlight_colors=["lightgreen", "darkorange"], **kwargs,
+        maze_2,
+        ax=axs[1, 0],
+        highlight_hexes=[set(chain.from_iterable(maze2_optimal_12)), maze2_hexes_path12],
+        highlight_colors=["lightgreen", "darkorange"],
+        **kwargs,
     )
     plot_hex_maze(
-        maze_1, ax=axs[0, 1], highlight_hexes=[set(chain.from_iterable(maze1_optimal_13)), maze1_hexes_path13],
-        highlight_colors=["lightgreen", "darkorange"], **kwargs,
+        maze_1,
+        ax=axs[0, 1],
+        highlight_hexes=[set(chain.from_iterable(maze1_optimal_13)), maze1_hexes_path13],
+        highlight_colors=["lightgreen", "darkorange"],
+        **kwargs,
     )
     plot_hex_maze(
-        maze_2, ax=axs[1, 1], highlight_hexes=[set(chain.from_iterable(maze2_optimal_13)), maze2_hexes_path13],
-        highlight_colors=["lightgreen", "darkorange"], **kwargs,
+        maze_2,
+        ax=axs[1, 1],
+        highlight_hexes=[set(chain.from_iterable(maze2_optimal_13)), maze2_hexes_path13],
+        highlight_colors=["lightgreen", "darkorange"],
+        **kwargs,
     )
     plot_hex_maze(
-        maze_1, ax=axs[0, 2], highlight_hexes=[set(chain.from_iterable(maze1_optimal_23)), maze1_hexes_path23],
-        highlight_colors=["lightgreen", "darkorange"], **kwargs,
+        maze_1,
+        ax=axs[0, 2],
+        highlight_hexes=[set(chain.from_iterable(maze1_optimal_23)), maze1_hexes_path23],
+        highlight_colors=["lightgreen", "darkorange"],
+        **kwargs,
     )
     plot_hex_maze(
-        maze_2, ax=axs[1, 2], highlight_hexes=[set(chain.from_iterable(maze2_optimal_23)), maze2_hexes_path23],
-        highlight_colors=["lightgreen", "darkorange"], **kwargs,
+        maze_2,
+        ax=axs[1, 2],
+        highlight_hexes=[set(chain.from_iterable(maze2_optimal_23)), maze2_hexes_path23],
+        highlight_colors=["lightgreen", "darkorange"],
+        **kwargs,
     )
     axs[0, 0].set_ylabel("Maze 1")
     axs[1, 0].set_ylabel("Maze 2")
