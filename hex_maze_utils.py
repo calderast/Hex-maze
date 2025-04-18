@@ -2126,9 +2126,6 @@ def plot_hex_maze(
         will not be shown even if show_barrier_change=True (because no barriers are shown with this option.)
     - show_optimal_paths has the lowest precedence (will be overridden by all other highlights).
     """
-    # Convert all valid maze representations to a set of ints representing barrier hexes
-    barriers = maze_to_barrier_set(barriers)
-
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
     # Get a dictionary of the (x,y) coordinates of each hex centroid based on maze view angle
@@ -2143,9 +2140,8 @@ def plot_hex_maze(
     hex_colors = {node: "skyblue" for node in hex_maze.nodes()}
 
     if barriers is not None:
-        # If barriers is a string, convert to a set
-        if isinstance(barriers, str):
-            barriers = to_set(barriers)
+        # Convert all valid maze representations to a set of ints representing barrier hexes
+        barriers = maze_to_barrier_set(barriers)
 
         # Make the barriers black if we want to show them
         if show_barriers:
