@@ -46,7 +46,7 @@ Note that some of these tutorials are currently in progress, LMK if you need one
 This repo provides the following databases of valid maze configurations and barrier change sequences for the hex maze task:
 
 ### Database of hex maze configurations
-`maze_configuration_database` contains 55,896 possible hex maze configurations with the following attributes:
+`Maze_Databases/maze_configuration_database` contains 55,896 possible hex maze configurations with the following attributes:
 - 9 barriers
 - no unreachable hexes
 - path lengths between reward ports are between 15-25 hexes
