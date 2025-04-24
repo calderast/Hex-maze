@@ -3,9 +3,9 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 import pandas as pd
-import random
 import math
 from itertools import chain
+from scipy.spatial import KDTree
 
 
 # for now this is defined here because we use it to set up constants
@@ -1884,6 +1884,81 @@ def get_barrier_sequence_attributes(barrier_sequence: list[set]) -> dict:
 ################################ Plotting hex mazes ################################
 
 
+def get_distance_to_nearest_neighbor(hex_centroids: dict) -> dict:
+    """
+    Given a dictionary of hex: (x,y) centroid, calculate the minimum 
+    euclidean distance to the closest neighboring hex centroid for each hex.
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex: (x, y) coords of centroid
+
+    Returns:
+        min_distances (dict): Dictionary of hex: minimum distance to the nearest hex
+    """
+    hex_ids = list(hex_centroids.keys())
+    hex_coords = list(hex_centroids.values())
+
+    # Use KDTree to find the closest hex
+    tree = KDTree(hex_coords)
+
+    # Query the nearest neighbor (k=2 because the closest hex centroid is itself)
+    distances, _ = tree.query(hex_coords, k=2)
+
+    # The first nearest is the hex itself (distance 0), so we take the second one
+    min_distances = {
+        hex_id: dist[1] for hex_id, dist in zip(hex_ids, distances)
+    }
+    return min_distances
+
+
+def get_hex_sizes_from_centroids(hex_centroids: dict) -> dict:
+    """
+    Given a dictionary of hex: (x,y) centroid, calculate the height and radius
+    (aka side length) of each hex, and the min/max/average hex height and radius.
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex: (x, y) coords of centroid
+
+    Returns:
+        dict: Dictionary containing 'hex_heights_dict', 'hex_radii_dict', 'avg_hex_height', 
+            'max_hex_height', 'min_hex_height', 'avg_hex_radius', 'max_hex_radius', 'min_hex_radius'
+    """
+    # Get the minimum distance from each hex to its nearest neighbor (aka hex heights)
+    hex_heights = get_distance_to_nearest_neighbor(hex_centroids)
+
+    # Convert min distances (aka hex heights) to side lengths (radii)
+    hex_radii = {
+        hex_id: dist / math.sqrt(3) for hex_id, dist in hex_heights.items()
+    }
+
+    hex_sizes_dict = {
+        'hex_heights_dict': hex_heights,
+        'hex_radii_dict': hex_radii,
+        'avg_hex_height': sum(hex_heights.values()) / len(hex_heights),
+        'max_hex_height': max(hex_heights.values()),
+        'min_hex_height': min(hex_heights.values()),
+        'avg_hex_radius': sum(hex_radii.values()) / len(hex_radii),
+        'max_hex_radius': max(hex_radii.values()),
+        'min_hex_radius': min(hex_radii.values())
+    }
+    return hex_sizes_dict
+
+
+def get_min_max_centroids(hex_centroids: dict) -> tuple[float, float, float, float]:
+    """
+    Given a dictionary of hex: (x, y) centroid, return the min and max
+    values for x and y hex centroids. Helper for plotting
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex: (x, y) coords of centroid
+
+    Returns:
+        tuple: (min_x, max_x, min_y, max_y)
+    """
+    x_coords, y_coords = zip(*hex_centroids.values())
+    return min(x_coords), max(x_coords), min(y_coords), max(y_coords)
+
+
 def get_hex_centroids(view_angle=1, scale=1, shift=[0, 0]) -> dict:
     """
     Calculate the (x,y) coordinates of each hex centroid.
@@ -1936,6 +2011,43 @@ def get_hex_centroids(view_angle=1, scale=1, shift=[0, 0]) -> dict:
     return hex_positions
 
 
+def classify_triangle_vertices(vertices: list[tuple]) -> dict:
+    """
+    Given a list of 3 triangle vertices, classify them as 'left', 'right' and
+    'top' or 'bottom'. Useful for adjusting precise coordinates of where to plot
+    stats on the maze graph so everything is beautiful and perfect.
+
+    Parameters:
+        vertices (list[tuple]): [(x1, y1), (x2, y2), (x3, y3)]
+
+    Returns:
+        dict: Dictionary of label: point, where label is left/right/top/bottom
+    """
+    left, mid, right = sorted(vertices, key=lambda p: p[0])
+    avg_y = (left[1] + right[1]) / 2
+    label = 'top' if mid[1] < avg_y else 'bottom'
+    return {'left': left, 'right': right, label: mid}
+
+
+def scale_triangle_from_centroid(vertices: list[tuple], shift: float) -> list[tuple]:
+    """
+    Shift triangle vertices outward or inward from the triangle centroid.
+    Helper for plotting.
+
+    Parameters:
+        vertices (list[tuple]): [(x1, y1), (x2, y2), (x3, y3)]
+        shift (float): Amount to shift vertices in (if negative) or out (if positive)
+
+    Returns:
+        list[tuple]: New triangle vertices after scaling
+    """
+    centroid = np.mean(vertices, axis=0)
+    return [
+        tuple(np.array(v) + (np.array(v) - centroid) * shift / np.linalg.norm(np.array(v) - centroid))
+        for v in vertices
+    ]
+
+
 def get_base_triangle_coords(
     hex_positions, scale=1, chop_vertices=True, chop_vertices_2=False, show_edge_barriers=True
 ) -> list:
@@ -1961,35 +2073,21 @@ def get_base_triangle_coords(
             Defaults to True (bc why would you show the permanent barriers but not edges??)
 
     Returns:
-        list: A list (x, y) tuples representing the vertices of the maze base
+        list: A list of (x, y) tuples representing the vertices of the maze base
     """
-
-    # Get x and y coordinates of all hex centroids from the hex_positions dict
-    x_values = [pos[0] for pos in hex_positions.values()]
-    y_values = [pos[1] for pos in hex_positions.values()]
-    min_x, max_x = min(x_values), max(x_values)
-    min_y, max_y = min(y_values), max(y_values)
 
     # Get flat-to-flat height of hex (aka distance from top centroid to top of the triangle)
     height = scale * math.sqrt(3) / 2
 
-    # Calculate triangle verticles based on scale and min/max hex coords
-    top_vertex = ((min_x + max_x) / 2, max_y + height)
-    bottom_left_vertex = (min_x - 0.75 * scale, min_y - height / 2)
-    bottom_right_vertex = (max_x + 0.75 * scale, min_y - height / 2)
-    vertices = [top_vertex, bottom_left_vertex, bottom_right_vertex]
+    # Calculate triangle verticles based on hex height and centroids of reward port hexes
+    vertices = [hex_positions.get(1), hex_positions.get(2), hex_positions.get(3)]
+    vertices = scale_triangle_from_centroid(vertices, height)
 
     # Optionally make the triangle smaller so when we plot it behind the hex maze,
-    # the permanent edge barriers don't show up
+    # the permanent edge barriers don't show up. (This is ugly, I don't recommend)
     if not show_edge_barriers:
         # Move each vertex inward to shrink the triangle
-        centroid = np.mean(vertices, axis=0)
-        small_triangle_vertices = [
-            tuple(
-                np.array(vertex) - (np.array(vertex) - centroid) * (scale / np.linalg.norm(np.array(vertex) - centroid))
-            )
-            for vertex in vertices
-        ]
+        small_triangle_vertices = scale_triangle_from_centroid(vertices, -1*height)
         return small_triangle_vertices
 
     # Both cannot be True.
@@ -2028,8 +2126,10 @@ def get_base_triangle_coords(
             # Calculate the new vertex by moving back from the current vertex
             unit_direction_vector = (p2 - p1) / np.linalg.norm(p1 - p2)
             # Chop amount shows 4 edge barriers instead of 6 (per side)
-            chop_vertex1 = p1 + unit_direction_vector * scale * 2
-            chop_vertex2 = p2 - unit_direction_vector * scale * 2
+            # (Note: For ideal centroids, we should move these vertices by scale*2, but we use scale*2.1 
+            # to handle imprecision in custom hex coordinates. The extra bit is invisible behind hexes anyway)
+            chop_vertex1 = p1 + unit_direction_vector * scale * 2.1
+            chop_vertex2 = p2 - unit_direction_vector * scale * 2.1
             chopped_vertices.append(tuple(chop_vertex1))
             chopped_vertices.append(tuple(chop_vertex2))
         return chopped_vertices
@@ -2039,69 +2139,62 @@ def get_base_triangle_coords(
         return vertices
 
 
-def get_stats_coords(hex_centroids, view_angle=1) -> dict:
+def get_stats_coords(hex_centroids: dict) -> dict:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
     graph coordinates of where to display those stats based on the hex centroids.
 
     Parameters:
         hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
-        view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
-            when viewing the hex maze. Defaults to 1
 
     Returns:
         stats_coords (dict): Dictionary of stat_id: (x, y) coordinates of where to plot it.
             The stat_id should be the same as a key returned by `get_maze_attributes`
     """
-    # Get sorted list of x and y coordinates for all hexes in the maze
-    x_coords = sorted(set([coords[0] for coords in hex_centroids.values()]))
-    y_coords = sorted(set([coords[1] for coords in hex_centroids.values()]))
-    # Get the flat-to-flat height of a hex
-    hex_height = abs(y_coords[-1] - y_coords[-2])
-    # Get coordinates to plot path length stats (assuming hex 1 is on top)
-    stats_coords = {}
-    stats_coords["len12"] = (x_coords[1], y_coords[6])
-    stats_coords["len13"] = (x_coords[-2], y_coords[6])
-    stats_coords["len23"] = (x_coords[6], y_coords[0] - 1.5 * hex_height)
+    # Get coordinates of reward port hexes
+    hex1, hex2, hex3 = hex_centroids.get(1), hex_centroids.get(2), hex_centroids.get(3)
 
-    # If hex 2 or 3 is on top instead, rotate the coordinates accordingly
-    keys = list(stats_coords.keys())
-    n = len(keys)
-    rotated_stats_coords = {}
+    # Get average hex size for scaling
+    hex_sizes_dict = get_hex_sizes_from_centroids(hex_centroids)
+    average_hex_radius = hex_sizes_dict.get("avg_hex_radius")
 
-    if view_angle == 2:  # Rotate clockwise
-        for i in range(n):
-            next_key = keys[(i + 1) % n]
-            rotated_stats_coords[keys[i]] = stats_coords[next_key]
-    elif view_angle == 3:  # Rotate counterclockwise
-        for i in range(n):
-            prev_key = keys[(i - 1) % n]
-            rotated_stats_coords[keys[i]] = stats_coords[prev_key]
+    # The path lengths between ports should be shown halfway between the reward port hexes
+    len12 = tuple((np.array(hex1) + np.array(hex2)) / 2)
+    len13 = tuple((np.array(hex1) + np.array(hex3)) / 2)
+    len23 = tuple((np.array(hex2) + np.array(hex3)) / 2)
+    # Move the coordinates outwards by 2.5 hex radii so they are outside the maze
+    len12, len13, len23 = scale_triangle_from_centroid(vertices=[len12, len13, len23], shift=average_hex_radius*2.5)
 
-    # If needed, update the original dictionary with the rotated coordinates
-    stats_coords.update(rotated_stats_coords)
+    # The reward probabilities for each port should be shown outside the reward ports
+    pA, pB, pC = scale_triangle_from_centroid(vertices=[hex1, hex2, hex3], shift=average_hex_radius*2.5)
+
+    # Set up dict of stats coords
+    stats_coords = {"len12": len12, "len13": len13, "len23": len23, "pA": pA, "pB": pB, "pC": pC}
     return stats_coords
 
 
 def plot_hex_maze(
     barriers=None,
-    old_barrier=None,
-    new_barrier=None,
-    show_barriers=True,
-    show_choice_points=True,
-    show_optimal_paths=False,
-    show_arrow=True,
-    show_barrier_change=True,
-    show_hex_labels=True,
-    show_stats=True,
-    show_permanent_barriers=False,
-    show_edge_barriers=True,
-    view_angle=1,
+    old_barrier:int=None,
+    new_barrier:int=None,
+    show_barriers:bool=True,
+    show_choice_points:bool=True,
+    show_optimal_paths:bool=False,
+    show_arrow:bool=True,
+    show_barrier_change:bool=True,
+    show_hex_labels:bool=True,
+    show_stats:bool=True,
+    reward_probabilities:list=None,
+    show_permanent_barriers:bool=False,
+    show_edge_barriers:bool=True,
+    centroids:dict=None,
+    view_angle:int=1,
     highlight_hexes=None,
     highlight_colors=None,
     scale=1,
     shift=[0, 0],
     ax=None,
+    invert_yaxis:bool=False,
 ):
     """
     Given a set of barriers specifying a hex maze, plot the maze
@@ -2138,20 +2231,31 @@ def plot_hex_maze(
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
+        reward_probabilities (list): Reward probabilities in format [pA, pB, pC] to print
+            next to the reward port hexes. Defaults to None
         show_permanent_barriers (bool): If the permanent barriers should be shown
             as black hexes. Includes edge barriers. Defaults to False
         show_edge_barriers (bool): Only an option if show_permanent_barriers=True.
             Gives the option to exclude edge barriers when showing permanent barriers.
             Defaults to True if show_permanent_barriers=True
+        centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex. Must include
+            all 49 hexes. Note that if centroids are very non-uniform, plot options
+            like show_permanent_barriers may not work as well. Works best when only open hexes
+            are shown. Defaults to None
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
-            when viewing the hex maze. Defaults to 1
+            when viewing the hex maze, if centroids is not specified. Defaults to 1
         highlight_hexes (set[int] or list[set]): A set (or list[set]) of hexes to highlight.
             Takes precedence over other hex highlights (choice points, etc). Defaults to None.
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
             Each color in this list applies to the respective set of hexes in highlight_hexes.
             Defaults to 'darkorange' for a single group.
+        invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
+            video pixel coordinates, as video uses top left as (0,0), effectively vertically 
+            flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
 
     Other function behavior to note:
+    - If centroids argument is specified, view_angle will be ignored (centroid coordinates determine both
+        hex scale and view angle)
     - Hexes specified in highlight_hexes takes precedence over all other highlights.
     - If the same hex is specified multiple times in highlight_hexes, the last time takes precedence.
     - Highlighting choice points takes precedence over highlighting barrier change hexes,
@@ -2161,11 +2265,23 @@ def plot_hex_maze(
     """
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
-    # Get a dictionary of the (x,y) coordinates of each hex centroid based on maze view angle
-    hex_coordinates = get_hex_centroids(view_angle=view_angle, scale=scale, shift=shift)
+
+    # If the user specified a dictionary of hex centroids, use these 
+    if centroids is not None:
+        # Make a copy to avoid modifying the original centroids dict
+        hex_coordinates = centroids.copy()
+        hex_sizes_dict = get_hex_sizes_from_centroids(hex_coordinates)
+        hex_radii_dict = hex_sizes_dict.get('hex_radii_dict')
+
+        # Use the custom centroids to calculate scale (overrides user-specfied args)
+        scale = hex_sizes_dict.get("avg_hex_radius")*2
+    else:
+        # Otherwise, get a dictionary of the (x,y) coordinates of each hex centroid based on maze view angle
+        hex_coordinates = get_hex_centroids(view_angle=view_angle, scale=scale, shift=shift)
+
     # Get a dictionary of stats coordinates based on hex coordinates
-    if show_stats:
-        stats_coordinates = get_stats_coords(hex_coordinates, view_angle=view_angle)
+    if show_stats or reward_probabilities is not None:
+        stats_coordinates = get_stats_coords(hex_coordinates)
     # Define this for times we want to draw the arrow but not show barriers
     new_barrier_coords = None
 
@@ -2211,6 +2327,10 @@ def plot_hex_maze(
             for hex in choice_points:
                 hex_colors.update({hex: "gold"})
 
+    else:
+        # If barriers = None, there are no real stats to show
+        show_stats = False
+
     # Optional - highlight specific hexes on the plot
     if highlight_hexes is not None:
         # If highlight_hexes is a single set (or a list of length 1 containing a set),
@@ -2243,16 +2363,17 @@ def plot_hex_maze(
     else:
         show_plot = False
 
-    # Show permanent barriers by adding a barrier-colored background
-    # before plotting the maze
+    # Show permanent barriers by adding a barrier-colored background before plotting the maze
     if show_barriers and show_permanent_barriers:
         # Add a big triangle in light blue to color the open half-hexes next to reward ports
-        base_vertices1 = get_base_triangle_coords(hex_coordinates, show_edge_barriers=show_edge_barriers)
+        base_vertices1 = get_base_triangle_coords(
+            hex_positions=hex_coordinates, scale=scale, show_edge_barriers=show_edge_barriers
+        )
         maze_base1 = patches.Polygon(base_vertices1, closed=True, facecolor="skyblue", fill=True)
         ax.add_patch(maze_base1)
         # Add a big triangle with the edges cut off in black to color the other half-hexes on the side as barriers
         base_vertices2 = get_base_triangle_coords(
-            hex_coordinates, show_edge_barriers=show_edge_barriers, chop_vertices_2=True
+            hex_positions=hex_coordinates, scale=scale, show_edge_barriers=show_edge_barriers, chop_vertices_2=True
         )
         maze_base2 = patches.Polygon(base_vertices2, closed=True, facecolor="black", fill=True)
         ax.add_patch(maze_base2)
@@ -2262,7 +2383,7 @@ def plot_hex_maze(
         hexagon = patches.RegularPolygon(
             (x, y),
             numVertices=6,
-            radius=scale / 2,
+            radius=scale / 2 if centroids is None else hex_radii_dict.get(hex),
             orientation=math.pi / 6,
             facecolor=hex_colors[hex],
             edgecolor="white",
@@ -2303,16 +2424,44 @@ def plot_hex_maze(
             if stat in stats_coordinates:
                 ax.annotate(maze_attributes[stat], stats_coordinates[stat], ha="center", fontsize=12)
 
-    # Adjust axis limits
-    ax.set_xlim(-5.5 * scale + shift[0], 5.5 * scale + shift[0])
-    (
-        ax.set_ylim(-9.5 * scale + shift[1], 1 * scale + shift[1])
-        if show_stats
-        else ax.set_ylim(-9 * scale + shift[1], 1 * scale + shift[1])
-    )
+    # Optional - Add reward probabilites to the graph
+    if reward_probabilities is not None:
+        for name, prob in zip(["pA", "pB", "pC"], reward_probabilities):
+            ax.annotate(f"{prob}%", stats_coordinates[name], ha="center", fontsize=12)
+
+    # Classify reward port hexes as left, right, and bottom or top 
+    # so we know if we need to add space for stats on the top vs the bottom of the maze
+    labeled_vertices = classify_triangle_vertices([hex_coordinates[1], hex_coordinates[2], hex_coordinates[3]])
+
+    # Set default axes limits
+    min_x, max_x, min_y, max_y = get_min_max_centroids(hex_coordinates)
+    xlim = [min_x - scale, max_x + scale]
+    ylim = [min_y - scale, max_y + scale]
+
+    # If showing reward probabilites, add a little space 
+    if reward_probabilities is not None:
+        xlim = [xlim[0] - scale, xlim[1] + scale]
+        ylim = [ylim[0] - scale, ylim[1] + scale]
+
+    # If showing path length stats, add a little space 
+    if show_stats and (reward_probabilities is None):
+        if "top" in labeled_vertices:
+            ylim[1] += scale # add space on bottom (shift view upward)
+        else:
+            ylim[0] -= scale # add space on top (shift view downward)
+
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_aspect("equal", adjustable="box")
+
+    # Optional - invert yaxis. 
+    # This can be useful when plotting a hex maze with hex centroids from the maze video,
+    # as video pixel coordinates use top left as (0,0) so the maze appears flipped when
+    # hexes in video coordinates are plotted on "normal" axes
+    if invert_yaxis:
+        ax.invert_yaxis()
 
     # If no axis was provided as an argument, show the plot now
     if show_plot:
