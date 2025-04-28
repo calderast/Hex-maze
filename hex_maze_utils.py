@@ -6,6 +6,7 @@ import pandas as pd
 import math
 from itertools import chain
 from scipy.spatial import KDTree
+from collections import Counter
 
 
 # for now this is defined here because we use it to set up constants
@@ -540,6 +541,251 @@ def get_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_d
     # Get hexes that are between min_distance and max_distance (inclusive)
     hexes_within_distance = {hex for hex, dist in shortest_paths.items() if min_distance <= dist <= max_distance}
     return hexes_within_distance
+
+
+def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> int | dict:
+    """
+    Calculate the distance (in hexes) between each hexes in 'hexes' and
+    the nearest hex in the target group. Often used to calculate how far into
+    a dead end a given hex is. Also useful for calculating a hex's distance
+    from the optimal paths.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        hexes (int | list | set): Hex(es) to calculate distance for
+        target_group (set): The group of hexes to compute distance to
+
+    Returns:
+        int | dict: Shortest distance to any hex in target_group
+            (int if a single hex was passed, or a dict for multiple hexes)
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Make hexes iterable so this works with a single hex too
+    single_hex = not isinstance(hexes, (list, set, tuple))
+    hexes = [hexes] if single_hex else hexes
+
+    distances = {}
+    for hex in hexes:
+        # Find the shortest path lengths from this hex to all hexes in the maze
+        path_lengths = nx.single_source_shortest_path_length(graph, hex)
+        # Filter for only paths from the hex to hexes in the target_group
+        valid_lengths = [dist for target_hex, dist in path_lengths.items() if target_hex in target_group]
+        # Get the min distance from this hex to any of the hexes in the target group
+        distances[hex] = min(valid_lengths, default=float('inf'))
+    # Return an int if only one hex, or a dict if multiple
+    return next(iter(distances.values())) if single_hex else distances
+
+
+def get_hexes_on_optimal_paths(maze) -> set[int]:
+    """
+    Given a hex maze, return a set of all hexes on 
+    optimal paths between reward ports.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: A set of hexes appearing on any optimal path
+            between reward ports
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    hexes_on_optimal_paths = set()
+    for source_hex, target_hex in [(1, 2), (1, 3), (2, 3)]:
+        # Get the shortest path(s) between this pair of reward ports
+        optimal_paths_between_ports = nx.all_shortest_paths(graph, source=source_hex, target=target_hex)
+        # For each path, add all hexes on the path to our set of hexes on optimal paths
+        hexes_on_optimal_paths.update(hex for path in optimal_paths_between_ports for hex in path)
+    return hexes_on_optimal_paths
+
+
+def get_non_dead_end_hexes(maze) -> set[int]:
+    """
+    Given a hex maze, return a set of all hexes on any paths between reward ports.
+    Includes all paths between ports (not limited to optimal paths).
+    Every other hex is part of a dead end.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: Set of all hexes on paths between reward ports 
+            (all hexes that are not part of dead ends)
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    non_dead_end_hexes = set()
+    for source_hex, target_hex in [(1, 2), (2, 3), (1, 3)]:
+        # Get all possible paths between this pair of reward ports
+        all_paths_between_ports = nx.all_simple_paths(graph, source=source_hex, target=target_hex)
+        # For each path, add all hexes on the path to our set of non dead end hexes
+        non_dead_end_hexes.update(hex for path in all_paths_between_ports for hex in path)
+    return non_dead_end_hexes
+
+
+def get_dead_end_hexes(maze) -> set[int]:
+    """
+    Given a hex maze, return a set of hexes that are part of dead ends
+    (hexes not on any path between reward ports).
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: Set of dead end hexes
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Dead end hexes = (all open hexes) - (non dead end hexes)
+    dead_end_hexes = set(graph.nodes) - get_non_dead_end_hexes(graph)
+    return dead_end_hexes
+
+
+def get_non_optimal_non_dead_end_hexes(maze) -> set[int]:
+    """
+    Given a hex maze, return a set of hexes that are on longer-than-optimal
+    (but not dead-end) paths between reward ports. This set may be empty
+    if the maze structure is only made up of optimal paths and dead ends.
+    (The set of all open hexes in a maze is defined as
+    hexes on optimal paths + hexes on non-optimal paths + dead end hexes)
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: Set of hexes on non-optimal paths between reward ports
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Non optimal hexes = (all hexes not in dead ends) - (hexes on optimal paths)
+    non_optimal_hexes = get_non_dead_end_hexes(graph) - get_hexes_on_optimal_paths(graph)
+    return non_optimal_hexes
+
+
+def classify_maze_hexes(maze) -> dict[str, object]:
+    """
+    Given a hex maze, classify hexes as optimal (on optimal paths), 
+    non-optimal (on longer-than-optimal but not dead-end paths), 
+    and dead-end (on dead-end paths), and return a dictionary with hexes in
+    each group and the percentage of hexes in each group.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        dict[str, object]: Dictionary with optimal_hexes, non_optimal_hexes,
+            dead_end_hexes, optimal_pct, non_optimal_pct, and dead_end_pct
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Get the set of hexes in each group
+    total_hexes = len(graph.nodes)
+    optimal_hexes = get_hexes_on_optimal_paths(graph)
+    non_optimal_hexes = get_non_optimal_non_dead_end_hexes(graph)
+    dead_end_hexes = get_dead_end_hexes(graph)
+
+    return {
+        "optimal_hexes": optimal_hexes,
+        "optimal_pct": round(len(optimal_hexes) / total_hexes * 100, 2),
+        "non_optimal_hexes": non_optimal_hexes,
+        "non_optimal_pct": round(len(non_optimal_hexes) / total_hexes * 100, 2),
+        "dead_end_hexes": dead_end_hexes,
+        "dead_end_pct": round(len(dead_end_hexes) / total_hexes * 100, 2)
+    }
+
+
+def get_dead_ends(maze) -> list[dict[int, int]]:
+    """
+    Given a hex maze, find all dead end paths. For each dead end,
+    return a dictionary where the keys are hexes in that dead end path
+    and the values are how far into the dead end each hex is. Note that
+    for dead ends that include branches or loops, multiple hexes in the
+    dead end will have the same distance.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        list[dict]: A list of dictionaries, where each dictionary represents
+            a distict dead end. Each dictionary entry maps a dead end hex to
+            that hex's distance in the dead end.
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Find all hexes that are not part of dead ends
+    non_dead_end_hexes = get_non_dead_end_hexes(graph)
+
+    # Get a subgraph of the maze including only hexes that are a part of dead ends
+    dead_end_subgraph = graph.subgraph(node for node in graph.nodes if node not in non_dead_end_hexes)
+
+    # Each connected component is a group of dead end hexes
+    dead_end_groups = [list(maze_component) for maze_component in nx.connected_components(dead_end_subgraph)]
+
+    dead_end_hex_distances = []
+    # For each dead end group, get how far into the dead end each hex is
+    for group in dead_end_groups:
+        # Get a dict of hex: how far into the dead end it is
+        distances = distance_to_nearest_hex_in_group(graph, group, non_dead_end_hexes)
+        dead_end_hex_distances.append(distances)
+    return dead_end_hex_distances
+
+
+def get_dead_end_lengths(maze) -> dict[int, int]:
+    """
+    For each dead end in the maze, find the maximum possible distance into the dead end
+    (in hexes), and count how many dead ends have each maximum length
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        dict[int, int]: Dictionary mapping dead end length to the number of dead ends with that length
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Get dead end info (list of dicts for each dead end, each mapping hex to distance in dead end)
+    dead_ends = get_dead_ends(graph)
+
+    # Get max distance for each dead end and count number of dead ends with this length
+    max_distances = [max(d.values()) for d in dead_ends]
+    return dict(sorted(Counter(max_distances).items()))
+
+
+def get_num_dead_ends(maze, min_length=1) -> int:
+    """
+    Count the number of dead ends in a maze with minimum length min_length.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        min_length (int): Minimum dead end length to count (default 1)
+
+    Returns:
+        int: Number of dead ends in the maze with length >= minimum length
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Get dead end info and count the number of dead ends with length >= minimum
+    dead_ends = get_dead_ends(graph)
+    return sum(max(d.values()) >= min_length for d in dead_ends)
 
 
 def is_valid_path(maze, hex_path: list) -> bool:
@@ -1783,7 +2029,9 @@ def get_maze_attributes(maze) -> dict:
     Given a hex maze, create a dictionary of attributes for that maze.
     Includes the length of the optimal paths between reward ports, the optimal paths
     between these ports, the path length difference between optimal paths,
-    critical choice points, the number of cycles and the hexes defining these cycles,
+    critical choice points, the hexes (and percentage of hexes) that are on optimal
+    paths, non-optimal paths, or in dead ends, the number of dead ends of each length,
+    the number of cycles and the hexes defining these cycles,
     and a set of other maze configurations isomorphic to this maze.
 
     Parameters:
@@ -1826,6 +2074,14 @@ def get_maze_attributes(maze) -> dict:
     # Get a list of isomorphic mazes
     isomorphic_mazes = get_isomorphic_mazes(barriers)
 
+    # Classify hexes as on optimal path, on non-optimal path, or dead end
+    hex_type_dict = classify_maze_hexes(graph)
+
+    # Get dead end lengths
+    # Note: this makes including num_dead_ends_min_length_X superfluous, but we keep
+    # both because it's neater to query the database using num_dead_ends_min_length_X
+    dead_end_lengths = get_dead_end_lengths(graph)
+
     # Create a dictionary of attributes
     attributes = {
         "barriers": barriers,
@@ -1834,6 +2090,17 @@ def get_maze_attributes(maze) -> dict:
         "len23": len23,
         "reward_path_lengths": reward_path_lengths,
         "path_length_difference": path_length_difference,
+        "optimal_pct": hex_type_dict["optimal_pct"],
+        "non_optimal_pct": hex_type_dict["non_optimal_pct"],
+        "dead_end_pct": hex_type_dict["dead_end_pct"],
+        "optimal_hexes": hex_type_dict["optimal_hexes"],
+        "non_optimal_hexes": hex_type_dict["non_optimal_hexes"],
+        "dead_end_hexes": hex_type_dict["dead_end_hexes"],
+        "dead_end_lengths": dead_end_lengths,
+        "num_dead_ends": get_num_dead_ends(graph),
+        "num_dead_ends_min_length_2": get_num_dead_ends(graph, min_length=2),
+        "num_dead_ends_min_length_3": get_num_dead_ends(graph, min_length=3),
+        "num_dead_ends_min_length_4": get_num_dead_ends(graph, min_length=4),
         "optimal_paths_12": optimal_paths_12,
         "optimal_paths_13": optimal_paths_13,
         "optimal_paths_23": optimal_paths_23,
