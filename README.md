@@ -5,7 +5,7 @@ This repo provides a set of functions to generate, plot, and calculate info abou
 To simply use the functions in this repo, install the latest version of this Python package with the following command:
 
 ```bash
-pip install hexmaze
+pip install hex-maze-neuro
 ```
 
 Then import functions from the package in your Python script or Jupyter notebook:
@@ -108,7 +108,7 @@ This database was generated using the `Generate_Training_Maze_Database.ipynb` no
 ## Other info
 
 ### Hex maze functions
-`src/hexmaze` provides all of the functions for hex maze related tasks. 
+`src/hexmaze` provides all of the functions for hex maze related tasks, organized into core (most analysis functions), barrier_shift (maze comparisons), utils (helpers for transforming maze representations), and plotting (all things plotting and hex centroids).
 
 If you'd like any extra functionality, let me know (or feel free to add it and submit a PR)!
 

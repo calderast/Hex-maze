@@ -16,19 +16,19 @@ import math
 from .utils import (
     create_empty_hex_maze, 
     maze_to_barrier_set,
+    rotate_hex,
+)
+from .core import (
+    get_optimal_paths_between_ports, 
+    get_critical_choice_points, 
+    get_maze_attributes, 
+    get_optimal_paths
 )
 from .barrier_shift import (
     get_barrier_changes, 
     hexes_different_on_optimal_paths, 
     num_hexes_different_on_optimal_paths, 
     hexes_different_between_paths,
-)
-from .core import (
-    rotate_hex, 
-    get_optimal_paths_between_ports, 
-    get_critical_choice_points, 
-    get_maze_attributes, 
-    get_optimal_paths
 )
 
 # Define the public interface for this module

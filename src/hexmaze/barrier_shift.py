@@ -9,15 +9,14 @@ and generating optimal barrier change sequences.
 import numpy as np
 import pandas as pd
 from .utils import (
-    maze_to_barrier_set, 
-    df_lookup,
+    maze_to_barrier_set,
+    get_rotated_barriers,
+    get_reflected_barriers,
+    get_isomorphic_mazes,
 )
 from .core import (
-    get_critical_choice_points, 
-    get_optimal_paths, 
-    get_rotated_barriers, 
-    get_reflected_barriers, 
-    get_isomorphic_mazes, 
+    get_critical_choice_points,
+    get_optimal_paths,
     get_reward_path_lengths,
 )
 
@@ -503,9 +502,9 @@ def get_next_barrier_sets(df: pd.DataFrame, original_barriers, criteria_type="AL
         # Check if the optimal path order has changed
         criteria2 = optimal_path_order_changed(original_barriers, bar)
         # Make sure the optimal path lengths are 17, 19, 21 (in any order)
-        criteria3 = set(df_lookup(df, bar, "reward_path_lengths")) == {17, 19, 21}
+        criteria3 = set(get_reward_path_lengths(bar)) == {17, 19, 21}
         # Only 1 critical choice point
-        criteria4 = df_lookup(df, bar, "num_choice_points") == 1
+        criteria4 = len(get_critical_choice_points(bar)) == 1
 
         # Accept the potential new barrier set if it meets our criteria
         if criteria_type == "ALL":

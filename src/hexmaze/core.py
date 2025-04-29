@@ -13,9 +13,9 @@ from collections import Counter
 from .utils import (
     maze_to_graph, 
     maze_to_barrier_set, 
-    create_empty_hex_maze
+    create_empty_hex_maze,
+    get_isomorphic_mazes,
 )
-from .barrier_shift import get_barrier_changes
 
 # This is defined up here because we use it to set up constants
 def get_subpaths(path, length):
@@ -108,11 +108,6 @@ __all__ = [
     "is_valid_maze",
     "is_valid_training_maze",
     "generate_good_maze",
-    "rotate_hex",
-    "reflect_hex",
-    "get_rotated_barriers",
-    "get_reflected_barriers",
-    "get_isomorphic_mazes",
     "get_maze_attributes",
     "get_barrier_sequence_attributes",
 ]
@@ -901,143 +896,6 @@ def generate_good_maze(num_barriers=9, training_maze=False) -> set:
     return barriers
 
 
-
-############## Functions for maze rotations and relfections across its axis of symmetry ##############
-
-
-def rotate_hex(original_hex: int, direction="counterclockwise") -> int:
-    """
-    Given a hex in the hex maze, returns the corresponding hex if the maze is rotated once
-    counterclockwise (e.g. hex 1 becomes hex 2, 4 becomes 49, etc.). Option to specify
-    direction='clockwise' to rotate clockwise instead (e.g 1 becomes 3, 4 becomes 48, etc.)
-
-    Parameters:
-        original_hex (int): The hex in the hex maze to rotate (1-49)
-        direction (str): Which direction to rotate the hex ('clockwise' or 'counterclockwise')
-            Defaults to 'counterclockwise'
-
-    Returns:
-        int: The corresponding hex if the maze was rotated once in the specified direction
-    """
-    # Lists of corresponding hexes when the maze is rotated 120 degrees
-    hex_rotation_lists = [[1,2,3], [4,49,48], [6,47,33], [5,38,43], [8,42,28], 
-                         [7,32,39], [11,46,23], [10,37,34], [9,27,44], [14,41,19],
-                         [13,31,29], [12,22,40], [18,45,15], [17,36,24], [16,26,35],
-                         [21,30,20], [25]]
-    
-    for lst in hex_rotation_lists:
-        if original_hex in lst:
-            index = lst.index(original_hex)
-            if direction == "clockwise":
-                return lst[(index - 1) % len(lst)]
-            else:  # I choose to assume any direction not specified 'clockwise' is 'counterclockwise'
-                return lst[(index + 1) % len(lst)]
-    # Return None if the hex to rotate doesn't exist in our rotation lists (all hexes should exist)
-    return None
-
-
-def reflect_hex(original_hex: int, axis=1) -> int:
-    """
-    Given a hex in the hex maze, returns the corresponding hex if the maze is reflected
-    across the axis of hex 1 (e.g. hex 6 becomes hex 5 and vice versa, 8 becomes 7, etc.).
-    Option to specify axis=2 or axis=3 to reflect across the axis of hex 2 or 3 instead.
-
-    Parameters:
-        original_hex (int): The hex in the maze to reflect (1-49)
-        axis (int): Which reward port axis to reflect the maze across. Must be
-            1, 2, or 3. Defaults to 1
-
-    Returns:
-        int: The corresponding hex if the maze was reflected across the specified axis
-    """
-    # Lists of corresponding hexes reflected across axis 1, 2, or 3
-    reflections_ax1 = [[6,5], [8,7], [11,9], [14,12], [18,15], [17,16], [22,19], 
-                      [21,20], [27,23], [26,24], [32,28], [31,29], [38,33], [37,34],
-                      [36,35], [49,48], [42,39], [41,40],[2,3], [47,43], [46,44]]
-    reflections_ax2 = [[47,38], [42,32], [46,27], [41,22], [45,18], [36,26], [40,14], 
-                      [30,21], [44,11], [35,17], [39,8], [29,13], [43,6], [34,10], 
-                      [24,16], [48,4], [28,7], [19,12], [3,1], [33,5], [23,9]]
-    reflections_ax3 = [[43,33], [39,28], [44,23], [40,19], [45,15], [35,24], [41,12],
-                      [30,20], [46,9], [36,16], [42,7], [31,13], [47,5], [37,10],
-                      [26,17], [49,4], [32,8], [22,14], [2,1], [38,6], [27,11]]
-    # Choose the reflection list for the axis we care about
-    hex_reflections = {1: reflections_ax1, 2: reflections_ax2, 3: reflections_ax3}.get(axis, None)
-
-    for lst in hex_reflections:
-        if original_hex in lst:
-            # Return the other hex in the reflection pair
-            return lst[1] if lst[0] == original_hex else lst[0]
-    # If the hex isn't in any list, it doesn't change when the maze is reflected along this axis
-    return original_hex
-
-
-def get_rotated_barriers(original_barriers, direction="counterclockwise") -> set:
-    """
-    Given a hex maze, returns the corresponding barrier set if the maze is rotated
-    once counterclockwise (e.g. hex 1 becomes hex 2, 4 becomes 49, etc.).
-    Option to specify direction='clockwise' to rotate clockwise
-    instead (e.g 1 becomes 3, 4 becomes 48, etc.)
-
-    Parameters:
-        original_barriers (list, set, frozenset, np.ndarray, str, nx.Graph):
-            The original hex maze, represented in any valid format
-        direction (str): Which direction to rotate the maze ('clockwise' or 'counterclockwise')
-            Defaults to 'counterclockwise'
-
-    Returns:
-        set: The barrier set if the maze was rotated once in the specified direction
-    """
-    # Convert all valid maze representations to a set of ints representing barrier hexes
-    original_barriers = maze_to_barrier_set(original_barriers)
-
-    return {rotate_hex(b, direction) for b in original_barriers}
-
-
-def get_reflected_barriers(original_barriers, axis=1) -> set:
-    """
-    Given a hex maze, returns the corresponding barrier set if the maze is reflected
-    along the axis of hex 1 (e.g. hex 6 becomes hex 5 and vice versa, 8 becomes 7 and vice versa, etc.).
-    Option to specify axis=2 or axis=3 to reflect across the axis of hex 2 or 3 instead.
-
-    Parameters:
-        original_barriers (list, set, frozenset, np.ndarray, str, nx.Graph):
-            The original hex maze, represented in any valid format
-        axis (int): Which reward port axis to reflect the maze across.
-            Must be 1, 2, or 3. Defaults to 1
-
-    Returns:
-        set: The barrier set if the maze was reflected across the specified axis
-    """
-    # Convert all valid maze representations to a set of ints representing barrier hexes
-    original_barriers = maze_to_barrier_set(original_barriers)
-
-    return {reflect_hex(b, axis) for b in original_barriers}
-
-
-def get_isomorphic_mazes(maze) -> set[frozenset]:
-    """
-    Given a hex maze, return the other 5 mazes that have the same graph structure
-    (corresponding to the maze rotated clockwise/counterclockwise and
-    reflected across its 3 axes of symmetry)
-
-    Parameters:
-        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
-            The hex maze represented in any valid format
-
-    Returns:
-        set[frozenset]: a set of the 5 barrier sets defining mazes isomorphic to this maze
-    """
-    # Rotate and reflect the maze to get other barrier configs that
-    # represent the same underlying graph structure
-    reflected_ax1 = frozenset(get_reflected_barriers(maze, axis=1))
-    reflected_ax2 = frozenset(get_reflected_barriers(maze, axis=2))
-    reflected_ax3 = frozenset(get_reflected_barriers(maze, axis=3))
-    rotated_ccw = frozenset(get_rotated_barriers(maze, direction="counterclockwise"))
-    rotated_cw = frozenset(get_rotated_barriers(maze, direction="clockwise"))
-
-    return {reflected_ax1, reflected_ax2, reflected_ax3, rotated_ccw, rotated_cw}
-
-
 def get_maze_attributes(maze) -> dict:
     """
     Given a hex maze, create a dictionary of attributes for that maze.
@@ -1140,6 +998,8 @@ def get_barrier_sequence_attributes(barrier_sequence: list[set]) -> dict:
     Returns:
         dict: A dictionary of attributes of this sequence.
     """
+    # Import here to avoid circular imports
+    from .barrier_shift import get_barrier_changes
 
     reward_path_lengths = []
     choice_points = []
@@ -1160,4 +1020,3 @@ def get_barrier_sequence_attributes(barrier_sequence: list[set]) -> dict:
         "choice_points": choice_points,
     }
     return barrier_dict
-

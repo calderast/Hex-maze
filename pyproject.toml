@@ -3,11 +3,11 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hexmaze"
-version = "0.1.0"
+name = "hex-maze-neuro"
+version = "0.1.2"
 description = "A Python toolkit for generating, visualizing, and analyzing hex maze configurations and optimal barrier change sequences for the hex maze task developed by the Berke Lab at UCSF."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     { name="Stephanie Crater", email="stephcrater@berkeley.edu" },
@@ -35,3 +35,4 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["hexmaze*"]
