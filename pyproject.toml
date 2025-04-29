@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexmaze"
+version = "0.1.0"
+description = "A Python toolkit for generating, visualizing, and analyzing hex maze configurations and optimal barrier change sequences for the hex maze task developed by the Berke Lab at UCSF."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    { name="Stephanie Crater", email="stephcrater@berkeley.edu" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "networkx>=3.3",
+    "matplotlib",
+    "numpy>=2.0.0",
+    "pandas",
+    "scipy",
+    "tqdm",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/calderast/Hex-maze"
+"Bug Tracker" = "https://github.com/calderast/Hex-maze/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
