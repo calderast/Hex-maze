@@ -12,11 +12,11 @@ Then import functions from the package in your Python script or Jupyter notebook
 
 ```python
 from hexmaze import plot_hex_maze
-plot_hex_maze(barriers=[5, 17, 22, 30, 45, 19], show_optimal_paths=True)
+plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
 ```
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
-Follow the developer instructions below
+Follow the developer instructions to install from source to access the tutorials and databases.
 
 ## Installation from source (Developer instructions)
 ### Step 1. Fork and clone the repository
@@ -108,9 +108,9 @@ This database was generated using the `Generate_Training_Maze_Database.ipynb` no
 ## Other info
 
 ### Hex maze functions
-`src/hexmaze` provides all of the functions for hex maze related tasks, organized into core (most analysis functions), barrier_shift (maze comparisons), utils (helpers for transforming maze representations), and plotting (all things plotting and hex centroids).
+`src/hexmaze` provides all of the functions for hex maze related tasks, organized into core (most analysis functions), barrier_shift (maze comparisons and barrier sequence generation), utils (helpers for transforming maze representations), and plotting (all things plotting and hex centroids).
 
 If you'd like any extra functionality, let me know (or feel free to add it and submit a PR)!
 
-A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`. 
+A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`.
 For functions without tutorials, you can view the documentation running `help(function_name)`.

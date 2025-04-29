@@ -7,7 +7,6 @@ and working with hex centroids.
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from scipy.spatial import KDTree
 from itertools import chain
 import networkx as nx
 import numpy as np
@@ -58,17 +57,19 @@ def get_distance_to_nearest_neighbor(hex_centroids: dict) -> dict:
         min_distances (dict): Dictionary of hex: minimum distance to the nearest hex
     """
     hex_ids = list(hex_centroids.keys())
-    hex_coords = list(hex_centroids.values())
+    hex_coords = np.array(list(hex_centroids.values()))
 
-    # Use KDTree to find the closest hex
-    tree = KDTree(hex_coords)
+    # Compute full pairwise distance matrix for all coordinates
+    diffs = hex_coords[:, np.newaxis, :] - hex_coords[np.newaxis, :, :]
+    distances = np.sqrt(np.sum(diffs ** 2, axis=-1))
 
-    # Query the nearest neighbor (k=2 because the closest hex centroid is itself)
-    distances, _ = tree.query(hex_coords, k=2)
+    # Set distance between a hex and itself to infinity to exclude it
+    np.fill_diagonal(distances, np.inf)
 
-    # The first nearest is the hex itself (distance 0), so we take the second one
+    # Get the minimum distance to a neighbor for each hex
     min_distances = {
-        hex_id: dist[1] for hex_id, dist in zip(hex_ids, distances)
+        hex_id: float(np.min(dist_row))
+        for hex_id, dist_row in zip(hex_ids, distances)
     }
     return min_distances
 
