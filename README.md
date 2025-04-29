@@ -1,7 +1,25 @@
 # Hex-maze
 This repo provides a set of functions to generate, plot, and calculate info about hex maze configurations and optimal barrier change sequences for the hex maze behavioral task used by the Berke Lab at UCSF. It also provides databases of valid maze configurations and their attributes.
 
-## Step 1. Fork and clone the repository
+## Installation (General use)
+To simply use the functions in this repo, install the latest version of this Python package with the following command:
+
+```bash
+pip install hex-maze-neuro
+```
+
+Then import functions from the package in your Python script or Jupyter notebook:
+
+```python
+from hexmaze import plot_hex_maze
+plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
+```
+
+Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
+Follow the developer instructions to install from source to access the tutorials and databases.
+
+## Installation from source (Developer instructions)
+### Step 1. Fork and clone the repository
 To contribute to this project, you first need to fork the repository to your own GitHub account. This creates a copy of the project where you can make changes.
 Do this by clicking the "Fork" button at the top-right corner of the repository page and following the instructions.
 
@@ -17,7 +35,7 @@ Once you have forked the repository, you need to clone it to your local machine 
     ```sh
     cd Hex-maze
 
-## Step 2. Install dependencies
+### Step 2. Install dependencies
 1. First, make sure you are in the repo inside a terminal or command prompt (Step 3 above). 
 
 2. To install all necessary dependencies for this project, run the following command:
@@ -25,7 +43,7 @@ Once you have forked the repository, you need to clone it to your local machine 
     ```sh
     pip install -r requirements.txt
 
-## Step 3. Start the tutorials
+### Step 3. Start the tutorials
 Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`](Tutorials/Getting_Started.ipynb) notebook.
 
 `Tutorials/` also includes the following tutorial notebooks:
@@ -42,9 +60,10 @@ These 3 are also provided for reference:
 
 Note that some of these tutorials are currently in progress, LMK if you need one asap and I'll make it a priority!
 
-## Step 4: Explore and use the databases!
+### Step 4: Explore and use the databases!
 This repo provides the following databases of valid maze configurations and barrier change sequences for the hex maze task:
 
+## Hex Maze Databases
 ### Database of hex maze configurations
 `Maze_Databases/maze_configuration_database` contains 55,896 possible hex maze configurations with the following attributes:
 - 9 barriers
@@ -89,9 +108,9 @@ This database was generated using the `Generate_Training_Maze_Database.ipynb` no
 ## Other info
 
 ### Hex maze functions
-`hex_maze_utils.py` provides all of the functions for hex maze related tasks. 
+`src/hexmaze` provides all of the functions for hex maze related tasks, organized into core (most analysis functions), barrier_shift (maze comparisons and barrier sequence generation), utils (helpers for transforming maze representations), and plotting (all things plotting and hex centroids).
 
 If you'd like any extra functionality, let me know (or feel free to add it and submit a PR)!
 
-A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`. 
-For functions without tutorials, you can view the documentation running `help(function_name)`, or just by scrolling through the `hex_maze_utils.py` file.
+A tutorial for the most useful functions can be found at `Tutorials/Hex_Maze_Functions.ipynb`.
+For functions without tutorials, you can view the documentation running `help(function_name)`.
