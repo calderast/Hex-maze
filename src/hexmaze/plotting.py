@@ -358,6 +358,7 @@ def plot_hex_maze(
     shift=[0, 0],
     ax=None,
     invert_yaxis:bool=False,
+    save_path:str=None
 ):
     """
     Given a set of barriers specifying a hex maze, plot the maze
@@ -415,6 +416,7 @@ def plot_hex_maze(
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
+            save_path (str): absolute or relative filepath at whcih to save the figure: eg: "./out/maze.png"
 
     Other function behavior to note:
     - If centroids argument is specified, view_angle will be ignored (centroid coordinates determine both
@@ -629,6 +631,10 @@ def plot_hex_maze(
     # If no axis was provided as an argument, show the plot now
     if show_plot:
         plt.show()
+    
+    # If save path is provided, save the figure at the indicated path
+    if save_path:
+        plt.savefig(save_path)
 
 
 def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info=True, same_plot=False, **kwargs):
