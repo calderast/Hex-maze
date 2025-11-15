@@ -416,7 +416,7 @@ def plot_hex_maze(
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
-            save_path (str): absolute or relative filepath at whcih to save the figure: eg: "./out/maze.png"
+            save_path (str): absolute or relative filepath at which to save the figure: eg: "./out/maze.png"
 
     Other function behavior to note:
     - If centroids argument is specified, view_angle will be ignored (centroid coordinates determine both
