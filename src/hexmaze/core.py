@@ -614,8 +614,11 @@ def divide_into_thirds(maze) -> list[set]:
     and port 1, hexes between the choice point and port 2, and hexes
     between the choice point and port 3.
 
-    NOT CURRENTLY IMPLEMENTED FOR MAZES WITH MULTIPLE CHOICE POINTS,
-    AS DIVIDING THE MAZE INTO 3 GROUPS IS NOT WELL DEFINED IN THIS CASE.
+    NOTE for mazes with multiple choice points, or a single choice point
+    that is a part of a cycle, dividing the maze into three groups will
+    result in hexes between choice points that are not included in any 
+    of these groups, because they do not clearly belong to one of the 
+    three groups based on maze structure alone.
 
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
@@ -628,22 +631,32 @@ def divide_into_thirds(maze) -> list[set]:
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
 
-    # Get choice points for this maze and ensure there is only one
+    # Get choice point(s) for this maze
     choice_points = get_critical_choice_points(maze)
-    if len(choice_points) != 1:
-        raise NotImplementedError(
-            f"The given maze has {len(choice_points)} choice points: {choice_points}.\n"
-            "This function is only implemented for mazes with a single choice point."
-        )
 
-    # Remove the choice point from the maze graph to split it into 3 components
-    graph.remove_node(next(iter(choice_points)))
+    # Remove the choice point(s) from the maze graph to split it into (hopefully 3) components
+    for choice_point in choice_points:
+        graph.remove_node(choice_point)
 
-    # Get the 3 components of the split graph (each containing a reward port)
+    # Get the components of the split graph (each containing a reward port)
     components = list(nx.connected_components(graph))
-    if len(components) != 3:
-        print(f"The choice point {choice_points} does not split the maze into 3 distinct components!")
-        return None
+
+    # Sometimes based on loops in the maze structure, the choice point(s) don't split the maze into clear components
+    # Maze '8,9,11,17,20,23,31,34,38,46' is an example of this.
+    # In this case, we remove the entire cycle containing the choice point(s).
+    # Re-evaluate if we encounter a maze where this is not the best way to deal with this.
+    if len(components) < 3:
+        maze_graph =  maze_to_graph(maze)
+        cycle_basis = nx.cycle_basis(maze_graph)
+        # Remove all hexes that are part of cycles that include a choice point
+        hexes_to_remove = {
+            h
+            for cycle in cycle_basis
+            if any(cp in cycle for cp in choice_points)
+            for h in cycle
+        }
+        maze_graph.remove_nodes_from(hexes_to_remove)
+        components = list(nx.connected_components(maze_graph))
 
     # Find each component containing hex 1, hex 2, and hex 3 (in that order)
     thirds = []
