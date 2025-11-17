@@ -1,5 +1,6 @@
 # Hex-maze
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17635392.svg)](https://doi.org/10.5281/zenodo.17635392)
+[![PyPI version](https://img.shields.io/pypi/v/hex-maze-neuro.svg)](https://pypi.org/project/hex-maze-neuro/)
 
 This repo provides a set of functions to generate, plot, and calculate info about hex maze configurations and optimal barrier change sequences for the hex maze behavioral task used by the Berke Lab at UCSF. It also provides databases of valid maze configurations and their attributes.
 
