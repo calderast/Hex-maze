@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "A Python toolkit for generating, visualizing, and analyzing hex maze configurations and optimal barrier change sequences for the hex maze task developed by the Berke Lab at UCSF."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { file = "LICENSE" }
+license = {text = "MIT"}
 authors = [
     { name="Stephanie Crater", email="stephcrater@berkeley.edu" },
 ]
