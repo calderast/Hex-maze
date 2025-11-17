@@ -1,4 +1,6 @@
 # Hex-maze
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17635392.svg)](https://doi.org/10.5281/zenodo.17635392)
+
 This repo provides a set of functions to generate, plot, and calculate info about hex maze configurations and optimal barrier change sequences for the hex maze behavioral task used by the Berke Lab at UCSF. It also provides databases of valid maze configurations and their attributes.
 
 ## Installation (General use)
@@ -119,6 +121,19 @@ For functions without tutorials, you can view the documentation running `help(fu
 
 This software is licensed under the MIT License. See [LICENSE](LICENSE).
 
-If you use this package in published research, please cite:
+If you use **Hex-maze-neuro** in your research, please cite it as:
 
-> Crater, Stephanie (2025). *Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis (v1.0.0).* Zenodo. https://doi.org/10.5281/zenodo.17635392
+> Crater, Stephanie (2025). Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis. Zenodo. https://doi.org/10.5281/zenodo.17635392
+
+
+```bibtex
+@software{crater_hexmazeneuro_2025,
+  author       = {Crater, Stephanie},
+  title        = {Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis},
+  version      = {1.0.0},
+  year         = {2025},
+  month        = nov,
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.17635392},
+  url          = {https://doi.org/10.5281/zenodo.17635392}
+}
