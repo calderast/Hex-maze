@@ -89,6 +89,7 @@ __all__ = [
     "get_optimal_paths_between_ports",
     "get_optimal_paths",
     "get_reward_path_lengths",
+    "get_path_length_difference",
     "get_path_independent_hexes_to_port",
     "get_hexes_from_port",
     "get_hexes_within_distance",
@@ -237,6 +238,40 @@ def get_reward_path_lengths(maze) -> list:
     len23 = nx.shortest_path_length(graph, source=2, target=3) + 1
 
     return [len12, len13, len23]
+
+
+def get_path_length_difference(maze, start_port, end_port) -> int:
+    """
+    Given a hex maze, start_port, and end_port, get the path length difference (in hexes) 
+    between the start port and the chosen (end) port vs the start port and the unchosen port.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_port (int or str): 
+            The reward port the rat started at (1, 2, 3, or A, B, C)
+        end_port (int or str): 
+            The reward port the rat ended at (1, 2, 3, or A, B, C)
+
+    Returns:
+        int: Number of hexes to chosen port - number of hexes to unchosen port
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Create a mapping so we can handle 1, 2, 3 or A, B, C to specify reward ports
+    port_hex_map = {"A": 1, "B": 2, "C": 3, 1: 1, 2: 2, 3: 3}
+
+    # Get the hex (1, 2, or 3) corresponding to the start port, end port, and unchosen port
+    start_port_hex = port_hex_map[start_port]
+    end_port_hex = port_hex_map[end_port]
+    unchosen_port_hex = ({1, 2, 3} - {start_port_hex, end_port_hex}).pop()
+
+    # Get path lengths
+    chosen_length = nx.shortest_path_length(graph, source=start_port_hex, target=end_port_hex) + 1
+    unchosen_length = nx.shortest_path_length(graph, source=start_port_hex, target=unchosen_port_hex) + 1
+
+    return chosen_length - unchosen_length
 
 
 def get_path_independent_hexes_to_port(maze, reward_port) -> set[int]:
