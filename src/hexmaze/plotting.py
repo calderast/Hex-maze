@@ -354,6 +354,8 @@ def plot_hex_maze(
     view_angle:int=1,
     highlight_hexes=None,
     highlight_colors=None,
+    color_by:dict=None,
+    colormap="plasma",
     scale=1,
     shift=[0, 0],
     ax=None,
@@ -450,6 +452,20 @@ def plot_hex_maze(
 
     # Make the open hexes light blue
     hex_colors = {node: "skyblue" for node in hex_maze.nodes()}
+
+    # Optional - Color hexes by values with a colormap
+    if color_by is not None:
+        # Ensure we only color existing hexes
+        values = {hex: val for hex, val in color_by.items() if hex in hex_colors}
+
+        if len(values) > 0:
+            # Get the colormap and normalize values to 0-1 range
+            cmap = plt.get_cmap(colormap)
+            norm = plt.Normalize(vmin=min(values.values()), vmax=max(values.values()))
+
+            # Color hexes by value
+            for h, val in values.items():
+                hex_colors[h] = cmap(norm(val))
 
     if barriers is not None:
         # Convert all valid maze representations to a set of ints representing barrier hexes
