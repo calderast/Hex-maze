@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hex-maze-neuro"
-version = "1.0.1"
+version = "1.0.2"
 description = "A Python toolkit for generating, visualizing, and analyzing hex maze configurations and optimal barrier change sequences for the hex maze task developed by the Berke Lab at UCSF."
 readme = "README.md"
 requires-python = ">=3.9"
