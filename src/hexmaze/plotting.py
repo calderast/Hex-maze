@@ -7,6 +7,7 @@ and working with hex centroids.
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from collections import defaultdict
 from itertools import chain
 import networkx as nx
 import numpy as np
@@ -352,6 +353,7 @@ def plot_hex_maze(
     show_edge_barriers:bool=True,
     centroids:dict=None,
     view_angle:int=1,
+    hex_path:list=None,
     highlight_hexes=None,
     highlight_colors=None,
     color_by:dict=None,
@@ -411,6 +413,8 @@ def plot_hex_maze(
             are shown. Defaults to None
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze, if centroids is not specified. Defaults to 1
+        hex_path (list[int]): List of hexes specifying a path taken through the maze.
+            The path will be shown by black arrows between hexes. Defaults to None
         highlight_hexes (set[int] or list[set]): A set (or list[set]) of hexes to highlight.
             Takes precedence over other hex highlights (choice points, etc). Defaults to None.
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
@@ -442,6 +446,13 @@ def plot_hex_maze(
     """
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
+
+    # If no axis was provided, create a new figure and axis to use
+    if ax is None:
+        fig, ax = plt.subplots()
+        show_plot = True
+    else:
+        show_plot = False
 
     # If the user specified a dictionary of hex centroids, use these 
     if centroids is not None:
@@ -482,6 +493,56 @@ def plot_hex_maze(
             # Color hexes by value
             for h, val in values.items():
                 hex_colors[h] = cmap(norm(val))
+
+    # Optional - plot a path through the maze with arrows
+    if hex_path is not None and len(hex_path) > 1:
+        # Set up counter for the number of each edge between hexes 
+        # so we can offset the hex path arrows when the rat backtracks
+        directed_edge_counts = defaultdict(int)
+        undirected_edge_counts = defaultdict(int)
+
+        for start_hex, end_hex in zip(hex_path[:-1], hex_path[1:]):
+            # Skip hexes without coords (note that we do this before we remove barriers, 
+            # because we may want to indicate a path that moves through a blocked hex)
+            if start_hex not in hex_coordinates or end_hex not in hex_coordinates:
+                continue
+
+            start_coords = np.array(hex_coordinates[start_hex])
+            end_coords = np.array(hex_coordinates[end_hex])
+
+            # Count the number of times we've seen this hex transition
+            edge_key = tuple((start_hex, end_hex))
+            undirected_edge_key = tuple(sorted((start_hex, end_hex)))
+            directed_edge_counts[edge_key] += 1
+            undirected_edge_counts[undirected_edge_key] += 1
+
+            # We count directed and undirected edges separately. Normally we want to offset based
+            # on the directed edge so all arrows in a single direction are offset to the same side.
+            # BUT we need to count undirected edges for the first backtrack, so a single reversal
+            # such as 1->4->1 doesn't result in the 1->4 and 4->1 arrows on top of each other.
+            if directed_edge_counts[edge_key] == 1 and undirected_edge_counts[undirected_edge_key] == 2:
+                directed_edge_counts[edge_key] = 2 # bump the count for the first backtrack
+
+            # Get arrow direction so we can offset the arrow for repeated edges
+            direction = end_coords - start_coords
+            length = np.linalg.norm(direction)
+            if length == 0:
+                continue
+            perpendicular_unit_vector = np.array([-direction[1], direction[0]]) / length
+            offset = perpendicular_unit_vector  * 0.15 * scale * (directed_edge_counts[edge_key] - 1)
+
+            ax.annotate(
+                "",
+                xy=end_coords + offset,
+                xycoords="data",
+                xytext=start_coords + offset,
+                textcoords="data",
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    color='k',
+                    linewidth=1.5,
+                ),
+            )
 
     if barriers is not None:
         # Convert all valid maze representations to a set of ints representing barrier hexes
@@ -550,13 +611,6 @@ def plot_hex_maze(
         for hexes, color in zip(highlight_hexes, highlight_colors):
             for hex in hexes:
                 hex_colors.update({hex: color})
-
-    # If no axis was provided, create a new figure and axis to use
-    if ax is None:
-        fig, ax = plt.subplots()
-        show_plot = True
-    else:
-        show_plot = False
 
     # Show permanent barriers by adding a barrier-colored background before plotting the maze
     if show_barriers and show_permanent_barriers:
