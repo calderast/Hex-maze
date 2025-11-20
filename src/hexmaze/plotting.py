@@ -356,6 +356,8 @@ def plot_hex_maze(
     highlight_colors=None,
     color_by:dict=None,
     colormap="plasma",
+    vmin=None,
+    vmax=None,
     scale=1,
     shift=[0, 0],
     ax=None,
@@ -414,6 +416,16 @@ def plot_hex_maze(
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
             Each color in this list applies to the respective set of hexes in highlight_hexes.
             Defaults to 'darkorange' for a single group.
+        color_by (dict): Dictionary of hex_id: value. Hexes will be colored by their corresponding 
+            value using the specified colormap. Overridden by highlight_hexes. Defaults to None.
+        colormap (str or matplotlib.colors.Colormap): Matplotlib colormap to use for 
+            `color_by` values. Defaults to 'plasma'.
+        vmin (float): Minimum value for colormap normalization, if using `color_by`. 
+            Values in `color_by` less than `vmin` will be clipped to the lowest color. 
+            If None, the minimum of `color_by` values is used. Defaults to None.
+        vmax (float): Maximum value for colormap normalization, if using `color_by`.
+            Values in `color_by` greater than `vmax` will be clipped to the highest color. 
+            If None, the maximum of `color_by` values is used. Defaults to None.
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
@@ -459,9 +471,13 @@ def plot_hex_maze(
         values = {hex: val for hex, val in color_by.items() if hex in hex_colors}
 
         if len(values) > 0:
+            # Get colormap bounds from vmin/vmax or min/max of values
+            actual_vmin = vmin if vmin is not None else min(values.values())
+            actual_vmax = vmax if vmax is not None else max(values.values())
+
             # Get the colormap and normalize values to 0-1 range
             cmap = plt.get_cmap(colormap)
-            norm = plt.Normalize(vmin=min(values.values()), vmax=max(values.values()))
+            norm = plt.Normalize(vmin=actual_vmin, vmax=actual_vmax)
 
             # Color hexes by value
             for h, val in values.items():
