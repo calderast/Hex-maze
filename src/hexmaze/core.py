@@ -91,8 +91,12 @@ __all__ = [
     "get_reward_path_lengths",
     "get_path_length_difference",
     "get_path_independent_hexes_to_port",
+    "get_unreachable_hexes",
     "get_hexes_from_port",
+    "get_hex_distance",
+    "get_safe_hex_distance",
     "get_hexes_within_distance",
+    "get_safe_hexes_within_distance",
     "distance_to_nearest_hex_in_group",
     "get_hexes_on_optimal_paths",
     "get_non_dead_end_hexes",
@@ -315,6 +319,32 @@ def get_path_independent_hexes_to_port(maze, reward_port) -> set[int]:
     return path_independent_hexes
 
 
+def get_unreachable_hexes(maze) -> set[int]:
+    """
+    Find hexes, if any, that are unreachable from the rest of the maze.
+    Some older barrier change configurations included these unreachable hex "islands".
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: The set of unreachable hexes, if they exist
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Then main maze component is the component containing hex 1
+    main_component = set(nx.node_connected_component(graph, 1))
+
+    # Sanity check: hexes 2 and 3 must also be in the main component
+    if not {2, 3}.issubset(main_component):
+        raise ValueError("Invalid hex maze: hexes 1, 2, and 3 are not all reachable from each other")
+
+    # All hexes not in the main component are unreachable
+    return set(graph.nodes) - main_component
+
+
 def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
     """
     Find the minimum number of hexes from a given hex to a
@@ -396,32 +426,6 @@ def get_safe_hex_distance(maze, start_hex: int, target_hex: int) -> int:
         return np.inf 
 
 
-def get_unreachable_hexes(maze) -> set[int]:
-    """
-    Find hexes, if any, that are unreachable from the rest of the maze.
-    Some older barrier change configurations included these unreachable hex "islands".
-
-    Parameters:
-        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
-            The hex maze represented in any valid format
-
-    Returns:
-        set[int]: The set of unreachable hexes, if they exist
-    """
-    # Convert all valid maze representations to a nx.Graph object
-    graph = maze_to_graph(maze)
-
-    # Then main maze component is the component containing hex 1
-    main_component = set(nx.node_connected_component(graph, 1))
-
-    # Sanity check: hexes 2 and 3 must also be in the main component
-    if not {2, 3}.issubset(main_component):
-        raise ValueError("Invalid hex maze: hexes 1, 2, and 3 are not all reachable from each other")
-
-    # All hexes not in the main component are unreachable
-    return set(graph.nodes) - main_component
-
-
 def get_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_distance=1) -> set[int]:
     """
     Find all hexes within a certain hex distance from the start_hex (inclusive).
@@ -441,6 +445,42 @@ def get_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_d
     """
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
+
+    # Get a dict of shortest path lengths from the start_hex to all other hexes
+    shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
+
+    # Get hexes that are between min_distance and max_distance (inclusive)
+    hexes_within_distance = {hex for hex, dist in shortest_paths.items() if min_distance <= dist <= max_distance}
+    return hexes_within_distance
+
+
+def get_safe_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_distance=1) -> set[int]:
+    """
+    Find all hexes within a certain hex distance from the start_hex (inclusive).
+    Hexes directly adjacent to the start_hex are considered 1 hex away,
+    hexes adjacent to those are 2 hexes away, etc.
+
+    "Safe" version works even if the start hex is not in the maze (i.e. the hex is one of the barriers).
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The hex to calculate distance from
+        max_distance (int): Maximum distance in hexes from the start hex (inclusive)
+        min_distance (int): Minimum distance in hexes from the start hex (inclusive).
+            Defaults to 1 to not include the start_hex
+
+    Returns:
+        set[int]: Set of hexes in the maze that are within the specified distance from the start_hex
+    """
+    # Convert all valid maze representations to a barrier set
+    barriers = maze_to_barrier_set(maze)
+
+    # Remove start hex from barriers if it is present
+    barriers.discard(start_hex)
+
+    # Convert barrier set to a nx.Graph object
+    graph = maze_to_graph(barriers)
 
     # Get a dict of shortest path lengths from the start_hex to all other hexes
     shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
