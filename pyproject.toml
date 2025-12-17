@@ -35,3 +35,6 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["hexmaze*"]
+
+[tool.black]
+line-length = 120
