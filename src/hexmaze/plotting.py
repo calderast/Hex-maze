@@ -5,6 +5,8 @@ This module contains functions for plotting hex mazes, plotting barrier sequence
 and working with hex centroids.
 """
 
+import matplotlib.axes
+import matplotlib.colors
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from collections import defaultdict
@@ -12,6 +14,16 @@ from itertools import chain
 import networkx as nx
 import numpy as np
 import math
+
+# For type hints
+from typing import (
+    Optional,
+    Union,
+    Iterable,
+    Mapping,
+    Sequence,
+    Literal,
+)
 
 from .utils import (
     create_empty_hex_maze, 
@@ -46,7 +58,7 @@ __all__ = [
 ]
 
 
-def get_distance_to_nearest_neighbor(hex_centroids: dict) -> dict:
+def get_distance_to_nearest_neighbor(hex_centroids: dict[int, tuple]) -> dict[int, float]:
     """
     Given a dictionary of hex: (x,y) centroid, calculate the minimum 
     euclidean distance to the closest neighboring hex centroid for each hex.
@@ -75,7 +87,7 @@ def get_distance_to_nearest_neighbor(hex_centroids: dict) -> dict:
     return min_distances
 
 
-def get_hex_sizes_from_centroids(hex_centroids: dict) -> dict:
+def get_hex_sizes_from_centroids(hex_centroids: dict[int, tuple]) -> dict:
     """
     Given a dictionary of hex: (x,y) centroid, calculate the height and radius
     (aka side length) of each hex, and the min/max/average hex height and radius.
@@ -108,7 +120,7 @@ def get_hex_sizes_from_centroids(hex_centroids: dict) -> dict:
     return hex_sizes_dict
 
 
-def get_min_max_centroids(hex_centroids: dict) -> tuple[float, float, float, float]:
+def get_min_max_centroids(hex_centroids: dict[int, tuple]) -> tuple[float, float, float, float]:
     """
     Given a dictionary of hex: (x, y) centroid, return the min and max
     values for x and y hex centroids. Helper for plotting
@@ -123,7 +135,7 @@ def get_min_max_centroids(hex_centroids: dict) -> tuple[float, float, float, flo
     return min(x_coords), max(x_coords), min(y_coords), max(y_coords)
 
 
-def get_hex_centroids(view_angle=1, scale=1, shift=[0, 0]) -> dict:
+def get_hex_centroids(view_angle:Literal[1, 2, 3]=1, scale:float=1, shift=[0, 0]) -> dict[int, tuple]:
     """
     Calculate the (x,y) coordinates of each hex centroid.
     Centroids are calculated relative to the centroid of the topmost hex at (0,0).
@@ -131,7 +143,7 @@ def get_hex_centroids(view_angle=1, scale=1, shift=[0, 0]) -> dict:
     Parameters:
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze. Defaults to 1
-        scale (int): The width of each hex (aka the length of the long diagonal,
+        scale (float): The width of each hex (aka the length of the long diagonal,
             aka 2x the length of a single side). Defaults to 1
         shift (list): The x shift and y shift of the coordinates (after scaling),
             such that the topmost hex sits at (x_shift, y_shift) instead of (0,0).
@@ -175,7 +187,7 @@ def get_hex_centroids(view_angle=1, scale=1, shift=[0, 0]) -> dict:
     return hex_positions
 
 
-def classify_triangle_vertices(vertices: list[tuple]) -> dict:
+def classify_triangle_vertices(vertices: list[tuple]) -> dict[str, tuple]:
     """
     Given a list of 3 triangle vertices, classify them as 'left', 'right' and
     'top' or 'bottom'. Useful for adjusting precise coordinates of where to plot
@@ -213,8 +225,12 @@ def scale_triangle_from_centroid(vertices: list[tuple], shift: float) -> list[tu
 
 
 def get_base_triangle_coords(
-    hex_positions, scale=1, chop_vertices=True, chop_vertices_2=False, show_edge_barriers=True
-) -> list:
+    hex_positions:dict[int, tuple], 
+    scale:float=1, 
+    chop_vertices:bool=True, 
+    chop_vertices_2:bool=False, 
+    show_edge_barriers:bool=True
+) -> list[tuple]:
     """
     Calculate the coordinates of the vertices of the base triangle that
     surrounds all of the hexes in the maze.
@@ -222,7 +238,7 @@ def get_base_triangle_coords(
 
     Parameters:
         hex_positions (dict): A dictionary of hex: (x,y) coordinates of centroids.
-        scale (int): The width of each hex (aka the length of the long diagonal,
+        scale (float): The width of each hex (aka the length of the long diagonal,
             aka 2x the length of a single side). Defaults to 1
         chop_vertices (bool): If the vertices of the triangle should be chopped off
             (because there are no permanent barriers behind the reward ports).
@@ -303,7 +319,7 @@ def get_base_triangle_coords(
         return vertices
 
 
-def get_stats_coords(hex_centroids: dict) -> dict:
+def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
     graph coordinates of where to display those stats based on the hex centroids.
@@ -338,33 +354,34 @@ def get_stats_coords(hex_centroids: dict) -> dict:
 
 
 def plot_hex_maze(
-    barriers=None,
-    old_barrier:int=None,
-    new_barrier:int=None,
-    show_barriers:bool=True,
-    show_choice_points:bool=True,
-    show_optimal_paths:bool=False,
-    show_arrow:bool=True,
-    show_barrier_change:bool=True,
-    show_hex_labels:bool=True,
-    show_stats:bool=True,
-    reward_probabilities:list=None,
-    show_permanent_barriers:bool=False,
-    show_edge_barriers:bool=True,
-    centroids:dict=None,
-    view_angle:int=1,
-    hex_path:list=None,
-    highlight_hexes=None,
-    highlight_colors=None,
-    color_by:dict=None,
-    colormap="plasma",
-    vmin=None,
-    vmax=None,
-    scale=1,
-    shift=[0, 0],
-    ax=None,
-    invert_yaxis:bool=False,
-):
+        barriers = None,
+        old_barrier: Optional[int] = None,
+        new_barrier: Optional[int] = None,
+        show_barriers: bool = True,
+        show_choice_points: bool = True,
+        show_optimal_paths: bool = False,
+        show_arrow: bool = True,
+        show_barrier_change: bool = True,
+        show_hex_labels: bool = True,
+        show_stats: bool = True,
+        reward_probabilities: Optional[Sequence[float]] = None,
+        show_permanent_barriers: bool = False,
+        show_edge_barriers: bool = True,
+        centroids: Optional[Mapping[int, tuple[float, float]]] = None,
+        view_angle: Literal[1, 2, 3] = 1,
+        hex_path: Optional[Sequence[int]] = None,
+        arrows: Optional[Mapping[int, Sequence[int]]] = None,
+        highlight_hexes: Optional[Union[set[int], Sequence[set[int]]]] = None,
+        highlight_colors: Optional[Union[str, Sequence[str]]] = None,
+        color_by: Optional[Mapping[int, float]] = None,
+        colormap: Union[str, matplotlib.colors.Colormap] = "plasma",
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        scale: float = 1.0,
+        shift: Sequence[float] = (0.0, 0.0),
+        ax: Optional[matplotlib.axes.Axes] = None,
+        invert_yaxis: bool = False,
+    ) -> None:
     """
     Given a set of barriers specifying a hex maze, plot the maze
     in classic hex maze style.
@@ -415,6 +432,8 @@ def plot_hex_maze(
             when viewing the hex maze, if centroids is not specified. Defaults to 1
         hex_path (list[int]): List of hexes specifying a path taken through the maze.
             The path will be shown by black arrows between hexes. Defaults to None
+        arrows (dict[int, list[int]]): Dictionary mapping source hex to one or more target hexes.
+            Gray arrows will be drawn from each source hex to all of its target hexes. Defaults to None
         highlight_hexes (set[int] or list[set]): A set (or list[set]) of hexes to highlight.
             Takes precedence over other hex highlights (choice points, etc). Defaults to None.
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
@@ -493,6 +512,35 @@ def plot_hex_maze(
             # Color hexes by value
             for h, val in values.items():
                 hex_colors[h] = cmap(norm(val))
+
+    # Optional – draw grey arrows between arbitrary hexes
+    if arrows is not None:
+        for source_hex, target_hexes in arrows.items():
+            if source_hex not in hex_coordinates:
+                continue
+
+            start = np.array(hex_coordinates[source_hex])
+
+            # Draw arrows from the source hex to all of its target hexes
+            for target_hex in target_hexes:
+                if target_hex not in hex_coordinates:
+                    continue
+                end = np.array(hex_coordinates[target_hex])
+
+                ax.annotate(
+                    "",
+                    xy=end,
+                    xycoords="data",
+                    xytext=start,
+                    textcoords="data",
+                    arrowprops=dict(
+                        arrowstyle="-|>",
+                        color="grey",
+                        linewidth=1,
+                        shrinkA=scale * 0.35,
+                        shrinkB=scale * 0.35,
+                    ),
+                )
 
     # Optional - plot a path through the maze with arrows
     if hex_path is not None and len(hex_path) > 1:
