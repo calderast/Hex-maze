@@ -10,6 +10,8 @@ import numpy as np
 import math
 from collections import Counter
 
+from typing import Union
+
 from .utils import (
     maze_to_graph, 
     maze_to_barrier_set, 
@@ -91,8 +93,12 @@ __all__ = [
     "get_reward_path_lengths",
     "get_path_length_difference",
     "get_path_independent_hexes_to_port",
+    "get_unreachable_hexes",
     "get_hexes_from_port",
+    "get_hex_distance",
+    "get_safe_hex_distance",
     "get_hexes_within_distance",
+    "get_safe_hexes_within_distance",
     "distance_to_nearest_hex_in_group",
     "get_hexes_on_optimal_paths",
     "get_non_dead_end_hexes",
@@ -315,6 +321,32 @@ def get_path_independent_hexes_to_port(maze, reward_port) -> set[int]:
     return path_independent_hexes
 
 
+def get_unreachable_hexes(maze) -> set[int]:
+    """
+    Find hexes, if any, that are unreachable from the rest of the maze.
+    Some older barrier change configurations included these unreachable hex "islands".
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: The set of unreachable hexes, if they exist
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Then main maze component is the component containing hex 1
+    main_component = set(nx.node_connected_component(graph, 1))
+
+    # Sanity check: hexes 2 and 3 must also be in the main component
+    if not {2, 3}.issubset(main_component):
+        raise ValueError("Invalid hex maze: hexes 1, 2, and 3 are not all reachable from each other")
+
+    # All hexes not in the main component are unreachable
+    return set(graph.nodes) - main_component
+
+
 def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
     """
     Find the minimum number of hexes from a given hex to a
@@ -338,6 +370,62 @@ def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
 
     # Get the shortest path length between start_hex and the reward port
     return nx.shortest_path_length(graph, source=start_hex, target=port_hex)
+
+
+def get_hex_distance(maze, start_hex: int, target_hex: int) -> int:
+    """
+    Find the minimum hex distance between a pair of hexes for a given maze configuration.
+    Adjacent hexes have a distance of 1. 
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The hex to calculate distance from
+        target_hex (int): The hex to calculate distance to
+
+    Returns:
+        int: The number of hexes from start_hex to target_hex
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Get the shortest path length between start_hex and target_hex
+    return nx.shortest_path_length(graph, source=start_hex, target=target_hex)
+
+
+def get_safe_hex_distance(maze, start_hex: int, target_hex: int) -> int:
+    """
+    Find the minimum hex distance between a pair of hexes for a given maze configuration.
+    Adjacent hexes have a distance of 1. 
+
+    "Safe" version works even if the source or target hex is not in the maze 
+    (i.e. the hex is one of the barriers).
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The hex to calculate distance from
+        target_hex (int): The hex to calculate distance to
+
+    Returns:
+        int: The number of hexes from start_hex to target_hex
+    """
+    # Convert all valid maze representations to a barrier set
+    barriers = maze_to_barrier_set(maze)
+
+    # Remove source and target hex from barriers if they are present
+    barriers.discard(start_hex)
+    barriers.discard(target_hex)
+
+    # Convert barrier set to a nx.Graph object
+    graph = maze_to_graph(barriers)
+
+    # Get the shortest path length between start_hex and target_hex
+    try:
+        return nx.shortest_path_length(graph, source=start_hex, target=target_hex)
+    # Or return "inf" if no path exists (either the source or target is an unreachable island)
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return np.inf 
 
 
 def get_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_distance=1) -> set[int]:
@@ -368,7 +456,46 @@ def get_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_d
     return hexes_within_distance
 
 
-def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> int | dict:
+def get_safe_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_distance=1) -> set[int]:
+    """
+    Find all hexes within a certain hex distance from the start_hex (inclusive).
+    Hexes directly adjacent to the start_hex are considered 1 hex away,
+    hexes adjacent to those are 2 hexes away, etc.
+
+    "Safe" version works even if the start hex is not in the maze (i.e. the hex is one of the barriers).
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The hex to calculate distance from
+        max_distance (int): Maximum distance in hexes from the start hex (inclusive)
+        min_distance (int): Minimum distance in hexes from the start hex (inclusive).
+            Defaults to 1 to not include the start_hex
+
+    Returns:
+        set[int]: Set of hexes in the maze that are within the specified distance from the start_hex
+    """
+    # Convert all valid maze representations to a barrier set
+    barriers = maze_to_barrier_set(maze)
+
+    # Remove start hex from barriers if it is present
+    barriers.discard(start_hex)
+
+    # Convert barrier set to a nx.Graph object
+    graph = maze_to_graph(barriers)
+
+    # Get a dict of shortest path lengths from the start_hex to all other hexes
+    try:
+        shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
+    except nx.NodeNotFound:
+        return set()
+
+    # Get hexes that are between min_distance and max_distance (inclusive)
+    hexes_within_distance = {hex for hex, dist in shortest_paths.items() if min_distance <= dist <= max_distance}
+    return hexes_within_distance
+
+
+def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> Union[int, dict]:
     """
     Calculate the distance (in hexes) between each hexes in 'hexes' and
     the nearest hex in the target group. Often used to calculate how far into
