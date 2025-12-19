@@ -10,6 +10,8 @@ import numpy as np
 import math
 from collections import Counter
 
+from typing import Union
+
 from .utils import (
     maze_to_graph, 
     maze_to_barrier_set, 
@@ -422,7 +424,7 @@ def get_safe_hex_distance(maze, start_hex: int, target_hex: int) -> int:
     try:
         return nx.shortest_path_length(graph, source=start_hex, target=target_hex)
     # Or return "inf" if no path exists (either the source or target is an unreachable island)
-    except nx.NetworkXNoPath:
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
         return np.inf 
 
 
@@ -483,14 +485,17 @@ def get_safe_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, 
     graph = maze_to_graph(barriers)
 
     # Get a dict of shortest path lengths from the start_hex to all other hexes
-    shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
+    try:
+        shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
+    except nx.NodeNotFound:
+        return set()
 
     # Get hexes that are between min_distance and max_distance (inclusive)
     hexes_within_distance = {hex for hex, dist in shortest_paths.items() if min_distance <= dist <= max_distance}
     return hexes_within_distance
 
 
-def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> int | dict:
+def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> Union[int, dict]:
     """
     Calculate the distance (in hexes) between each hexes in 'hexes' and
     the nearest hex in the target group. Often used to calculate how far into
