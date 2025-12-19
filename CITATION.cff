@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis"
-version: 1.0.2
+version: 1.0.3
 date-released: 2025-11-17
 
 authors:
@@ -9,7 +9,7 @@ authors:
     given-names: Stephanie
     affiliation: "Berke Lab, UCSF"
 
-doi: 10.5281/zenodo.17635392
+doi: 10.5281/zenodo.17635391
 license: MIT
 repository-code: "https://github.com/calderast/Hex-maze"
 
@@ -19,6 +19,6 @@ preferred-citation:
   authors:
     - family-names: Crater
       given-names: Stephanie
-  version: 1.0.2
-  doi: 10.5281/zenodo.17635392
+  version: 1.0.3
+  doi: 10.5281/zenodo.17635391
   date-released: 2025-11-17

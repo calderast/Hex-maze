@@ -19,7 +19,6 @@ import math
 from typing import (
     Optional,
     Union,
-    Iterable,
     Mapping,
     Sequence,
     Literal,
