@@ -16,7 +16,7 @@ Reference these notebooks if you are working with hex maze data.
 ## 2. Searching maze databases
 
 These notebooks cover loading and filtering the maze databases to find optimal configurations for your experiments. 
-Refrence these notebooks if you are running experiments using the hex maze.
+Reference these notebooks if you are running experiments using the hex maze.
 See [Maze Configuration Database Search](./20_Maze_Configuration_Database_Search.ipynb) and [Barrier Sequence Database Search](./21_Barrier_Sequence_Database_Search.ipynb).
 
 ## 3. Generating maze databases 
