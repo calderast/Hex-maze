@@ -15,8 +15,15 @@ Then import functions from the package in your Python script or Jupyter notebook
 
 ```python
 from hexmaze import plot_hex_maze
-plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
+
+# Plot an example hex maze
+plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False, show_choice_points=False, show_stats=False)
 ```
+
+Plot of the example hex maze configuration:
+
+![Example hex maze](./Tutorials/example_data/example_hex_maze.png)
+
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
 Follow the developer instructions to install from source to access the tutorials and databases.
@@ -47,21 +54,19 @@ Once you have forked the repository, you need to clone it to your local machine 
     pip install -r requirements.txt
 
 ### Step 3. Start the tutorials
-Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`](Tutorials/Getting_Started.ipynb) notebook.
+Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`](./Tutorials/00_Getting_Started.ipynb) notebook.
 
 `Tutorials/` also includes the following tutorial notebooks:
-- [Plotting hex mazes and barrier change sequences](Tutorials/Plotting_Hex_Mazes.ipynb)
-- [Searching the maze configuration database for the mazes you want](Tutorials/Maze_Configuration_Database_Search.ipynb)
-- [Searching the barrier sequence database for the sequence you want](Tutorials/Barrier_Sequence_Database_Search.ipynb)
-- [Demos of useful hex maze functions](Tutorials/Hex_Maze_Functions.ipynb)
-- [Generating barrier sequences with custom criteria](Tutorials/Generate_Custom_Barrier_Sequence_Database.ipynb)
+- [Demos of useful hex maze functions](./Tutorials/10_Hex_Maze_Functions.ipynb)
+- [Plotting hex mazes and barrier change sequences](./Tutorials/11_Plotting_Hex_Mazes.ipynb)
+- [Searching the maze configuration database for the mazes you want](./Tutorials/20_Maze_Configuration_Database_Search.ipynb)
+- [Searching the barrier sequence database for the sequence you want](./Tutorials/21_Barrier_Sequence_Database_Search.ipynb)
+- [Generating barrier sequences with custom criteria](./Tutorials/33_Generate_Custom_Barrier_Sequence_Database.ipynb)
 
 These 3 are also provided for reference:
-- [How the hex maze database was generated](Tutorials/Generate_Hex_Maze_Database.ipynb)
-- [How the probability change database was generated](Tutorials/Generate_Probability_Change_Database.ipynb)
-- [How the training maze database was generated](Tutorials/Generate_Training_Maze_Database.ipynb)
-
-Note that some of these tutorials are currently in progress, LMK if you need one asap and I'll make it a priority!
+- [How the hex maze database was generated](./Tutorials/30_Generate_Hex_Maze_Database.ipynb)
+- [How the training maze database was generated](./Tutorials/31_Generate_Training_Maze_Database.ipynb)
+- [How the probability change database was generated](./Tutorials/32_Generate_Probability_Change_Database.ipynb)
 
 ### Step 4: Explore and use the databases!
 This repo provides the following databases of valid maze configurations and barrier change sequences for the hex maze task:
