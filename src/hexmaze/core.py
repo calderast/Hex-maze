@@ -94,7 +94,9 @@ __all__ = [
     "get_path_length_difference",
     "get_path_independent_hexes_to_port",
     "get_unreachable_hexes",
+    "get_closest_port",
     "get_hexes_from_port",
+    "get_hexes_from_closest_port",
     "get_hex_distance",
     "get_safe_hex_distance",
     "get_hexes_within_distance",
@@ -347,6 +349,33 @@ def get_unreachable_hexes(maze) -> set[int]:
     return set(graph.nodes) - main_component
 
 
+def get_closest_port(maze, start_hex: int) -> list[int]:
+    """
+    Find the closest reward port(s) to a given hex for a given maze configuration.
+    Returns a list to handle cases where multiple ports are equally close.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The hex to calculate distance from
+
+    Returns:
+        list[int]: The reward port(s) (1, 2, and/or 3) that are closest to start_hex
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Calculate distance to each reward port
+    distances = {
+        port: nx.shortest_path_length(graph, source=start_hex, target=port)
+        for port in [1, 2, 3]
+    }
+
+    # Return all ports that have the minimum distance
+    min_distance = min(distances.values())
+    return [port for port, dist in distances.items() if dist == min_distance]
+
+
 def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
     """
     Find the minimum number of hexes from a given hex to a
@@ -370,6 +399,30 @@ def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
 
     # Get the shortest path length between start_hex and the reward port
     return nx.shortest_path_length(graph, source=start_hex, target=port_hex)
+
+
+def get_hexes_from_closest_port(maze, start_hex: int) -> int:
+    """
+    Find the minimum number of hexes from a given hex to the
+    closest reward port for a given maze configuration.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The hex to calculate distance from
+
+    Returns:
+        int: The number of hexes from start_hex to the closest reward port
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Calculate distance to each reward port and return the minimum
+    distances = [
+        nx.shortest_path_length(graph, source=start_hex, target=port)
+        for port in [1, 2, 3]
+    ]
+    return min(distances)
 
 
 def get_hex_distance(maze, start_hex: int, target_hex: int) -> int:
