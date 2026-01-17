@@ -129,16 +129,16 @@ This software is licensed under the MIT License. See [LICENSE](LICENSE).
 
 If you use **Hex-maze-neuro** in your research, please cite it as:
 
-> Crater, Stephanie (2025). Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis. Zenodo. https://doi.org/10.5281/zenodo.17635391
+> Crater, Stephanie (2026). Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis. Zenodo. https://doi.org/10.5281/zenodo.17635391
 
 
 ```bibtex
-@software{crater_hexmazeneuro_2025,
+@software{crater_hexmazeneuro_2026,
   author       = {Crater, Stephanie},
   title        = {Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis},
-  version      = {1.0.4},
-  year         = {2025},
-  month        = nov,
+  version      = {1.0.5},
+  year         = {2026},
+  month        = jan,
   publisher    = {Zenodo},
   doi          = {10.5281/zenodo.17635391},
   url          = {https://doi.org/10.5281/zenodo.17635391}
