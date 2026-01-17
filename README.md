@@ -17,12 +17,12 @@ Then import functions from the package in your Python script or Jupyter notebook
 from hexmaze import plot_hex_maze
 
 # Plot an example hex maze
-plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False, show_choice_points=False, show_stats=False)
+plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
 ```
 
 Plot of the example hex maze configuration:
 
-![Example hex maze](./Tutorials/example_data/example_hex_maze.png)
+![Example hex maze](./src/hexmaze/assets/example_hex_maze.png)
 
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
@@ -129,16 +129,16 @@ This software is licensed under the MIT License. See [LICENSE](LICENSE).
 
 If you use **Hex-maze-neuro** in your research, please cite it as:
 
-> Crater, Stephanie (2025). Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis. Zenodo. https://doi.org/10.5281/zenodo.17635391
+> Crater, Stephanie (2026). Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis. Zenodo. https://doi.org/10.5281/zenodo.17635391
 
 
 ```bibtex
-@software{crater_hexmazeneuro_2025,
+@software{crater_hexmazeneuro_2026,
   author       = {Crater, Stephanie},
   title        = {Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis},
-  version      = {1.0.4},
-  year         = {2025},
-  month        = nov,
+  version      = {1.0.5},
+  year         = {2026},
+  month        = jan,
   publisher    = {Zenodo},
   doi          = {10.5281/zenodo.17635391},
   url          = {https://doi.org/10.5281/zenodo.17635391}

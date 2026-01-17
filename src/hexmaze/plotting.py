@@ -14,6 +14,8 @@ from itertools import chain
 import networkx as nx
 import numpy as np
 import math
+from pathlib import Path
+from PIL import Image
 
 # For type hints
 from typing import (
@@ -318,6 +320,56 @@ def get_base_triangle_coords(
         return vertices
 
 
+def load_rat_image():
+    """
+    Helper to load the rat image file from the assets directory.
+
+    Returns:
+        PIL.Image: The rat image
+    """
+    img_path = Path(__file__).parent / "assets" / "long_evans.png"
+    img = Image.open(img_path)
+    return img
+
+
+def plot_rat_image(ax, position, heading_angle, scale=1.0):
+    """
+    Plot a rat image at the specified position with the given heading.
+
+    Parameters:
+        ax (matplotlib.axes.Axes): The axis on which to plot the rat
+        position (tuple): (x, y) coordinates where to place the rat
+        heading_angle (float): Angle in degrees to rotate the rat (0 = pointing up)
+        scale (float): Scale factor for the rat size relative to hex size
+    """
+    # Load the rat image
+    img = load_rat_image()
+    img_width, img_height = img.size
+    img_scale = scale * 1.5 / max(img_width, img_height)
+
+    # Rotate the image
+    # Note: PIL rotates counter-clockwise, and we want 0 degrees = pointing up
+    # The image should already be pointing up, so we just rotate by the heading angle
+    rotated_img = img.rotate(-heading_angle, expand=True, resample=Image.BICUBIC)
+
+    # Get the dimensions of the rotated image and calculate display size
+    rot_width, rot_height = rotated_img.size
+    display_width = rot_width * img_scale
+    display_height = rot_height * img_scale
+
+    # Calculate the extent (left, right, bottom, top) for imshow
+    # Center the image at the position
+    extent = [
+        position[0] - display_width / 2,
+        position[0] + display_width / 2,
+        position[1] - display_height / 2,
+        position[1] + display_height / 2
+    ]
+
+    # Display the image
+    ax.imshow(rotated_img, extent=extent, zorder=10, interpolation='bilinear')
+
+
 def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
@@ -357,12 +409,12 @@ def plot_hex_maze(
         old_barrier: Optional[int] = None,
         new_barrier: Optional[int] = None,
         show_barriers: bool = True,
-        show_choice_points: bool = True,
+        show_choice_points: bool = False,
         show_optimal_paths: bool = False,
         show_arrow: bool = True,
         show_barrier_change: bool = True,
         show_hex_labels: bool = True,
-        show_stats: bool = True,
+        show_stats: bool = False,
         reward_probabilities: Optional[Sequence[float]] = None,
         show_permanent_barriers: bool = False,
         show_edge_barriers: bool = True,
@@ -376,6 +428,9 @@ def plot_hex_maze(
         colormap: Union[str, matplotlib.colors.Colormap] = "plasma",
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
+        rat: int = None,
+        rat_to: int = None,
+        rat_from: int = None,
         scale: float = 1.0,
         shift: Sequence[float] = (0.0, 0.0),
         ax: Optional[matplotlib.axes.Axes] = None,
@@ -405,7 +460,7 @@ def plot_hex_maze(
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to True
         show_choice_points (bool): If the choice points should be shown in yellow.
-            If False, the choice points are not indicated on the plot. Defaults to True
+            If False, the choice points are not indicated on the plot. Defaults to False
         show_optimal_paths (bool): Highlight the hexes on optimal paths between
             reward ports in light green. Defaults to False
         show_arrow (bool): Draw an arrow indicating barrier movement from the
@@ -415,7 +470,7 @@ def plot_hex_maze(
             on the maze. Defaults to True if old_barrier and new_barrier are not None.
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
-            on the graph. Defaults to True
+            on the graph. Defaults to False
         reward_probabilities (list): Reward probabilities in format [pA, pB, pC] to print
             next to the reward port hexes. Defaults to None
         show_permanent_barriers (bool): If the permanent barriers should be shown
@@ -438,16 +493,22 @@ def plot_hex_maze(
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
             Each color in this list applies to the respective set of hexes in highlight_hexes.
             Defaults to 'darkorange' for a single group.
-        color_by (dict): Dictionary of hex_id: value. Hexes will be colored by their corresponding 
+        color_by (dict): Dictionary of hex_id: value. Hexes will be colored by their corresponding
             value using the specified colormap. Overridden by highlight_hexes. Defaults to None.
-        colormap (str or matplotlib.colors.Colormap): Matplotlib colormap to use for 
+        colormap (str or matplotlib.colors.Colormap): Matplotlib colormap to use for
             `color_by` values. Defaults to 'plasma'.
-        vmin (float): Minimum value for colormap normalization, if using `color_by`. 
-            Values in `color_by` less than `vmin` will be clipped to the lowest color. 
+        vmin (float): Minimum value for colormap normalization, if using `color_by`.
+            Values in `color_by` less than `vmin` will be clipped to the lowest color.
             If None, the minimum of `color_by` values is used. Defaults to None.
         vmax (float): Maximum value for colormap normalization, if using `color_by`.
-            Values in `color_by` greater than `vmax` will be clipped to the highest color. 
+            Values in `color_by` greater than `vmax` will be clipped to the highest color.
             If None, the maximum of `color_by` values is used. Defaults to None.
+        rat (int): Hex where the rat is located. If specified, plots a long evans rat at this hex.
+            By default the rat faces vertically up. Use rat_to or rat_from to change direction.
+        rat_to (int): Hex the rat is going to (facing towards). The rat will be rotated to
+            point towards this hex. Only used if rat is specified. Defaults to None (rat faces up).
+        rat_from (int): Hex the rat came from (facing away from). The rat will be rotated to
+            point away from this hex. Only used if rat is specified. Ignored if rat_to is set.
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
@@ -485,11 +546,12 @@ def plot_hex_maze(
         # Otherwise, get a dictionary of the (x,y) coordinates of each hex centroid based on maze view angle
         hex_coordinates = get_hex_centroids(view_angle=view_angle, scale=scale, shift=shift)
 
+    # Copy hex coordinates so we still have barrier positions etc if we pop them
+    hex_coordinates_copy = hex_coordinates.copy()
+
     # Get a dictionary of stats coordinates based on hex coordinates
     if show_stats or reward_probabilities is not None:
         stats_coordinates = get_stats_coords(hex_coordinates)
-    # Define this for times we want to draw the arrow but not show barriers
-    new_barrier_coords = None
 
     # Make the open hexes light blue
     hex_colors = {node: "skyblue" for node in hex_maze.nodes()}
@@ -601,9 +663,6 @@ def plot_hex_maze(
                 hex_colors.update({hex: "black"})
         # Or if we don't want to show the barriers, remove them
         else:
-            # Save the coordinates of the new barrier hex if we still want to draw the arrow
-            if new_barrier is not None and show_arrow:
-                new_barrier_coords = hex_coordinates.pop(new_barrier, None)
             # Remove the barrier hexes from all of our dicts
             for hex in barriers:
                 hex_coordinates.pop(hex, None)
@@ -689,8 +748,8 @@ def plot_hex_maze(
     # If we have a barrier change, add an arrow between the old_barrier and new_barrier to show barrier movement
     if show_arrow and old_barrier is not None and new_barrier is not None:
         arrow_start = hex_coordinates[old_barrier]
-        # If we removed new_barrier from our dict (because show_barriers=False), use the saved coordinates
-        arrow_end = hex_coordinates.get(new_barrier, new_barrier_coords)
+        # We may have removed new_barrier from our dict (if show_barriers=False), so use the copy coordinates
+        arrow_end = hex_coordinates_copy.get(new_barrier)
         ax.annotate(
             "",
             xy=arrow_end,
@@ -752,12 +811,38 @@ def plot_hex_maze(
     ax.set_yticks([])
     ax.set_aspect("equal", adjustable="box")
 
-    # Optional - invert yaxis. 
+    # Optional - invert yaxis.
     # This can be useful when plotting a hex maze with hex centroids from the maze video,
     # as video pixel coordinates use top left as (0,0) so the maze appears flipped when
     # hexes in video coordinates are plotted on "normal" axes
     if invert_yaxis:
         ax.invert_yaxis()
+
+    # Optional - plot a rat at a specific hex facing a specific direction
+    if rat is not None:
+        # Get the position of the rat's hex
+        if rat not in hex_coordinates:
+            raise ValueError(f"Rat position hex {rat} not found in maze coordinates")
+        rat_position = hex_coordinates[rat]
+
+        # Determine heading angle (0 degrees = facing up by default)
+        heading_angle = 0
+
+        if rat_to is not None and rat_to in hex_coordinates_copy:
+            # Rat faces towards the specified hex
+            to_position = hex_coordinates_copy[rat_to]
+            dx = to_position[0] - rat_position[0]
+            dy = to_position[1] - rat_position[1]
+            heading_angle = np.degrees(np.arctan2(dx, dy))
+        elif rat_from is not None and rat_from in hex_coordinates_copy:
+            # Rat faces away from the specified hex (opposite direction)
+            from_position = hex_coordinates_copy[rat_from]
+            dx = rat_position[0] - from_position[0]
+            dy = rat_position[1] - from_position[1]
+            heading_angle = np.degrees(np.arctan2(dx, dy))
+
+        # Plot the rat on the maze
+        plot_rat_image(ax, rat_position, heading_angle, scale=scale)
 
     # If no axis was provided as an argument, show the plot now
     if show_plot:
@@ -787,7 +872,7 @@ def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to True
         show_choice_points (bool): If the choice points should be shown in yellow.
-            If False, the choice points are not indicated on the plot. Defaults to True
+            If False, the choice points are not indicated on the plot. Defaults to False
         show_optimal_paths (bool): Highlight the hexes on optimal paths between
             reward ports in light green. Defaults to False
         show_arrow (bool): Draw an arrow indicating barrier movement from the
@@ -822,6 +907,9 @@ def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info
 
     # Find the barriers moved from one configuration to the next
     barrier_changes = get_barrier_changes(barrier_sequence)
+
+    # By default, make show_barriers=True
+    kwargs.setdefault("show_barriers", True)
 
     # If we want all mazes in a row on the same plot, use this
     if same_plot:
@@ -881,14 +969,9 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
         show_choice_points (bool): If the choice points should be shown in yellow.
-            If False, the choice points are not indicated on the plot. Defaults to True
+            If False, the choice points are not indicated on the plot. Defaults to False
         show_optimal_paths (bool): Highlight the hexes on optimal paths between
             reward ports in light green. Defaults to False
-        show_arrow (bool): Draw an arrow indicating barrier movement from the
-            old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and
-            new_barrier are not None
-        show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes
-            on the maze. Defaults to True if old_barrier and new_barrier are not None.
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
@@ -908,9 +991,6 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
     Other function behavior to note:
     - Hexes specified in highlight_hexes takes precedence over all other highlights.
     - If the same hex is specified multiple times in highlight_hexes, the last time takes precedence.
-    - Highlighting choice points takes precedence over highlighting barrier change hexes,
-        as they are also shown by the movement arrow. If show_barriers=False, the new_barrier hex
-        will not be shown even if show_barrier_change=True (because no barriers are shown with this option.)
     - show_optimal_paths has the lowest precedence (will be overridden by all other highlights).
     """
 
@@ -964,11 +1044,6 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
             If False, the choice points are not indicated on the plot. Defaults to False
         show_optimal_paths (bool): Highlight the hexes on optimal paths between
             reward ports in light green. Defaults to False
-        show_arrow (bool): Draw an arrow indicating barrier movement from the
-            old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and
-            new_barrier are not None
-        show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes
-            on the maze. Defaults to True if old_barrier and new_barrier are not None.
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
@@ -1093,11 +1168,6 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], **kwargs):
             If False, the choice points are not indicated on the plot. Defaults to False
         show_optimal_paths (bool): Highlight the hexes on optimal paths between
             reward ports in light green. Defaults to False
-        show_arrow (bool): Draw an arrow indicating barrier movement from the
-            old_barrier hex to the new_barrier hex. Defaults to True if old_barrier and
-            new_barrier are not None
-        show_barrier_change (bool): Highlight the old_barrier and new_barrier hexes
-            on the maze. Defaults to True if old_barrier and new_barrier are not None.
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to False
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
