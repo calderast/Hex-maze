@@ -6,3 +6,6 @@ __pycache__/*
 .DS_Store
 venv/
 clean_env/
+dist/*
+src/hex_maze_neuro.egg-info/*
+src/hexmaze/__pycache__/*

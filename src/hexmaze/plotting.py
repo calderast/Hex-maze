@@ -14,6 +14,8 @@ from itertools import chain
 import networkx as nx
 import numpy as np
 import math
+from pathlib import Path
+from PIL import Image
 
 # For type hints
 from typing import (
@@ -318,6 +320,56 @@ def get_base_triangle_coords(
         return vertices
 
 
+def load_rat_image():
+    """
+    Helper to load the rat image file from the assets directory.
+
+    Returns:
+        PIL.Image: The rat image
+    """
+    img_path = Path(__file__).parent / "assets" / "long-evans.png"
+    img = Image.open(img_path)
+    return img
+
+
+def plot_rat_image(ax, position, heading_angle, scale=1.0):
+    """
+    Plot a rat image at the specified position with the given heading.
+
+    Parameters:
+        ax (matplotlib.axes.Axes): The axis on which to plot the rat
+        position (tuple): (x, y) coordinates where to place the rat
+        heading_angle (float): Angle in degrees to rotate the rat (0 = pointing up)
+        scale (float): Scale factor for the rat size relative to hex size
+    """
+    # Load the rat image
+    img = load_rat_image()
+    img_width, img_height = img.size
+    img_scale = scale * 1.5 / max(img_width, img_height)
+
+    # Rotate the image
+    # Note: PIL rotates counter-clockwise, and we want 0 degrees = pointing up
+    # The image should already be pointing up, so we just rotate by the heading angle
+    rotated_img = img.rotate(-heading_angle, expand=True, resample=Image.BICUBIC)
+
+    # Get the dimensions of the rotated image and calculate display size
+    rot_width, rot_height = rotated_img.size
+    display_width = rot_width * img_scale
+    display_height = rot_height * img_scale
+
+    # Calculate the extent (left, right, bottom, top) for imshow
+    # Center the image at the position
+    extent = [
+        position[0] - display_width / 2,
+        position[0] + display_width / 2,
+        position[1] - display_height / 2,
+        position[1] + display_height / 2
+    ]
+
+    # Display the image
+    ax.imshow(rotated_img, extent=extent, zorder=10, interpolation='bilinear')
+
+
 def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
@@ -376,6 +428,7 @@ def plot_hex_maze(
         colormap: Union[str, matplotlib.colors.Colormap] = "plasma",
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
+        rat: tuple = None,
         scale: float = 1.0,
         shift: Sequence[float] = (0.0, 0.0),
         ax: Optional[matplotlib.axes.Axes] = None,
@@ -438,16 +491,18 @@ def plot_hex_maze(
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
             Each color in this list applies to the respective set of hexes in highlight_hexes.
             Defaults to 'darkorange' for a single group.
-        color_by (dict): Dictionary of hex_id: value. Hexes will be colored by their corresponding 
+        color_by (dict): Dictionary of hex_id: value. Hexes will be colored by their corresponding
             value using the specified colormap. Overridden by highlight_hexes. Defaults to None.
-        colormap (str or matplotlib.colors.Colormap): Matplotlib colormap to use for 
+        colormap (str or matplotlib.colors.Colormap): Matplotlib colormap to use for
             `color_by` values. Defaults to 'plasma'.
-        vmin (float): Minimum value for colormap normalization, if using `color_by`. 
-            Values in `color_by` less than `vmin` will be clipped to the lowest color. 
+        vmin (float): Minimum value for colormap normalization, if using `color_by`.
+            Values in `color_by` less than `vmin` will be clipped to the lowest color.
             If None, the minimum of `color_by` values is used. Defaults to None.
         vmax (float): Maximum value for colormap normalization, if using `color_by`.
-            Values in `color_by` greater than `vmax` will be clipped to the highest color. 
+            Values in `color_by` greater than `vmax` will be clipped to the highest color.
             If None, the maximum of `color_by` values is used. Defaults to None.
+        rat (tuple): Tuple of (current_hex, facing_hex) to plot a rat image at the current_hex
+            position, rotated to face the facing_hex direction. Defaults to None.
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
@@ -752,12 +807,34 @@ def plot_hex_maze(
     ax.set_yticks([])
     ax.set_aspect("equal", adjustable="box")
 
-    # Optional - invert yaxis. 
+    # Optional - invert yaxis.
     # This can be useful when plotting a hex maze with hex centroids from the maze video,
     # as video pixel coordinates use top left as (0,0) so the maze appears flipped when
     # hexes in video coordinates are plotted on "normal" axes
     if invert_yaxis:
         ax.invert_yaxis()
+
+    # Optional - plot a rat at a specific hex facing a specific direction
+    if rat is not None:
+        current_hex, facing_hex = rat
+
+        # Get the position of the current hex
+        if current_hex not in hex_coordinates:
+            raise ValueError(f"Rat position hex {current_hex} not found in maze coordinates")
+        # Set facing_hex to current hex as a default (this plots rat facing up)
+        if facing_hex not in hex_coordinates:
+            facing_hex = current_hex
+
+        rat_position = hex_coordinates[current_hex]
+        facing_position = hex_coordinates[facing_hex]
+
+        # Calculate the angle to rotate the rat (0 degrees = facing up)
+        dx = facing_position[0] - rat_position[0]
+        dy = facing_position[1] - rat_position[1]
+        heading_angle = np.degrees(np.arctan2(dx, dy))
+
+        # Plot the rat on the maze
+        plot_rat_image(ax, rat_position, heading_angle, scale=scale)
 
     # If no axis was provided as an argument, show the plot now
     if show_plot:

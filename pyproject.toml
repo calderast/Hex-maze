@@ -38,3 +38,6 @@ include = ["hexmaze*"]
 
 [tool.black]
 line-length = 120
+
+[tool.setuptools.package-data]
+hexmaze = ["assets/*.png"]
