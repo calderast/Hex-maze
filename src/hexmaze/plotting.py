@@ -908,6 +908,9 @@ def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info
     # Find the barriers moved from one configuration to the next
     barrier_changes = get_barrier_changes(barrier_sequence)
 
+    # By default, make show_barriers=True
+    kwargs.setdefault("show_barriers", True)
+
     # If we want all mazes in a row on the same plot, use this
     if same_plot:
         # Set up a 1x(num mazes) plot so we can put each maze in a subplot
@@ -972,6 +975,11 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
+        show_permanent_barriers (bool): If the permanent barriers should be shown
+            as black hexes. Includes edge barriers. Defaults to False
+        show_edge_barriers (bool): Only an option if show_permanent_barriers=True.
+            Gives the option to exclude edge barriers when showing permanent barriers.
+            Defaults to True if show_permanent_barriers=True
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze. Defaults to 1
         highlight_hexes (set[int] or list[set]): A set (or list[set]) of hexes to highlight.
@@ -1039,6 +1047,11 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to True
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
+        show_permanent_barriers (bool): If the permanent barriers should be shown
+            as black hexes. Includes edge barriers. Defaults to False
+        show_edge_barriers (bool): Only an option if show_permanent_barriers=True.
+            Gives the option to exclude edge barriers when showing permanent barriers.
+            Defaults to True if show_permanent_barriers=True
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze. Defaults to 1
 
@@ -1063,8 +1076,9 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
     maze1_hexes_path23, maze2_hexes_path23 = hexes_different_between_paths(maze1_optimal_23, maze2_optimal_23)
     num_hexes_different_path23 = len(maze1_hexes_path23 | maze2_hexes_path23)
 
-    # By default, make show_stats=True and show_barriers=False
+    # By default, make show_stats=True, show_barriers=False, show_choice_points=False
     kwargs.setdefault("show_barriers", False)
+    kwargs.setdefault("show_choice_points", False)
     kwargs.setdefault("show_stats", True)
 
     # Plot the mazes in side-by-side subplots highlighting different hexes
@@ -1157,6 +1171,11 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], **kwargs):
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to False
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
+        show_permanent_barriers (bool): If the permanent barriers should be shown
+            as black hexes. Includes edge barriers. Defaults to False
+        show_edge_barriers (bool): Only an option if show_permanent_barriers=True.
+            Gives the option to exclude edge barriers when showing permanent barriers.
+            Defaults to True if show_permanent_barriers=True
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze. Defaults to 1
     """
@@ -1164,6 +1183,7 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], **kwargs):
     # Change some default plotting options for clarity
     kwargs.setdefault("show_barriers", False)
     kwargs.setdefault("show_stats", True)
+    kwargs.setdefault("show_choice_points", False)
     kwargs.setdefault("show_hex_labels", False)
 
     # Loop through each maze in the sequence
