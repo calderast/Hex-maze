@@ -17,7 +17,7 @@ Then import functions from the package in your Python script or Jupyter notebook
 from hexmaze import plot_hex_maze
 
 # Plot an example hex maze
-plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False, show_choice_points=False, show_stats=False)
+plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
 ```
 
 Plot of the example hex maze configuration:
