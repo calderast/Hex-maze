@@ -327,7 +327,7 @@ def load_rat_image():
     Returns:
         PIL.Image: The rat image
     """
-    img_path = Path(__file__).parent / "assets" / "long-evans.png"
+    img_path = Path(__file__).parent / "assets" / "long_evans.png"
     img = Image.open(img_path)
     return img
 

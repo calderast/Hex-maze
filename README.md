@@ -22,7 +22,7 @@ plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False,
 
 Plot of the example hex maze configuration:
 
-![Example hex maze](./Tutorials/example_data/example_hex_maze.png)
+![Example hex maze](./src/hexmaze/assets/example_hex_maze.png)
 
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
