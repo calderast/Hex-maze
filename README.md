@@ -11,18 +11,31 @@ To simply use the functions in this repo, install the latest version of this Pyt
 pip install hex-maze-neuro
 ```
 
-Then import functions from the package in your Python script or Jupyter notebook:
+Then import and use functions from the package in your Python script or Jupyter notebook:
 
 ```python
-from hexmaze import plot_hex_maze
+from hexmaze import plot_hex_maze, get_hex_distance, get_optimal_paths
 
-# Plot an example hex maze
-plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
+# Define an example maze
+maze = {37, 7, 39, 41, 14, 46, 20, 23, 30}
+
+# Set the rat's position
+rat_hex = 16
+rat_facing = 13
+
+# Calculate optimal path from port 3 to the rat, with distances for each hex
+rat_hex_path = get_optimal_paths(maze, start_hex=3, target_hex=rat_hex)[0]
+rat_hex_path_distances = {h: get_hex_distance(maze, start_hex=rat_hex, target_hex=h) for h in rat_hex_path}
+
+# Plot the maze with the rat's path colored by distance
+plot_hex_maze(maze, show_barriers=False, show_hex_labels=False, rat=rat_hex, rat_to=rat_facing, 
+              color_by=rat_hex_path_distances, colormap="Blues", vmin=-15)
+
 ```
 
 Plot of the example hex maze configuration:
 
-![Example hex maze](./src/hexmaze/assets/example_hex_maze.png)
+![Example hex maze](./src/hexmaze/assets/hex-maze-neuro-logo.png)
 
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
