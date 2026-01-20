@@ -2,6 +2,10 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17635391.svg)](https://doi.org/10.5281/zenodo.17635391)
 [![PyPI version](https://img.shields.io/pypi/v/hex-maze-neuro.svg)](https://pypi.org/project/hex-maze-neuro/)
 
+<p align="center">
+  <img src="./src/hexmaze/assets/hex-maze-neuro-logo.png" alt="hex-maze-neuro logo" width="300">
+</p>
+
 This repository provides a library of functions and tutorials for generating, visualizing, and analyzing hex maze configurations and optimal barrier-change sequences for the hex maze behavioral task developed by the Berke Lab at UCSF. It also includes curated databases of valid maze configurations and their associated attributes.
 
 ## Installation (General use)
@@ -31,12 +35,8 @@ rat_hex_path_distances = {h: get_hex_distance(maze, start_hex=rat_hex, target_he
 plot_hex_maze(maze, show_barriers=False, show_hex_labels=False, rat=rat_hex, rat_to=rat_facing, 
               color_by=rat_hex_path_distances, colormap="Blues", vmin=-15)
 
+# This generates the hex-maze-neuro logo plot!
 ```
-
-Plot of the example hex maze configuration:
-
-![Example hex maze](./src/hexmaze/assets/hex-maze-neuro-logo.png)
-
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
 Follow the developer instructions to install from source to access the tutorials and databases.
