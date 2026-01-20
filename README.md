@@ -2,6 +2,10 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17635391.svg)](https://doi.org/10.5281/zenodo.17635391)
 [![PyPI version](https://img.shields.io/pypi/v/hex-maze-neuro.svg)](https://pypi.org/project/hex-maze-neuro/)
 
+<p align="center">
+  <img src="./src/hexmaze/assets/hex-maze-neuro-logo.png" alt="hex-maze-neuro logo" width="300">
+</p>
+
 This repository provides a library of functions and tutorials for generating, visualizing, and analyzing hex maze configurations and optimal barrier-change sequences for the hex maze behavioral task developed by the Berke Lab at UCSF. It also includes curated databases of valid maze configurations and their associated attributes.
 
 ## Installation (General use)
@@ -11,19 +15,28 @@ To simply use the functions in this repo, install the latest version of this Pyt
 pip install hex-maze-neuro
 ```
 
-Then import functions from the package in your Python script or Jupyter notebook:
+Then import and use functions from the package in your Python script or Jupyter notebook:
 
 ```python
-from hexmaze import plot_hex_maze
+from hexmaze import plot_hex_maze, get_hex_distance, get_optimal_paths
 
-# Plot an example hex maze
-plot_hex_maze(barriers={37, 7, 39, 41, 14, 46, 20, 23, 30}, show_barriers=False)
+# Define an example maze
+maze = {37, 7, 39, 41, 14, 46, 20, 23, 30}
+
+# Set the rat's position
+rat_hex = 16
+rat_facing = 13
+
+# Calculate optimal path from port 3 to the rat, with distances for each hex
+rat_hex_path = get_optimal_paths(maze, start_hex=3, target_hex=rat_hex)[0]
+rat_hex_path_distances = {h: get_hex_distance(maze, start_hex=rat_hex, target_hex=h) for h in rat_hex_path}
+
+# Plot the maze with the rat's path colored by distance
+plot_hex_maze(maze, show_barriers=False, show_hex_labels=False, rat=rat_hex, rat_to=rat_facing, 
+              color_by=rat_hex_path_distances, colormap="Blues", vmin=-15)
+
+# This generates the hex-maze-neuro logo plot!
 ```
-
-Plot of the example hex maze configuration:
-
-![Example hex maze](./src/hexmaze/assets/example_hex_maze.png)
-
 
 Note that installing the package via pip does not make the tutorial notebooks or hex maze databases in this repo available.
 Follow the developer instructions to install from source to access the tutorials and databases.
