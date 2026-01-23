@@ -424,6 +424,8 @@ def plot_hex_maze(
         arrows: Optional[Mapping[int, Sequence[int]]] = None,
         highlight_hexes: Optional[Union[set[int], Sequence[set[int]]]] = None,
         highlight_colors: Optional[Union[str, Sequence[str]]] = None,
+        outline_hexes: Optional[Union[set[int], Sequence[set[int]]]] = None,
+        outline_colors: Optional[Union[str, Sequence[str]]] = None,
         color_by: Optional[Mapping[int, float]] = None,
         colormap: Union[str, matplotlib.colors.Colormap] = "plasma",
         vmin: Optional[float] = None,
@@ -493,6 +495,11 @@ def plot_hex_maze(
         highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
             Each color in this list applies to the respective set of hexes in highlight_hexes.
             Defaults to 'darkorange' for a single group.
+        outline_hexes (set[int] or list[set]): A set (or list[set]) of hexes to draw an outline around.
+            Defaults to None.
+        outline_colors (string or list[string]): Color (or list[colors]) for the outlines.
+            Each color in this list applies to the respective set of hexes in outline_hexes.
+            Defaults to 'black' for a single group.
         color_by (dict): Dictionary of hex_id: value. Hexes will be colored by their corresponding
             value using the specified colormap. Overridden by highlight_hexes. Defaults to None.
         colormap (str or matplotlib.colors.Colormap): Matplotlib colormap to use for
@@ -695,23 +702,17 @@ def plot_hex_maze(
 
     # Optional - highlight specific hexes on the plot
     if highlight_hexes is not None:
-        # If highlight_hexes is a single set (or a list of length 1 containing a set),
-        # default to dark orange if no colors are provided
-        if isinstance(highlight_hexes, set) or (
-            isinstance(highlight_hexes, list) and len(highlight_hexes) == 1 and isinstance(highlight_hexes[0], set)
-        ):
-            if highlight_colors is None:
-                highlight_colors = ["darkorange"]
+        # Normalize highlight_hexes to a list of sets
+        if isinstance(highlight_hexes, set):
+            highlight_hexes = [highlight_hexes]
 
-            # If it's a single set, wrap it in a list for consistency
-            if isinstance(highlight_hexes, set):
-                highlight_hexes = [highlight_hexes]
-
-        # If highlight_hexes is a list, ensure highlight_colors is the same length
-        # (We actually just check if len(colors) is >= len(hexes) and ignore any extra colors)
-        elif isinstance(highlight_hexes, list):
-            if highlight_colors is None or len(highlight_hexes) > len(highlight_colors):
-                raise ValueError("Length of highlight_colors and highlight_hexes must match.")
+        # Normalize highlight_colors to a list
+        if highlight_colors is None:
+            highlight_colors = ["darkorange"] * len(highlight_hexes)
+        elif isinstance(highlight_colors, str):
+            highlight_colors = [highlight_colors] * len(highlight_hexes)
+        elif len(highlight_hexes) > len(highlight_colors):
+            raise ValueError("Length of highlight_colors and highlight_hexes must match.")
 
         # Apply the specified or default color to the hexes
         for hexes, color in zip(highlight_hexes, highlight_colors):
@@ -745,10 +746,42 @@ def plot_hex_maze(
         )
         ax.add_patch(hexagon)
 
+    # Optional - draw outlines around specific hexes (barriers allowed)
+    if outline_hexes is not None:
+        # Normalize outline_hexes to a list of sets
+        if isinstance(outline_hexes, set):
+            outline_hexes = [outline_hexes]
+
+        # Normalize outline_colors to a list
+        if outline_colors is None:
+            outline_colors = ["black"] * len(outline_hexes)
+        elif isinstance(outline_colors, str):
+            outline_colors = [outline_colors] * len(outline_hexes)
+        elif len(outline_hexes) > len(outline_colors):
+            raise ValueError("Length of outline_colors and outline_hexes must match.")
+
+        # Draw outlines for each group (slightly smaller than hex so outline is inset)
+        for hexes, color in zip(outline_hexes, outline_colors):
+            for hex in hexes:
+                if hex not in hex_coordinates_copy:
+                    continue
+                x, y = hex_coordinates_copy[hex]
+                hex_radius = scale / 2 if centroids is None else hex_radii_dict.get(hex)
+                outline = patches.RegularPolygon(
+                    (x, y),
+                    numVertices=6,
+                    radius=hex_radius * 0.85,
+                    orientation=math.pi / 6,
+                    facecolor="none",
+                    edgecolor=color,
+                    linewidth=2,
+                )
+                ax.add_patch(outline)
+
     # If we have a barrier change, add an arrow between the old_barrier and new_barrier to show barrier movement
     if show_arrow and old_barrier is not None and new_barrier is not None:
-        arrow_start = hex_coordinates[old_barrier]
-        # We may have removed new_barrier from our dict (if show_barriers=False), so use the copy coordinates
+        # We may have removed barrier coords from our dict (if show_barriers=False), so use the copy coordinates
+        arrow_start = hex_coordinates_copy.get(old_barrier)
         arrow_end = hex_coordinates_copy.get(new_barrier)
         ax.annotate(
             "",
