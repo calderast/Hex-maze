@@ -7,8 +7,8 @@ from a given hex — using off-policy Q-learning updates.
 
 import random
 import numpy as np
-from ..utils import create_empty_hex_maze
-from ..core import get_safe_hex_distance, divide_into_thirds
+from ...utils import create_empty_hex_maze
+from ...core import get_safe_hex_distance, divide_into_thirds
 
 
 class HexMazeQLearner:
@@ -239,10 +239,6 @@ class HexMazeQLearner:
             r = reward if t == len(path) - 2 else 0.0
             self.q_update(hex, next_hex, r, next_hex, start_port)
 
-        terminal = path[-1]
-        if terminal in self.REWARD_PORTS and len(path) >= 2:
-            self.q_terminal(path[-2], terminal, reward, start_port)
-
     def process_trajectory_with_history(self, path, reward, start_port=None):
         """
         Same as process_trajectory, but records Q-table snapshots at each step.
@@ -277,14 +273,6 @@ class HexMazeQLearner:
                     for port in self.REWARD_PORTS
                 },
             })
-
-        terminal = path[-1]
-        if terminal in self.REWARD_PORTS and len(path) >= 2:
-            self.q_terminal(path[-2], terminal, reward, start_port)
-            history[-1]["values"] = {
-                port: {h: dict(actions) for h, actions in self.Q[port].items()}
-                for port in self.REWARD_PORTS
-            }
 
         return history
 

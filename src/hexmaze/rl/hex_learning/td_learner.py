@@ -8,8 +8,8 @@ self-generated trials, and clamped trajectory learning.
 
 import random
 import numpy as np
-from ..utils import create_empty_hex_maze
-from ..core import get_safe_hex_distance, divide_into_thirds
+from ...utils import create_empty_hex_maze
+from ...core import get_safe_hex_distance, divide_into_thirds
 
 
 class HexMazeTDLearner:

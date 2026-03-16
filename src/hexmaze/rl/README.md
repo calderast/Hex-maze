@@ -2,7 +2,19 @@
 
 Reinforcement learning agents for the hex maze.
 
-## Modules
+```text
+hexmaze/rl/
+├── hex_learning/        # trajectory-based, learns values over hexes
+│   ├── td_learner.py    # HexMazeTDLearner
+│   └── q_learner.py     # HexMazeQLearner
+└── port_learning/       # outcome-based, learns values over ports
+    ├── rescorla_wagner.py  # RescorlaWagner
+    └── bayesian.py         # BayesianPortLearner
+```
+
+## Hex value learning
+
+Learns values over individual hexes from maze trajectories (sequences of hex visits).
 
 ### `td_learner.py` — `HexMazeTDLearner`
 
@@ -42,14 +54,14 @@ Q(hex, a) ← Q(hex, a) + α · [r + γ · max_a' Q(next_hex, a') - Q(hex, a)]
 
 At terminal hexes (reward ports), `max Q(next_hex, a') = 0`.
 
-## Common interface
+### Hex learning common interface
 
-Both learners share the same interface:
+Both hex learners share the same interface:
 
 | Method | Description |
 |---|---|
 | `learn(trajectories, rewards, start_ports)` | Run updates on given provided trajectories (rat hex paths) |
-| `simulate(start_state, n_trials, max_steps)` | Self-generated trajectories with online updates |
+| `simulate(start_hex, n_trials, max_steps)` | Self-generated trajectories with online updates |
 | `process_trajectory(path, reward, start_port)` | Update on a single trajectory |
 | `process_trajectory_with_history(...)` | Same as above, but returns hex value snapshots at each step |
 | `action_probabilities(hex, start_port)` | Softmax choice probabilities at a hex |
@@ -58,7 +70,7 @@ Both learners share the same interface:
 | `reset()` | Re-initialize tables and re-apply hex value priors |
 | `set_graph(new_graph)` | Swap the maze graph (e.g. after barrier changes) |
 
-### Shared parameters
+**Shared parameters:**
 
 - **`reward_probs`**: `[p1, p2, p3]` — reward probability at each port
 - **`gamma`**: discount factor
@@ -66,7 +78,7 @@ Both learners share the same interface:
 - **`priors`**: V/Q-table initialization — `None`, `"uniform"`, `("flat", value)`, or `[p1, p2, p3]`
 - **`no_backtrack`**: if `True`, agent avoids revisiting states within a trial, when possible (useful for simulation sometimes)
 
-### Table update logic
+**Table update logic:**
 
 Both learners use the same rule for deciding which of the 3 tables to update at a given hex:
 
@@ -75,16 +87,70 @@ Both learners use the same rule for deciding which of the 3 tables to update at 
 
 TODO: decide if I like this. Figure out what to do with mazes that have more than 1 critical choice point!
 
-### `start_port` defaults
+**`start_port` defaults:**
 
-In both learners, `start_port` is optional for `process_trajectory` and `process_trajectory_with_history`. It defaults to `path[0]` if that state is a reward port; otherwise an error is raised.
+In both learners, `start_port` is optional for `process_trajectory` and `process_trajectory_with_history`. It defaults to `path[0]` if that hex is a reward port; otherwise an error is raised.
+
+## Port value learning
+
+Learns values over reward ports from binary reward outcomes (0 or 1). No maze structure or trajectories needed — just which port was visited and whether reward was received.
+
+### `rescorla_wagner.py` — `RescorlaWagner`
+
+Delta-rule learner that tracks expected value of each port.
+
+**Update rule:**
+
+```text
+Q(port) ← Q(port) + α · [reward - Q(port)]
+```
+
+- Returns **prediction error** (`reward - Q(port)`) from each update
+- Optional **decay** toward `initial_value` for recency weighting
+
+### `bayesian.py` — `BayesianPortLearner`
+
+Maintains a Beta(a, b) posterior over each port's reward probability.
+
+**Update rule:**
+
+```text
+reward = 1: a ← a + 1
+reward = 0: b ← b + 1
+```
+
+Expected value (posterior mean) = `a / (a + b)`.
+
+- Returns **Bayesian surprise** (`-log p(reward)`) from each update (how unlikely the outcome was)
+- Provides `confidence_interval(port)` for uncertainty estimates
+- Supports **Thompson sampling** via `thompson_choice()` — draws from each port's posterior and picks the highest
+- Optional **decay** toward prior for forgetting
+
+### Port learning common interface
+
+Both port learners share the same interface:
+
+| Method | Description |
+|---|---|
+| `update(port, reward)` | Update values after visiting a port and receiving reward |
+| `learn(ports, rewards)` | Run updates on a sequence of port visits |
+| `choice_probabilities(available_ports)` | Softmax probabilities over port values |
+| `get_values()` | Current port values as `{port: value}` |
+| `get_history()` | Full learning history (values, errors/surprise at each step) |
+| `reset()` | Re-initialize to starting values |
+
+**Shared parameters:**
+
+- **`temperature`**: softmax temperature for `choice_probabilities`
+- **`decay`**: per-trial decay toward initial values (0 = no forgetting)
 
 ## Usage
 
 ```python
 from hexmaze.rl import HexMazeTDLearner, HexMazeQLearner
+from hexmaze.rl import RescorlaWagner, BayesianPortLearner
 
-# Both accept the same constructor pattern
+### Hex learning (trajectory-based)
 td = HexMazeTDLearner(graph, reward_probs=[0.9, 0.5, 0.1])
 ql = HexMazeQLearner(graph, reward_probs=[0.9, 0.5, 0.1])
 
@@ -93,11 +159,30 @@ td.learn(trajectories, rewards)
 ql.learn(trajectories, rewards)
 
 # Or simulate
-td_results = td.simulate(start_state=1, n_trials=100)
-ql_results = ql.simulate(start_state=1, n_trials=100)
+td_results = td.simulate(start_hex=1, n_trials=100)
+ql_results = ql.simulate(start_hex=1, n_trials=100)
 
 # Compare values
 td_values = td.get_state_values(start_port=1)
 ql_values = ql.get_state_values(start_port=1)  # max Q per hex
-ql_q_values = ql.get_q_values(start_port=1)    # full Q(s, a) table
+ql_q_values = ql.get_q_values(start_port=1)    # full Q(hex, action) table
+
+### Port learning (based on reward outcomes only)
+rw = RescorlaWagner(alpha=0.3)
+bayes = BayesianPortLearner(prior_a=1, prior_b=1)
+
+# Learn from reward history
+ports = [1, 2, 1, 3, 2, 1]
+rewards = [1, 0, 1, 0, 1, 1]
+prediction_errors = rw.learn(ports, rewards)
+surprises = bayes.learn(ports, rewards)
+
+# Compare port values
+rw.get_values()      # {1: 0.82, 2: 0.38, 3: 0.0}
+bayes.get_values()   # {1: 0.75, 2: 0.50, 3: 0.33}
+
+# Choice probabilities
+rw.choice_probabilities()       # softmax over Q-values
+bayes.choice_probabilities()    # softmax over posterior means
+bayes.thompson_choice()         # sample from posteriors, pick highest
 ```

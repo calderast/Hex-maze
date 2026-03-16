@@ -1,4 +1,9 @@
-from .td_learner import HexMazeTDLearner
-from .q_learner import HexMazeQLearner
+from .hex_learning import HexMazeTDLearner, HexMazeQLearner
+from .port_learning import RescorlaWagner, BayesianPortLearner
 
-__all__ = ["HexMazeTDLearner", "HexMazeQLearner"]
+__all__ = [
+    "HexMazeTDLearner",
+    "HexMazeQLearner",
+    "RescorlaWagner",
+    "BayesianPortLearner",
+]
