@@ -8,6 +8,8 @@ Updates beliefs after each reward/no-reward observation.
 import numpy as np
 from scipy import stats
 
+from ...utils import REWARD_PORTS, resolve_port
+
 
 class BayesianPortLearner:
     """
@@ -22,9 +24,8 @@ class BayesianPortLearner:
     The expected value (mean of the posterior) is a / (a + b).
 
     Action selection via softmax over posterior means, or Thompson sampling.
+    Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
     """
-
-    REWARD_PORTS = [1, 2, 3]
 
     def __init__(
         self,
@@ -56,7 +57,7 @@ class BayesianPortLearner:
         self.decay = decay
 
         self.posteriors = {
-            port: {"a": prior_a, "b": prior_b} for port in self.REWARD_PORTS
+            port: {"a": prior_a, "b": prior_b} for port in REWARD_PORTS
         }
         self.history = []
 
@@ -64,7 +65,7 @@ class BayesianPortLearner:
         """Reset posteriors to priors and clear history."""
         self.posteriors = {
             port: {"a": self.prior_a, "b": self.prior_b}
-            for port in self.REWARD_PORTS
+            for port in REWARD_PORTS
         }
         self.history = []
 
@@ -74,19 +75,21 @@ class BayesianPortLearner:
 
         Parameters
         ----------
-        port : int
-            Which port was visited (1, 2, or 3).
-        reward : float
-            Reward received (0.0 or 1.0).
+        port : int or str
+            Which port was visited (1/2/3 or A/B/C).
+        reward : int or float
+            Reward received (0 or 1).
 
         Returns
         -------
         float
             Surprise: -log(p(reward | current posterior)).
         """
+        port = resolve_port(port)
+
         # Apply decay toward prior
         if self.decay:
-            for p in self.REWARD_PORTS:
+            for p in REWARD_PORTS:
                 post = self.posteriors[p]
                 post["a"] = post["a"] * (1 - self.decay) + self.prior_a * self.decay
                 post["b"] = post["b"] * (1 - self.decay) + self.prior_b * self.decay
@@ -121,10 +124,10 @@ class BayesianPortLearner:
 
         Parameters
         ----------
-        ports : list of int
-            Sequence of ports visited.
-        rewards : list of float
-            Reward received at each port.
+        ports : list of int or str
+            Sequence of ports visited (1/2/3 or A/B/C).
+        rewards : list of int or float
+            Reward received at each port (0 or 1).
 
         Returns
         -------
@@ -138,6 +141,7 @@ class BayesianPortLearner:
 
     def expected_value(self, port):
         """Return the posterior mean (expected reward probability) for a port."""
+        port = resolve_port(port)
         post = self.posteriors[port]
         return post["a"] / (post["a"] + post["b"])
 
@@ -147,8 +151,8 @@ class BayesianPortLearner:
 
         Parameters
         ----------
-        port : int
-            Which port (1, 2, or 3).
+        port : int or str
+            Which port (1/2/3 or A/B/C).
         ci : float
             Credible interval width (default 0.95).
 
@@ -157,6 +161,7 @@ class BayesianPortLearner:
         tuple of (float, float)
             (lower, upper) bounds.
         """
+        port = resolve_port(port)
         post = self.posteriors[port]
         dist = stats.beta(post["a"], post["b"])
         tail = (1 - ci) / 2
@@ -164,6 +169,7 @@ class BayesianPortLearner:
 
     def sample(self, port):
         """Draw a sample from the posterior for a port (for Thompson sampling)."""
+        port = resolve_port(port)
         post = self.posteriors[port]
         return np.random.beta(post["a"], post["b"])
 
@@ -175,8 +181,8 @@ class BayesianPortLearner:
 
         Parameters
         ----------
-        available_ports : list of int, optional
-            Which ports to choose among. Defaults to all 3.
+        available_ports : list of int or str, optional
+            Which ports to choose among (1/2/3 or A/B/C). Defaults to all 3.
 
         Returns
         -------
@@ -184,7 +190,9 @@ class BayesianPortLearner:
             The chosen port.
         """
         if available_ports is None:
-            available_ports = self.REWARD_PORTS
+            available_ports = REWARD_PORTS
+        else:
+            available_ports = [resolve_port(p) for p in available_ports]
         samples = {port: self.sample(port) for port in available_ports}
         return max(samples, key=samples.get)
 
@@ -194,8 +202,8 @@ class BayesianPortLearner:
 
         Parameters
         ----------
-        available_ports : list of int, optional
-            Which ports to choose among. Defaults to all 3.
+        available_ports : list of int or str, optional
+            Which ports to choose among (1/2/3 or A/B/C). Defaults to all 3.
 
         Returns
         -------
@@ -203,7 +211,9 @@ class BayesianPortLearner:
             {port: probability}
         """
         if available_ports is None:
-            available_ports = self.REWARD_PORTS
+            available_ports = REWARD_PORTS
+        else:
+            available_ports = [resolve_port(p) for p in available_ports]
         vals = np.array([self.expected_value(p) for p in available_ports])
         scaled = vals / self.temperature
         scaled -= scaled.max()
@@ -213,7 +223,7 @@ class BayesianPortLearner:
 
     def get_values(self):
         """Return posterior means as {port: expected_value}."""
-        return {port: self.expected_value(port) for port in self.REWARD_PORTS}
+        return {port: self.expected_value(port) for port in REWARD_PORTS}
 
     def get_posteriors(self):
         """Return a copy of all posteriors as {port: {"a": float, "b": float}}."""

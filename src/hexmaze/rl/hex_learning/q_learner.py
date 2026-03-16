@@ -9,6 +9,7 @@ import random
 import numpy as np
 from ...utils import create_empty_hex_maze
 from ...core import get_safe_hex_distance, divide_into_thirds
+from ...utils import REWARD_PORTS, resolve_port
 
 
 class HexMazeQLearner:
@@ -18,9 +19,9 @@ class HexMazeQLearner:
     Two modes of learning:
         - simulate(): agent picks actions via softmax, runs Q-learning updates online
         - learn(): feed in existing maze trajectories with rewards
-    """
 
-    REWARD_PORTS = [1, 2, 3]
+    Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
+    """
 
     def __init__(
         self,
@@ -38,7 +39,7 @@ class HexMazeQLearner:
         graph : networkx.Graph
             Hex maze graph (hexes 1-49, edges are adjacencies).
         reward_probs : list of float
-            [p1, p2, p3] reward probability at ports 1, 2, 3.
+            [p1, p2, p3] reward probability at ports 1/A, 2/B, 3/C.
         alpha : float
             Learning rate for Q-learning updates.
         gamma : float
@@ -70,7 +71,7 @@ class HexMazeQLearner:
 
     def init_q_tables(self):
         """Initialize Q[port][hex][action] for all 3 ports, all hexes and their neighbors."""
-        for port in self.REWARD_PORTS:
+        for port in REWARD_PORTS:
             self.Q[port] = {}
             for hex in self.graph.nodes():
                 self.Q[port][hex] = {
@@ -102,9 +103,9 @@ class HexMazeQLearner:
 
         # First compute V-values for each hex under each start port
         V = {}
-        for start_port in self.REWARD_PORTS:
+        for start_port in REWARD_PORTS:
             V[start_port] = {}
-            goal_ports = [p for p in self.REWARD_PORTS if p != start_port]
+            goal_ports = [p for p in REWARD_PORTS if p != start_port]
             for hex in self.graph.nodes():
                 if hex in goal_ports:
                     V[start_port][hex] = pv[hex]
@@ -116,14 +117,14 @@ class HexMazeQLearner:
                     V[start_port][hex] = best
 
         # Set Q(hex, action) = V(action) — the value of the destination hex
-        for start_port in self.REWARD_PORTS:
+        for start_port in REWARD_PORTS:
             for hex in self.graph.nodes():
                 for neighbor in self.graph.neighbors(hex):
                     self.Q[start_port][hex][neighbor] = V[start_port][neighbor]
 
     def apply_flat_priors(self, value):
         """Set every Q-value to the same constant."""
-        for port in self.REWARD_PORTS:
+        for port in REWARD_PORTS:
             for hex in self.graph.nodes():
                 for neighbor in self.Q[port][hex]:
                     self.Q[port][hex][neighbor] = value
@@ -145,7 +146,7 @@ class HexMazeQLearner:
         self.graph = new_graph
         self.maze_thirds = divide_into_thirds(new_graph)
 
-        for port in self.REWARD_PORTS:
+        for port in REWARD_PORTS:
             new_table = {}
             for hex in new_graph.nodes():
                 new_table[hex] = {}
@@ -165,11 +166,11 @@ class HexMazeQLearner:
     # Table update logic
 
     def get_hex_third(self, hex):
-        """Return which third (1, 2, 3) a hex belongs to, or 0 for choice hex."""
+        """Return which port's third (1, 2, 3) a hex belongs to, or None for choice hex."""
         for i, third_set in enumerate(self.maze_thirds):
             if hex in third_set:
-                return i + 1
-        return 0
+                return REWARD_PORTS[i]
+        return None
 
     def tables_to_update(self, hex, start_port):
         """
@@ -178,9 +179,9 @@ class HexMazeQLearner:
         - Hex in a different third T: all ports except T
         """
         third = self.get_hex_third(hex)
-        if third == start_port or third == 0:
+        if third == start_port or third is None:
             return [start_port]
-        return [p for p in self.REWARD_PORTS if p != third]
+        return [p for p in REWARD_PORTS if p != third]
 
     # Q-learning update
 
@@ -193,7 +194,7 @@ class HexMazeQLearner:
         """
         for port in self.tables_to_update(hex, start_port):
             Q = self.Q[port]
-            if next_hex in self.REWARD_PORTS or not Q.get(next_hex):
+            if next_hex in REWARD_PORTS or not Q.get(next_hex):
                 max_next_q = 0.0
             else:
                 max_next_q = max(Q[next_hex].values())
@@ -212,8 +213,8 @@ class HexMazeQLearner:
     def _resolve_start_port(self, path, start_port):
         """Resolve start_port: use given value, or default to path[0] if it's a reward port."""
         if start_port is not None:
-            return start_port
-        if path[0] in self.REWARD_PORTS:
+            return resolve_port(start_port)
+        if path[0] in REWARD_PORTS:
             return path[0]
         raise ValueError(
             f"start_port not provided and path[0]={path[0]} is not a reward port. "
@@ -230,8 +231,9 @@ class HexMazeQLearner:
             Sequence of hexes visited.
         reward : float
             Reward obtained at terminal hex (path[-1]).
-        start_port : int, optional
-            Which port the trial started from. Defaults to path[0] if it's a reward port.
+        start_port : int or str, optional
+            Which port the trial started from (1/2/3 or A/B/C).
+            Defaults to path[0] if it's a reward port.
         """
         start_port = self._resolve_start_port(path, start_port)
         for t in range(len(path) - 1):
@@ -258,7 +260,7 @@ class HexMazeQLearner:
             "hex": path[0],
             "values": {
                 port: {h: dict(actions) for h, actions in self.Q[port].items()}
-                for port in self.REWARD_PORTS
+                for port in REWARD_PORTS
             },
         })
 
@@ -270,7 +272,7 @@ class HexMazeQLearner:
                 "hex": next_hex,
                 "values": {
                     port: {h: dict(actions) for h, actions in self.Q[port].items()}
-                    for port in self.REWARD_PORTS
+                    for port in REWARD_PORTS
                 },
             })
 
@@ -286,8 +288,8 @@ class HexMazeQLearner:
             Each element is a path of hexes [h0, h1, ..., h_terminal].
         rewards : list of float
             Reward for each trajectory (0.0 or 1.0).
-        start_ports : list of int, optional
-            Which port each trajectory's trial started from.
+        start_ports : list of int or str, optional
+            Which port each trajectory's trial started from (1/2/3 or A/B/C).
             Defaults to each trajectory's first hex (must be a reward port).
         """
         if start_ports is None:
@@ -311,12 +313,12 @@ class HexMazeQLearner:
         current_hex = start_hex
 
         for _ in range(n_trials):
-            if current_hex in self.REWARD_PORTS:
+            if current_hex in REWARD_PORTS:
                 start_port = current_hex
-                goal_hexes = [p for p in self.REWARD_PORTS if p != current_hex]
+                goal_hexes = [p for p in REWARD_PORTS if p != current_hex]
             else:
-                start_port = 1
-                goal_hexes = list(self.REWARD_PORTS)
+                start_port = REWARD_PORTS[0]
+                goal_hexes = list(REWARD_PORTS)
 
             path, reward = self.run_trial(current_hex, start_port, goal_hexes, max_steps)
             results.append({"path": path, "reward": reward, "start_port": start_port})
@@ -389,11 +391,19 @@ class HexMazeQLearner:
         """
         Softmax choice probabilities at a hex under a given Q-table.
 
+        Parameters
+        ----------
+        hex : int
+            Maze hex to evaluate.
+        start_port : int or str
+            Which Q-table to use (1/2/3 or A/B/C).
+
         Returns
         -------
         dict of {int: float}
             {neighbor_hex: probability}
         """
+        start_port = resolve_port(start_port)
         neighbors = list(self.graph.neighbors(hex))
         if not neighbors:
             return {}
@@ -402,10 +412,12 @@ class HexMazeQLearner:
 
     def get_q_values(self, start_port):
         """Return a copy of Q[start_port] as {hex: {action: value}}."""
+        start_port = resolve_port(start_port)
         return {h: dict(actions) for h, actions in self.Q[start_port].items()}
 
     def get_state_values(self, start_port):
         """Return max Q-value at each hex: {hex: max_a Q(hex, a)}."""
+        start_port = resolve_port(start_port)
         return {
             hex: max(actions.values()) if actions else 0.0
             for hex, actions in self.Q[start_port].items()
@@ -413,11 +425,11 @@ class HexMazeQLearner:
 
     def get_max_state_values(self):
         """Return {hex: max value across all 3 Q-tables}."""
-        all_hexes = self.Q[self.REWARD_PORTS[0]].keys()
+        all_hexes = self.Q[REWARD_PORTS[0]].keys()
         return {
             hex: max(
                 max(self.Q[port][hex].values()) if self.Q[port][hex] else 0.0
-                for port in self.REWARD_PORTS
+                for port in REWARD_PORTS
             )
             for hex in all_hexes
         }

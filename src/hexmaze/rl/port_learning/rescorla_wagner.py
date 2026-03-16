@@ -6,6 +6,8 @@ Learns Q(port) — the expected value of each reward port from reward outcomes.
 
 import numpy as np
 
+from ...utils import REWARD_PORTS, resolve_port
+
 
 class RescorlaWagner:
     """
@@ -15,9 +17,8 @@ class RescorlaWagner:
         Q(port) ← Q(port) + α · [reward - Q(port)]
 
     Action selection via softmax over port Q-values.
+    Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
     """
-
-    REWARD_PORTS = [1, 2, 3]
 
     def __init__(
         self,
@@ -45,12 +46,12 @@ class RescorlaWagner:
         self.initial_value = initial_value
         self.decay = decay
 
-        self.Q = {port: initial_value for port in self.REWARD_PORTS}
+        self.Q = {port: initial_value for port in REWARD_PORTS}
         self.history = []
 
     def reset(self):
         """Reset Q-values and history."""
-        self.Q = {port: self.initial_value for port in self.REWARD_PORTS}
+        self.Q = {port: self.initial_value for port in REWARD_PORTS}
         self.history = []
 
     def update(self, port, reward):
@@ -59,8 +60,8 @@ class RescorlaWagner:
 
         Parameters
         ----------
-        port : int
-            Which port was visited (1, 2, or 3).
+        port : int or str
+            Which port was visited (1/2/3 or A/B/C).
         reward : float
             Reward received (typically 0.0 or 1.0).
 
@@ -69,9 +70,11 @@ class RescorlaWagner:
         float
             Prediction error (reward - Q(port)) before the update.
         """
+        port = resolve_port(port)
+
         # Apply decay toward initial value
         if self.decay:
-            for p in self.REWARD_PORTS:
+            for p in REWARD_PORTS:
                 self.Q[p] = self.Q[p] * (1 - self.decay) + self.initial_value * self.decay
 
         prediction_error = reward - self.Q[port]
@@ -92,8 +95,8 @@ class RescorlaWagner:
 
         Parameters
         ----------
-        ports : list of int
-            Sequence of ports visited.
+        ports : list of int or str
+            Sequence of ports visited (1/2/3 or A/B/C).
         rewards : list of float
             Reward received at each port.
 
@@ -113,8 +116,8 @@ class RescorlaWagner:
 
         Parameters
         ----------
-        available_ports : list of int, optional
-            Which ports to choose among. Defaults to all 3.
+        available_ports : list of int or str, optional
+            Which ports to choose among (1/2/3 or A/B/C). Defaults to all 3.
 
         Returns
         -------
@@ -122,7 +125,9 @@ class RescorlaWagner:
             {port: probability}
         """
         if available_ports is None:
-            available_ports = self.REWARD_PORTS
+            available_ports = REWARD_PORTS
+        else:
+            available_ports = [resolve_port(p) for p in available_ports]
         vals = np.array([self.Q[p] for p in available_ports])
         scaled = vals / self.temperature
         scaled -= scaled.max()

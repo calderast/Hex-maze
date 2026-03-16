@@ -10,6 +10,7 @@ import random
 import numpy as np
 from ...utils import create_empty_hex_maze
 from ...core import get_safe_hex_distance, divide_into_thirds
+from ...utils import REWARD_PORTS, resolve_port
 
 
 class HexMazeTDLearner:
@@ -19,9 +20,9 @@ class HexMazeTDLearner:
     Two modes of learning:
         - simulate(): agent picks actions via softmax, runs TD updates online
         - learn(): feed in existing maze trajectories with rewards
-    """
 
-    REWARD_PORTS = [1, 2, 3]
+    Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
+    """
 
     def __init__(
         self,
@@ -40,7 +41,7 @@ class HexMazeTDLearner:
         graph : networkx.Graph
             Hex maze graph (hexes 1-49, edges are adjacencies).
         reward_probs : list of float
-            [p1, p2, p3] reward probability at ports 1, 2, 3.
+            [p1, p2, p3] reward probability at ports 1/A, 2/B, 3/C.
         td0_alpha : float
             Learning rate for TD(0). Set to 0 to disable TD(0) updates.
         gamma : float
@@ -76,7 +77,7 @@ class HexMazeTDLearner:
 
     def init_v_tables(self):
         """Initialize V[port][hex] for all 3 ports and all hexes."""
-        for port in self.REWARD_PORTS:
+        for port in REWARD_PORTS:
             self.V[port] = {hex: 0.0 for hex in self.graph.nodes()}
 
     def apply_priors(self, priors):
@@ -103,8 +104,8 @@ class HexMazeTDLearner:
         empty_maze = create_empty_hex_maze()
         pv = {i + 1: port_values[i] for i in range(3)}
 
-        for start_port in self.REWARD_PORTS:
-            goal_ports = [p for p in self.REWARD_PORTS if p != start_port]
+        for start_port in REWARD_PORTS:
+            goal_ports = [p for p in REWARD_PORTS if p != start_port]
             for hex in self.graph.nodes():
                 if hex in goal_ports:
                     self.V[start_port][hex] = pv[hex]
@@ -117,7 +118,7 @@ class HexMazeTDLearner:
 
     def apply_flat_priors(self, value):
         """Set every state in every V-table to the same constant value."""
-        for port in self.REWARD_PORTS:
+        for port in REWARD_PORTS:
             for hex in self.graph.nodes():
                 self.V[port][hex] = value
 
@@ -137,7 +138,7 @@ class HexMazeTDLearner:
         self.graph = new_graph
         self.maze_thirds = divide_into_thirds(new_graph)
 
-        for port in self.REWARD_PORTS:
+        for port in REWARD_PORTS:
             for hex in new_graph.nodes():
                 if hex not in self.V[port]:
                     nbrs = list(new_graph.neighbors(hex))
@@ -154,11 +155,11 @@ class HexMazeTDLearner:
     # Or when the rat is in the initial maze third, update for the start port only
 
     def get_hex_third(self, hex):
-        """Return which third (1, 2, 3) a hex belongs to, or 0 for choice hex."""
+        """Return which port's third (1, 2, 3) a hex belongs to, or None for choice hex."""
         for i, third_set in enumerate(self.maze_thirds):
             if hex in third_set:
-                return i + 1
-        return 0
+                return REWARD_PORTS[i]
+        return None
 
     def tables_to_update(self, state, start_port):
         """
@@ -167,9 +168,9 @@ class HexMazeTDLearner:
         - State in a different third T: all ports except T
         """
         third = self.get_hex_third(state)
-        if third == start_port or third == 0:
+        if third == start_port or third is None:
             return [start_port]
-        return [p for p in self.REWARD_PORTS if p != third]
+        return [p for p in REWARD_PORTS if p != third]
 
     #  TD updates
 
@@ -177,7 +178,7 @@ class HexMazeTDLearner:
         """TD(0): V(s) += td0_alpha * [r + gamma * V(s') - V(s)]."""
         for port in self.tables_to_update(state, start_port):
             V = self.V[port]
-            next_v = 0.0 if next_state in self.REWARD_PORTS else V[next_state]
+            next_v = 0.0 if next_state in REWARD_PORTS else V[next_state]
             V[state] += self.td0_alpha * (reward + self.gamma * next_v - V[state])
 
     def td0_terminal(self, state, reward, start_port):
@@ -204,8 +205,8 @@ class HexMazeTDLearner:
     def _resolve_start_port(self, path, start_port):
         """Resolve start_port: use given value, or default to path[0] if it's a reward port."""
         if start_port is not None:
-            return start_port
-        if path[0] in self.REWARD_PORTS:
+            return resolve_port(start_port)
+        if path[0] in REWARD_PORTS:
             return path[0]
         raise ValueError(
             f"start_port not provided and path[0]={path[0]} is not a reward port. "
@@ -222,8 +223,9 @@ class HexMazeTDLearner:
             Sequence of states visited.
         reward : float
             Reward obtained at terminal state (path[-1]).
-        start_port : int, optional
-            Which port the trial started from. Defaults to path[0] if it's a reward port.
+        start_port : int or str, optional
+            Which port the trial started from (1/2/3 or A/B/C).
+            Defaults to path[0] if it's a reward port.
         """
         start_port = self._resolve_start_port(path, start_port)
         if self.td0_alpha:
@@ -233,7 +235,7 @@ class HexMazeTDLearner:
                 self.td0_step(s, r, s_next, start_port)
 
             terminal = path[-1]
-            if terminal in self.REWARD_PORTS:
+            if terminal in REWARD_PORTS:
                 self.td0_terminal(terminal, reward, start_port)
 
         if self.td1_alpha:
@@ -249,8 +251,9 @@ class HexMazeTDLearner:
             Sequence of states visited.
         reward : float
             Reward obtained at terminal state (path[-1]).
-        start_port : int, optional
-            Which port the trial started from. Defaults to path[0] if it's a reward port.
+        start_port : int or str, optional
+            Which port the trial started from (1/2/3 or A/B/C).
+            Defaults to path[0] if it's a reward port.
 
         Returns
         -------
@@ -265,7 +268,7 @@ class HexMazeTDLearner:
         # Record initial values before any updates
         history.append({
             "state": path[0],
-            "values": {port: self.V[port].copy() for port in self.REWARD_PORTS},
+            "values": {port: self.V[port].copy() for port in REWARD_PORTS},
         })
 
         if self.td0_alpha:
@@ -275,20 +278,20 @@ class HexMazeTDLearner:
                 self.td0_step(s, r, s_next, start_port)
                 history.append({
                     "state": s_next,
-                    "values": {port: self.V[port].copy() for port in self.REWARD_PORTS},
+                    "values": {port: self.V[port].copy() for port in REWARD_PORTS},
                 })
 
             terminal = path[-1]
-            if terminal in self.REWARD_PORTS:
+            if terminal in REWARD_PORTS:
                 self.td0_terminal(terminal, reward, start_port)
-                history[-1]["values"] = {port: self.V[port].copy() for port in self.REWARD_PORTS}
+                history[-1]["values"] = {port: self.V[port].copy() for port in REWARD_PORTS}
 
         if self.td1_alpha:
             self.td1_backward(path, reward, start_port)
             # Record final state after backward pass
             history.append({
                 "state": path[-1],
-                "values": {port: self.V[port].copy() for port in self.REWARD_PORTS},
+                "values": {port: self.V[port].copy() for port in REWARD_PORTS},
             })
 
         return history
@@ -304,8 +307,8 @@ class HexMazeTDLearner:
             May start mid-maze, not necessarily at a port.
         rewards : list of float
             Reward for each trajectory (0.0 or 1.0).
-        start_ports : list of int, optional
-            Which port each trajectory's trial started from.
+        start_ports : list of int or str, optional
+            Which port each trajectory's trial started from (1/2/3 or A/B/C).
             Defaults to each trajectory's first state (must be a reward port).
         """
         if start_ports is None:
@@ -340,12 +343,12 @@ class HexMazeTDLearner:
         current_state = start_state
 
         for _ in range(n_trials):
-            if current_state in self.REWARD_PORTS:
+            if current_state in REWARD_PORTS:
                 start_port = current_state
-                goal_states = [p for p in self.REWARD_PORTS if p != current_state]
+                goal_states = [p for p in REWARD_PORTS if p != current_state]
             else:
-                start_port = 1
-                goal_states = list(self.REWARD_PORTS)
+                start_port = REWARD_PORTS[0]
+                goal_states = list(REWARD_PORTS)
 
             path, reward = self.run_trial(current_state, start_port, goal_states, max_steps)
             results.append({"path": path, "reward": reward, "start_port": start_port})
@@ -428,14 +431,15 @@ class HexMazeTDLearner:
         ----------
         state : int
             Maze hex to evaluate.
-        start_port : int
-            Which V-table to use (1, 2, or 3).
+        start_port : int or str
+            Which V-table to use (1/2/3 or A/B/C).
 
         Returns
         -------
         dict of {int: float}
             {neighbor_hex: probability}
         """
+        start_port = resolve_port(start_port)
         neighbors = list(self.graph.neighbors(state))
         if not neighbors:
             return {}
@@ -444,11 +448,12 @@ class HexMazeTDLearner:
 
     def get_state_values(self, start_port):
         """Return a copy of V[start_port] as {hex: value}."""
+        start_port = resolve_port(start_port)
         return self.V[start_port].copy()
 
     def get_max_state_values(self):
         """Return {hex: max value across all 3 V-tables}."""
         return {
-            hex: max(self.V[port][hex] for port in self.REWARD_PORTS)
-            for hex in self.V[self.REWARD_PORTS[0]]
+            hex: max(self.V[port][hex] for port in REWARD_PORTS)
+            for hex in self.V[REWARD_PORTS[0]]
         }
