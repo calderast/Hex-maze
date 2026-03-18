@@ -9,3 +9,6 @@ clean_env/
 dist/*
 src/hex_maze_neuro.egg-info/*
 src/hexmaze/__pycache__/*
+src/hexmaze/rl/__pycache__/*
+src/hexmaze/rl/hex_learning/__pycache__/*
+src/hexmaze/rl/port_learning/__pycache__/*
