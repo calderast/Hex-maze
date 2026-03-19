@@ -126,6 +126,29 @@ This database was generated using the `Generate_Probability_Change_Database.ipyn
 
 This database was generated using the `Generate_Training_Maze_Database.ipynb` notebook available in the `Tutorials/` folder.
 
+## Reinforcement Learning Models
+
+`src/hexmaze/rl` provides reinforcement learning agents for modeling port and hex values in the hex maze task. See the rl [README](src/hexmaze/rl/README.md) for full documentation.
+
+### Port value learning (outcome-based)
+
+Learns expected reward values for each port from binary reward sequences.
+
+- **`RescorlaWagner`** — Q-learning
+- **`BayesianPortLearner`** — Beta-binomial conjugate model with credible intervals
+- **`HiddenStatePortLearner`** — Bayesian belief over permutations of known reward probabilities
+
+All port learners support maximum-likelihood fitting (`.fit()`), BIC model comparison, and trial-by-trial history. See the port learning [README](src/hexmaze/rl/port_learning/README.md) for detailed docs.
+
+### Hex value learning (trajectory-based)
+
+Learns values over individual hexes from maze trajectories.
+
+- **`HexMazeTDLearner`** — TD(0) + TD(1) value learning, maintains V(hex) per starting port
+- **`HexMazeQLearner`** — Q-learning, learns Q(hex, action) to capture directional preferences
+
+Both support learning from rat trajectories, self-generated simulation, configurable priors, and mid-session barrier changes. Learned values can be visualized as heatmaps on the maze with `plot_hex_maze(color_by=...)`.
+
 ## Other info
 
 ### Hex maze functions
@@ -149,7 +172,7 @@ If you use **Hex-maze-neuro** in your research, please cite it as:
 @software{crater_hexmazeneuro_2026,
   author       = {Crater, Stephanie},
   title        = {Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis},
-  version      = {1.0.6},
+  version      = {1.1.0},
   year         = {2026},
   month        = jan,
   publisher    = {Zenodo},
