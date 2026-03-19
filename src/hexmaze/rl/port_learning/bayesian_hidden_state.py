@@ -50,7 +50,7 @@ class BayesianHiddenStatePortLearner:
         self,
         slot_probs=(0.9, 0.5, 0.1),
         prior_strength=2.0,
-        transition_prob=0.0,
+        decay=0.0,
     ):
         """
         Parameters:
@@ -61,12 +61,12 @@ class BayesianHiddenStatePortLearner:
                 of rewards and omissions). Higher values make the prior stronger and slot
                 probability estimates harder to shift (analogous to a decreased learning rate).
                 Use >= 1 to avoid U-shaped priors on extreme slot values.
-            transition_prob (float): Per-trial probability of switching to a different permutation.
+            decay (float): Per-trial probability of switching to a different permutation.
                 0 = no switching expected. >0 = volatile environment.
         """
         self.slot_probs = tuple(slot_probs)
         self.prior_strength = prior_strength
-        self.transition_prob = transition_prob
+        self.decay = decay
         n_slots = len(slot_probs)
 
         # All permutations: states[i][port] = slot index
@@ -127,11 +127,11 @@ class BayesianHiddenStatePortLearner:
         # Update belief toward uniform before updating — models the possibility
         # that the reward probabilities have changed since the last trial
         # This is similar to decay in bayesian and rescorla-wagner
-        if self.transition_prob > 0:
+        if self.decay > 0:
             n = len(self.states)
             self.belief = (
-                (1 - self.transition_prob) * self.belief
-                + self.transition_prob * np.ones(n) / n
+                (1 - self.decay) * self.belief
+                + self.decay * np.ones(n) / n
             )
 
         # Likelihood of this reward under each state (state=permutation of reward probs).
@@ -294,7 +294,7 @@ class BayesianHiddenStatePortLearner:
         Bernoulli(expected_value(port)).
 
         Runs the model from scratch with the current params
-        (self.slot_probs, self.prior_strength, self.transition_prob).
+        (self.slot_probs, self.prior_strength, self.decay).
 
         Parameters:
             ports (list of int or str): Port sequence.
@@ -307,7 +307,7 @@ class BayesianHiddenStatePortLearner:
         model = BayesianHiddenStatePortLearner(
             slot_probs=self.slot_probs,
             prior_strength=self.prior_strength,
-            transition_prob=self.transition_prob,
+            decay=self.decay,
         )
         total = 0.0
         for port, reward in zip(ports, rewards):
@@ -323,7 +323,7 @@ class BayesianHiddenStatePortLearner:
     @classmethod
     def fit(cls, ports, rewards, slot_probs=(0.9, 0.5, 0.1)):
         """
-        Fit prior_strength and transition_prob to maximise the likelihood of a
+        Fit prior_strength and decay to maximise the likelihood of a
         reward sequence. slot_probs are treated as fixed and known.
 
         Returns a fitted instance with best-fit parameters and ``nll_``, ``bic_``,
@@ -344,27 +344,27 @@ class BayesianHiddenStatePortLearner:
         # Objective: construct a fresh model for each candidate parameter set and compute NLL
         # L-BFGS-B respects the bounds without needing a penalty
         def _obj(params):
-            prior_strength, transition_prob = params
+            prior_strength, decay = params
             return cls(slot_probs=slot_probs,
                        prior_strength=prior_strength,
-                       transition_prob=transition_prob).nll(ports, rewards)
+                       decay=decay).nll(ports, rewards)
 
-        # Starting point: prior_strength=2.0 (weak prior), transition_prob=0.05 (mild volatility)
-        # Bounds keep prior_strength in [1, 20] and transition_prob in [0, 0.5]
+        # Starting point: prior_strength=2.0 (weak prior), decay=0.05 (mild volatility)
+        # Bounds keep prior_strength in [1, 20] and decay in [0, 0.5]
         result = minimize(_obj, x0=[2.0, 0.05],
                           bounds=[(1.0, 20.0), (0.0, 0.5)],
                           method='L-BFGS-B')
 
-        # Fitted = model with the best fit prior_strength and transition_prob
+        # Fitted = model with the best fit prior_strength and decay
         fitted = cls(slot_probs=slot_probs,
                      prior_strength=result.x[0],
-                     transition_prob=result.x[1])
+                     decay=result.x[1])
         fitted.nll_ = result.fun
         # Compute Bayesian Information Criterion (BIC) as a metric for how good this model is
         # BIC = k*ln(n) + 2*NLL, where k = number of free parameters and n = number of trials
         # The k*ln(n) term penalises model complexity, so models with different
         # numbers of parameters can be compared on the same scale (lower is better)
-        # This model has k=2 (prior_strength, transition_prob)
+        # This model has k=2 (prior_strength, decay)
         n = len(rewards)
         fitted.bic_ = len(result.x) * np.log(n) + 2 * result.fun
         fitted.result_ = result
