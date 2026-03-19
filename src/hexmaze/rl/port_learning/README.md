@@ -1,7 +1,6 @@
 # Port Value Learning
 
-Learns expected reward values for each port from binary outcomes (0 or 1). No maze structure or
-trajectories needed — just which port was visited and whether reward was received.
+Learns value (expected reward probability) for each port (1/2/3 or A/B/C) from port visits and binary reward outcomes (0 or 1).
 
 ```text
 port_learning/
@@ -16,7 +15,7 @@ examples, parameter explorations, and confidence intervals.
 
 ## Models
 
-### `RescorlaWagner` — Delta-rule Q learning
+### `RescorlaWagner` — Q learning
 
 Tracks a Q-value per port, updated with a simple reward prediction error (RPE) rule.
 
@@ -55,7 +54,7 @@ a ← (1 − decay) · a + decay · prior_a
 b ← (1 − decay) · b + decay · prior_b
 ```
 
-- Returns **Bayesian surprise** (`−log p(reward)`) from each update
+- Returns **surprise** (`−log p(observed outcome)`) from each update (same as Shannon "self-information")
 - Provides `confidence_interval(port, ci)` for credible intervals
 - Free parameters for fitting: `prior_strength` (sets prior_a = prior_b), `decay`
 
@@ -86,7 +85,7 @@ Expected value for a port = weighted average across all states:
 E[reward | port] = Σᵢ belief[i] · state_i[port]
 ```
 
-- Returns **surprise** (`−log p(reward)`) from each update
+- Returns **surprise** (`−log p(observed outcome)`) from each update (same as Shannon "self-information")
 - Provides `expected_value_std(port)` — uncertainty from belief spread across permutations
 - Free parameters for fitting: `alpha`, `decay`
 
@@ -184,13 +183,16 @@ for state in hs.get_state_posteriors():
 
 ## Model Comparison with BIC
 
+Each model's free parameters are fit by minimizing negative log-likelihood (NLL) over the port visit / reward sequence.
+
 All models expose `.nll_` and `.bic_` after fitting. 
 
+We can compare the fit of different models using Bayesian Information Criterion (BIC).
 
+BIC = k·ln(n) + 2·NLL penalizes extra parameters so models with different numbers of free parameters can be compared on the same scale (lower is better).
 
-BIC = k·ln(n) + 2·NLL penalizes extra
-parameters so models with different numbers of free parameters can be compared on the same
-scale — lower BIC is better.
+All of our models only have 2 free parameters (for now) so we can also just compare NLL.
+
 
 ```python
 bics = {

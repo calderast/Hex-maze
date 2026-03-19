@@ -116,6 +116,9 @@ class HiddenStatePortLearner:
         # probability_of_observation is the model's overall predicted probability of the 
         # observed reward/omission, averaged across all states weighted by current belief
         probability_of_observation = np.dot(self.belief, likelihoods)
+
+        # surprise = -log(p(observed outcome)), aka Shannon "self information". 
+        # (Shannon entropy is the expected surprise across all possible outcomes)
         surprise = -np.log(max(probability_of_observation, 1e-10))
 
         # Bayes update: multiply each state's belief by how likely it made this observation,

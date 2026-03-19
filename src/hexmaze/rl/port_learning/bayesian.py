@@ -101,8 +101,10 @@ class BayesianPortLearner:
         mean = post["a"] / (post["a"] + post["b"])
 
         # Compute surprise before updating so it reflects the pre-update prediction
-        p_reward = mean if reward else (1 - mean)
-        surprise = -np.log(max(p_reward, 1e-10))
+        # surprise = -log(p(observed outcome)), aka Shannon "self information". 
+        # (Shannon entropy is the expected surprise across all possible outcomes)
+        p_outcome = mean if reward else (1 - mean)
+        surprise = -np.log(max(p_outcome, 1e-10))
 
         # Conjugate Beta-Binomial update: increment reward or omission count
         if reward not in (0, 1, 0.0, 1.0):
