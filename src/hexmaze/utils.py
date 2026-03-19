@@ -10,9 +10,22 @@ import numpy as np
 import pandas as pd
 
 
+# Reward ports A,B,C are at hexes 1,2,3. Map ABC to 123 so our functions can handle either
+REWARD_PORTS = [1, 2, 3]
+PORT_MAPPING = {"A": 1, "B": 2, "C": 3, 1: 1, 2: 2, 3: 3}
+
+
+def resolve_port(port):
+    """Convert reward port specified as 1/2/3 or A/B/C to 1/2/3 for consistency"""
+    return PORT_MAPPING[port.upper()] if isinstance(port, str) else port
+
+
 # Define the public interface for this module
 __all__ = [
-    "set_to_string", 
+    "REWARD_PORTS",
+    "PORT_MAPPING",
+    "resolve_port",
+    "set_to_string",
     "string_to_set",
     "create_empty_hex_maze",
     "maze_to_graph",

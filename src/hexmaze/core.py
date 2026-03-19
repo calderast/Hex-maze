@@ -13,10 +13,11 @@ from collections import Counter
 from typing import Union
 
 from .utils import (
-    maze_to_graph, 
-    maze_to_barrier_set, 
+    maze_to_graph,
+    maze_to_barrier_set,
     create_empty_hex_maze,
     get_isomorphic_mazes,
+    resolve_port,
 )
 
 # This is defined up here because we use it to set up constants
@@ -267,12 +268,9 @@ def get_path_length_difference(maze, start_port, end_port) -> int:
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
 
-    # Create a mapping so we can handle 1, 2, 3 or A, B, C to specify reward ports
-    port_hex_map = {"A": 1, "B": 2, "C": 3, 1: 1, 2: 2, 3: 3}
-
     # Get the hex (1, 2, or 3) corresponding to the start port, end port, and unchosen port
-    start_port_hex = port_hex_map[start_port]
-    end_port_hex = port_hex_map[end_port]
+    start_port_hex = resolve_port(start_port)
+    end_port_hex = resolve_port(end_port)
     unchosen_port_hex = ({1, 2, 3} - {start_port_hex, end_port_hex}).pop()
 
     # Get path lengths
@@ -302,9 +300,7 @@ def get_path_independent_hexes_to_port(maze, reward_port) -> set[int]:
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
 
-    # Create a mapping so we can handle 1, 2, 3 or A, B, C to specify reward ports
-    port_hex_map = {"A": 1, "B": 2, "C": 3, 1: 1, 2: 2, 3: 3}
-    port_hex = port_hex_map[reward_port]
+    port_hex = resolve_port(reward_port)
 
     # Get all shortest paths between reward_port and the other 2 ports
     other_ports = [1, 2, 3]
@@ -393,9 +389,7 @@ def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
 
-    # Create a mapping so we can handle 1, 2, 3 or A, B, C to specify reward ports
-    port_hex_map = {"A": 1, "B": 2, "C": 3, 1: 1, 2: 2, 3: 3}
-    port_hex = port_hex_map[reward_port]
+    port_hex = resolve_port(reward_port)
 
     # Get the shortest path length between start_hex and the reward port
     return nx.shortest_path_length(graph, source=start_hex, target=port_hex)
@@ -897,10 +891,8 @@ def get_choice_direction(start_port, end_port) -> str:
         str: 'left' or 'right' based on the direction of the rat's choice
     """
 
-    # Create a mapping so we can handle 1, 2, 3 or A, B, C to specify reward ports
-    port_hex_map = {"A": 1, "B": 2, "C": 3, 1: 1, 2: 2, 3: 3}
-    start = port_hex_map[start_port]
-    end = port_hex_map[end_port]
+    start = resolve_port(start_port)
+    end = resolve_port(end_port)
 
     # Calculate diff mod 3 to handle circular wrapping (1 -> 2 -> 3 in ccw direction)
     diff = (end - start) % 3
