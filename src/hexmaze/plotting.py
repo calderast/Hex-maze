@@ -202,8 +202,35 @@ def classify_triangle_vertices(vertices: list[tuple]) -> dict[str, tuple]:
     """
     left, mid, right = sorted(vertices, key=lambda p: p[0])
     avg_y = (left[1] + right[1]) / 2
-    label = 'top' if mid[1] < avg_y else 'bottom'
+    label = 'top' if mid[1] > avg_y else 'bottom'
     return {'left': left, 'right': right, label: mid}
+
+
+def get_maze_orientation(centroids: dict[int, tuple]) -> tuple[int, bool]:
+    """Determine the maze view angle and orientation from reward port hex coordinates.
+
+    The view angle is the reward port (1, 2, or 3) at the point of the
+    triangle (the vertex with the middle x-value among the three ports).
+
+    Parameters:
+        centroids: dict mapping hex id to (x, y) coordinates.
+            Must include hexes 1, 2, and 3 (reward port hexes).
+
+    Returns:
+        (view_angle, point_on_top): view_angle is 1, 2, or 3.
+            point_on_top is True if the point of the triangle has a
+            larger y than the base (e.g. ideal coords where y increases
+            upward), or False if it has a smaller y (e.g. pixel coords
+            where y increases downward).
+    """
+    # The point of the triangle is the reward port with the middle x-value
+    view_angle = sorted([1, 2, 3], key=lambda h: centroids[h][0])[1]
+
+    # Classify whether the point is above or below the base
+    classified = classify_triangle_vertices([centroids[1], centroids[2], centroids[3]])
+    point_on_top = "top" in classified
+
+    return view_angle, point_on_top
 
 
 def scale_triangle_from_centroid(vertices: list[tuple], shift: float) -> list[tuple]:
@@ -833,16 +860,17 @@ def plot_hex_maze(
 
     # If showing path length stats, add a little space 
     if show_stats and (reward_probabilities is None):
-        if "top" in labeled_vertices:
-            ylim[1] += scale # add space on bottom (shift view upward)
+        if "bottom" in labeled_vertices:
+            ylim[1] += scale # add space on top (base is at the top)
         else:
-            ylim[0] -= scale # add space on top (shift view downward)
+            ylim[0] -= scale # add space on bottom (base is at the bottom)
 
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_aspect("equal", adjustable="box")
+    ax.set_frame_on(False)
 
     # Optional - invert yaxis.
     # This can be useful when plotting a hex maze with hex centroids from the maze video,
