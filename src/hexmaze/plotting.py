@@ -233,6 +233,46 @@ def get_maze_orientation(centroids: dict[int, tuple]) -> tuple[int, bool]:
     return view_angle, point_on_top
 
 
+def snap_centroids_to_grid(empirical_centroids: dict[int, tuple]) -> dict[int, tuple]:
+    """Snap empirical (e.g. based on maze video) hex centroids to an ideal hex grid.
+
+    Fits a uniform scale + translation from the ideal hex layout to the
+    empirical pixel coordinates, then returns the empirical centroids
+    snapped to the ideal hex grid.
+
+    Parameters:
+        empirical: dict mapping hex id to (x, y) pixel coordinates
+
+    Returns:
+        dict mapping hex id (all 49 hexes) to snapped (x, y) pixel coordinates
+    """
+    # Get view_angle (which port is the triangle "point") and if the point is top or bottom
+    view_angle, point_on_top = get_maze_orientation(empirical_centroids)
+
+    # Get centroids for an ideal hex grid with this view_angle
+    ideal = get_hex_centroids(view_angle=view_angle, scale=1, shift=[0, 0])
+
+    # If the point is at the bottom (pixel coords), flip ideal y to match
+    if not point_on_top:
+        ideal = {hex: (x, -y) for hex, (x, y) in ideal.items()}
+
+    ideal_points = np.array([ideal[hex] for hex in empirical_centroids])
+    empirical_points = np.array([empirical_centroids[hex] for hex in empirical_centroids])
+
+    # Get scale and shift that map ideal coords to empirical
+    ideal_mean = ideal_points.mean(0)
+    empirical_mean = empirical_points.mean(0)
+    ideal_centered = ideal_points - ideal_mean
+    empirical_centered = empirical_points - empirical_mean
+
+    scale = np.sum(empirical_centered * ideal_centered) / np.sum(ideal_centered ** 2)
+    shift = empirical_mean - scale * ideal_mean
+
+    # Build empirical coords snapped to ideal grid
+    return {hex: (scale * x + shift[0], scale * y + shift[1])
+            for hex, (x, y) in ideal.items()}
+
+
 def scale_triangle_from_centroid(vertices: list[tuple], shift: float) -> list[tuple]:
     """
     Shift triangle vertices outward or inward from the triangle centroid.
