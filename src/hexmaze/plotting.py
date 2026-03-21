@@ -486,6 +486,7 @@ def plot_hex_maze(
         show_permanent_barriers: bool = False,
         show_edge_barriers: bool = True,
         centroids: Optional[Mapping[int, tuple[float, float]]] = None,
+        snap_centroids: bool = False,
         view_angle: Literal[1, 2, 3] = 1,
         hex_path: Optional[Sequence[int]] = None,
         arrows: Optional[Mapping[int, Sequence[int]]] = None,
@@ -551,6 +552,8 @@ def plot_hex_maze(
             all 49 hexes. Note that if centroids are very non-uniform, plot options
             like show_permanent_barriers may not work as well. Works best when only open hexes
             are shown. Defaults to None
+        snap_centroids (bool): If True and centroids are provided, snap the centroids to
+            the best-fit ideal hex grid for cleaner plotting. Defaults to False
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze, if centroids is not specified. Defaults to 1
         hex_path (list[int]): List of hexes specifying a path taken through the maze.
@@ -607,10 +610,12 @@ def plot_hex_maze(
     else:
         show_plot = False
 
-    # If the user specified a dictionary of hex centroids, use these 
+    # If the user specified a dictionary of hex centroids, use these
     if centroids is not None:
         # Make a copy to avoid modifying the original centroids dict
         hex_coordinates = centroids.copy()
+        if snap_centroids:
+            hex_coordinates = snap_centroids_to_grid(hex_coordinates)
         hex_sizes_dict = get_hex_sizes_from_centroids(hex_coordinates)
         hex_radii_dict = hex_sizes_dict.get('hex_radii_dict')
 
