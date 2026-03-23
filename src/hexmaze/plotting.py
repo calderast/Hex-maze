@@ -202,8 +202,75 @@ def classify_triangle_vertices(vertices: list[tuple]) -> dict[str, tuple]:
     """
     left, mid, right = sorted(vertices, key=lambda p: p[0])
     avg_y = (left[1] + right[1]) / 2
-    label = 'top' if mid[1] < avg_y else 'bottom'
+    label = 'top' if mid[1] > avg_y else 'bottom'
     return {'left': left, 'right': right, label: mid}
+
+
+def get_maze_orientation(centroids: dict[int, tuple]) -> tuple[int, bool]:
+    """Determine the maze view angle and orientation from reward port hex coordinates.
+
+    The view angle is the reward port (1, 2, or 3) at the point of the
+    triangle (the vertex with the middle x-value among the three ports).
+
+    Parameters:
+        centroids: dict mapping hex id to (x, y) coordinates.
+            Must include hexes 1, 2, and 3 (reward port hexes).
+
+    Returns:
+        (view_angle, point_on_top): view_angle is 1, 2, or 3.
+            point_on_top is True if the point of the triangle has a
+            larger y than the base (e.g. ideal coords where y increases
+            upward), or False if it has a smaller y (e.g. pixel coords
+            where y increases downward).
+    """
+    # The point of the triangle is the reward port with the middle x-value
+    view_angle = sorted([1, 2, 3], key=lambda h: centroids[h][0])[1]
+
+    # Classify whether the point is above or below the base
+    classified = classify_triangle_vertices([centroids[1], centroids[2], centroids[3]])
+    point_on_top = "top" in classified
+
+    return view_angle, point_on_top
+
+
+def snap_centroids_to_grid(empirical_centroids: dict[int, tuple]) -> dict[int, tuple]:
+    """Snap empirical (e.g. based on maze video) hex centroids to an ideal hex grid.
+
+    Fits a uniform scale + translation from the ideal hex layout to the
+    empirical pixel coordinates, then returns the empirical centroids
+    snapped to the ideal hex grid.
+
+    Parameters:
+        empirical: dict mapping hex id to (x, y) pixel coordinates
+
+    Returns:
+        dict mapping hex id (all 49 hexes) to snapped (x, y) pixel coordinates
+    """
+    # Get view_angle (which port is the triangle "point") and if the point is top or bottom
+    view_angle, point_on_top = get_maze_orientation(empirical_centroids)
+
+    # Get centroids for an ideal hex grid with this view_angle
+    ideal = get_hex_centroids(view_angle=view_angle, scale=1, shift=[0, 0])
+
+    # If the point is at the bottom (pixel coords), flip ideal y to match
+    if not point_on_top:
+        ideal = {hex: (x, -y) for hex, (x, y) in ideal.items()}
+
+    ideal_points = np.array([ideal[hex] for hex in empirical_centroids])
+    empirical_points = np.array([empirical_centroids[hex] for hex in empirical_centroids])
+
+    # Get scale and shift that map ideal coords to empirical
+    ideal_mean = ideal_points.mean(0)
+    empirical_mean = empirical_points.mean(0)
+    ideal_centered = ideal_points - ideal_mean
+    empirical_centered = empirical_points - empirical_mean
+
+    scale = np.sum(empirical_centered * ideal_centered) / np.sum(ideal_centered ** 2)
+    shift = empirical_mean - scale * ideal_mean
+
+    # Build empirical coords snapped to ideal grid
+    return {hex: (scale * x + shift[0], scale * y + shift[1])
+            for hex, (x, y) in ideal.items()}
 
 
 def scale_triangle_from_centroid(vertices: list[tuple], shift: float) -> list[tuple]:
@@ -370,13 +437,14 @@ def plot_rat_image(ax, position, heading_angle, scale=1.0):
     ax.imshow(rotated_img, extent=extent, zorder=10, interpolation='bilinear')
 
 
-def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
+def get_stats_coords(hex_centroids: dict[int, tuple], invert_yaxis: bool = False) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
     graph coordinates of where to display those stats based on the hex centroids.
 
     Parameters:
         hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+        invert_yaxis (bool): If we're going to invert the yaxis of the plot (this changes coords slightly)
 
     Returns:
         stats_coords (dict): Dictionary of stat_id: (x, y) coordinates of where to plot it.
@@ -384,6 +452,9 @@ def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
     """
     # Get coordinates of reward port hexes
     hex1, hex2, hex3 = hex_centroids.get(1), hex_centroids.get(2), hex_centroids.get(3)
+    
+    # Get maze orientation for precise adjustment of coords
+    view_angle, point_on_top = get_maze_orientation(hex_centroids)
 
     # Get average hex size for scaling
     hex_sizes_dict = get_hex_sizes_from_centroids(hex_centroids)
@@ -401,6 +472,34 @@ def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
 
     # Set up dict of stats coords
     stats_coords = {"len12": len12, "len13": len13, "len23": len23, "pA": pA, "pB": pB, "pC": pC}
+
+    # The stats coordinates are for the bottom of the stats text, so text above the maze appears vertically
+    # further from the maze than text below the maze. We simply can't have that. So we move the coords for 
+    # the top text slightly down so it's perfect. (the things I do behind the scenes for you all...)
+    prob_key = {1: "pA", 2: "pB", 3: "pC"}[view_angle]
+    len_key = {1: "len23", 2: "len13", 3: "len12"}[view_angle]
+
+    if point_on_top and not invert_yaxis:
+        # Point is visually at the top, with a reward probability printed above it (standard case).
+        # Move the top reward probability down (decrease y)
+        x, y = stats_coords[prob_key]
+        stats_coords[prob_key] = (x, y - average_hex_radius)
+    elif not point_on_top and invert_yaxis:
+        # Point is not on top in data coords, inverting y puts it visually on top (usual adjustment for pixel coords).
+        # Move the top reward probability down (increase y, since y axis is inverted)
+        x, y = stats_coords[prob_key]
+        stats_coords[prob_key] = (x, y + average_hex_radius)
+    elif not point_on_top and not invert_yaxis:
+        # Base is visually at the top, with a path length printed above it (pixel coords without adjustment).
+        # Move the top path length down (decrease y)
+        x, y = stats_coords[len_key]
+        stats_coords[len_key] = (x, y - average_hex_radius * .75)
+    else:
+        # point_on_top and invert_yaxis: base is visually at the top because y is inverted (we never do this)
+        # Move the top path length down (increase y, since y axis is inverted)
+        x, y = stats_coords[len_key]
+        stats_coords[len_key] = (x, y + average_hex_radius * .75)
+
     return stats_coords
 
 
@@ -419,6 +518,7 @@ def plot_hex_maze(
         show_permanent_barriers: bool = False,
         show_edge_barriers: bool = True,
         centroids: Optional[Mapping[int, tuple[float, float]]] = None,
+        snap_centroids: bool = False,
         view_angle: Literal[1, 2, 3] = 1,
         hex_path: Optional[Sequence[int]] = None,
         arrows: Optional[Mapping[int, Sequence[int]]] = None,
@@ -484,6 +584,8 @@ def plot_hex_maze(
             all 49 hexes. Note that if centroids are very non-uniform, plot options
             like show_permanent_barriers may not work as well. Works best when only open hexes
             are shown. Defaults to None
+        snap_centroids (bool): If True and centroids are provided, snap the centroids to
+            the best-fit ideal hex grid for cleaner plotting. Defaults to False
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze, if centroids is not specified. Defaults to 1
         hex_path (list[int]): List of hexes specifying a path taken through the maze.
@@ -540,10 +642,12 @@ def plot_hex_maze(
     else:
         show_plot = False
 
-    # If the user specified a dictionary of hex centroids, use these 
+    # If the user specified a dictionary of hex centroids, use these
     if centroids is not None:
         # Make a copy to avoid modifying the original centroids dict
         hex_coordinates = centroids.copy()
+        if snap_centroids:
+            hex_coordinates = snap_centroids_to_grid(hex_coordinates)
         hex_sizes_dict = get_hex_sizes_from_centroids(hex_coordinates)
         hex_radii_dict = hex_sizes_dict.get('hex_radii_dict')
 
@@ -556,9 +660,9 @@ def plot_hex_maze(
     # Copy hex coordinates so we still have barrier positions etc if we pop them
     hex_coordinates_copy = hex_coordinates.copy()
 
-    # Get a dictionary of stats coordinates based on hex coordinates
+    # Get a dictionary of stats coordinates based on hex coordinates and axis orientation
     if show_stats or reward_probabilities is not None:
-        stats_coordinates = get_stats_coords(hex_coordinates)
+        stats_coordinates = get_stats_coords(hex_coordinates, invert_yaxis=invert_yaxis)
 
     # Make the open hexes light blue
     hex_colors = {node: "skyblue" for node in hex_maze.nodes()}
@@ -833,16 +937,17 @@ def plot_hex_maze(
 
     # If showing path length stats, add a little space 
     if show_stats and (reward_probabilities is None):
-        if "top" in labeled_vertices:
-            ylim[1] += scale # add space on bottom (shift view upward)
+        if "bottom" in labeled_vertices:
+            ylim[1] += scale # add space on top (base is at the top)
         else:
-            ylim[0] -= scale # add space on top (shift view downward)
+            ylim[0] -= scale # add space on bottom (base is at the bottom)
 
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_aspect("equal", adjustable="box")
+    ax.set_frame_on(False)
 
     # Optional - invert yaxis.
     # This can be useful when plotting a hex maze with hex centroids from the maze video,
