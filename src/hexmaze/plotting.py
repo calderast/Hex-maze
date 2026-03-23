@@ -437,13 +437,14 @@ def plot_rat_image(ax, position, heading_angle, scale=1.0):
     ax.imshow(rotated_img, extent=extent, zorder=10, interpolation='bilinear')
 
 
-def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
+def get_stats_coords(hex_centroids: dict[int, tuple], invert_yaxis: bool = False) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
     graph coordinates of where to display those stats based on the hex centroids.
 
     Parameters:
         hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+        invert_yaxis (bool): If we're going to invert the yaxis of the plot (this changes coords slightly)
 
     Returns:
         stats_coords (dict): Dictionary of stat_id: (x, y) coordinates of where to plot it.
@@ -451,6 +452,9 @@ def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
     """
     # Get coordinates of reward port hexes
     hex1, hex2, hex3 = hex_centroids.get(1), hex_centroids.get(2), hex_centroids.get(3)
+    
+    # Get maze orientation for precise adjustment of coords
+    view_angle, point_on_top = get_maze_orientation(hex_centroids)
 
     # Get average hex size for scaling
     hex_sizes_dict = get_hex_sizes_from_centroids(hex_centroids)
@@ -468,6 +472,34 @@ def get_stats_coords(hex_centroids: dict[int, tuple]) -> dict[str, tuple]:
 
     # Set up dict of stats coords
     stats_coords = {"len12": len12, "len13": len13, "len23": len23, "pA": pA, "pB": pB, "pC": pC}
+
+    # The stats coordinates are for the bottom of the stats text, so text above the maze appears vertically
+    # further from the maze than text below the maze. We simply can't have that. So we move the coords for 
+    # the top text slightly down so it's perfect. (the things I do behind the scenes for you all...)
+    prob_key = {1: "pA", 2: "pB", 3: "pC"}[view_angle]
+    len_key = {1: "len23", 2: "len13", 3: "len12"}[view_angle]
+
+    if point_on_top and not invert_yaxis:
+        # Point is visually at the top, with a reward probability printed above it (standard case).
+        # Move the top reward probability down (decrease y)
+        x, y = stats_coords[prob_key]
+        stats_coords[prob_key] = (x, y - average_hex_radius)
+    elif not point_on_top and invert_yaxis:
+        # Point is not on top in data coords, inverting y puts it visually on top (usual adjustment for pixel coords).
+        # Move the top reward probability down (increase y, since y axis is inverted)
+        x, y = stats_coords[prob_key]
+        stats_coords[prob_key] = (x, y + average_hex_radius)
+    elif not point_on_top and not invert_yaxis:
+        # Base is visually at the top, with a path length printed above it (pixel coords without adjustment).
+        # Move the top path length down (decrease y)
+        x, y = stats_coords[len_key]
+        stats_coords[len_key] = (x, y - average_hex_radius * .75)
+    else:
+        # point_on_top and invert_yaxis: base is visually at the top because y is inverted (we never do this)
+        # Move the top path length down (increase y, since y axis is inverted)
+        x, y = stats_coords[len_key]
+        stats_coords[len_key] = (x, y + average_hex_radius * .75)
+
     return stats_coords
 
 
@@ -628,9 +660,9 @@ def plot_hex_maze(
     # Copy hex coordinates so we still have barrier positions etc if we pop them
     hex_coordinates_copy = hex_coordinates.copy()
 
-    # Get a dictionary of stats coordinates based on hex coordinates
+    # Get a dictionary of stats coordinates based on hex coordinates and axis orientation
     if show_stats or reward_probabilities is not None:
-        stats_coordinates = get_stats_coords(hex_coordinates)
+        stats_coordinates = get_stats_coords(hex_coordinates, invert_yaxis=invert_yaxis)
 
     # Make the open hexes light blue
     hex_colors = {node: "skyblue" for node in hex_maze.nodes()}
