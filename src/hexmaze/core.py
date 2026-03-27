@@ -99,6 +99,7 @@ __all__ = [
     "get_hexes_from_port",
     "get_hexes_from_closest_port",
     "get_hex_distance",
+    "get_hexes_between",
     "get_safe_hex_distance",
     "get_hexes_within_distance",
     "get_safe_hexes_within_distance",
@@ -123,13 +124,17 @@ __all__ = [
 ]
 
 
-def get_critical_choice_points(maze) -> set[int]:
+def get_critical_choice_points(maze, start_port=None) -> set[int]:
     """
     Given a hex maze, find all critical choice points between reward ports 1, 2, and 3.
+    Optionally, find only the choice point(s) from a specific start port.
 
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze represented in any valid format
+        start_port (int or str, optional): If provided (1/2/3 or A/B/C),
+            return only the choice point(s) from this port. If None (default),
+            return choice points from all ports.
 
     Returns:
         set[int]: Set of ints representing hexes that are the critical choice points for this maze
@@ -138,28 +143,34 @@ def get_critical_choice_points(maze) -> set[int]:
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
 
+    if start_port is not None:
+        start_port = resolve_port(start_port)
+
     paths12 = list(nx.all_shortest_paths(graph, source=1, target=2))
     paths13 = list(nx.all_shortest_paths(graph, source=1, target=3))
     paths23 = list(nx.all_shortest_paths(graph, source=2, target=3))
 
     choice_points = set()
     # all choice points from port 1
-    for path_a in paths12:
-        for path_b in paths13:
-            shared_path = [hex for hex in path_a if hex in path_b]
-            choice_points.add(shared_path[-1])
+    if start_port is None or start_port == 1:
+        for path_a in paths12:
+            for path_b in paths13:
+                shared_path = [hex for hex in path_a if hex in path_b]
+                choice_points.add(shared_path[-1])
 
     # all choice points from port 2
-    for path_a in paths12:
-        for path_b in paths23:
-            shared_path = [hex for hex in path_a[::-1] if hex in path_b]
-            choice_points.add(shared_path[-1])
+    if start_port is None or start_port == 2:
+        for path_a in paths12:
+            for path_b in paths23:
+                shared_path = [hex for hex in path_a[::-1] if hex in path_b]
+                choice_points.add(shared_path[-1])
 
     # all choice points from port 3
-    for path_a in paths13:
-        for path_b in paths23:
-            shared_path = [hex for hex in path_a[::-1] if hex in path_b[::-1]]
-            choice_points.add(shared_path[-1])
+    if start_port is None or start_port == 3:
+        for path_a in paths13:
+            for path_b in paths23:
+                shared_path = [hex for hex in path_a[::-1] if hex in path_b[::-1]]
+                choice_points.add(shared_path[-1])
     return choice_points
 
 
@@ -206,7 +217,7 @@ def get_optimal_paths_between_ports(maze) -> list[list]:
     return optimal_paths
 
 
-def get_optimal_paths(maze, start_hex: int, target_hex: int) -> list[list]:
+def get_optimal_paths(maze, start_hex, target_hex) -> list[list]:
     """
     Given a hex maze, return a list of all optimal paths
     from the start_hex to the target_hex in the maze.
@@ -214,8 +225,8 @@ def get_optimal_paths(maze, start_hex: int, target_hex: int) -> list[list]:
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze represented in any valid format
-        start_hex (int): The starting hex in the maze
-        target_hex (int): The target hex in the maze
+        start_hex (int or str): The starting hex in the maze (int, or A/B/C for ports)
+        target_hex (int or str): The target hex in the maze (int, or A/B/C for ports)
 
     Returns:
         list[list]: A list of lists representing all optimal path(s) (in hexes)
@@ -223,6 +234,8 @@ def get_optimal_paths(maze, start_hex: int, target_hex: int) -> list[list]:
     """
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
+    start_hex = resolve_port(start_hex)
+    target_hex = resolve_port(target_hex)
 
     return list(nx.all_shortest_paths(graph, source=start_hex, target=target_hex))
 
@@ -345,7 +358,7 @@ def get_unreachable_hexes(maze) -> set[int]:
     return set(graph.nodes) - main_component
 
 
-def get_closest_port(maze, start_hex: int) -> list[int]:
+def get_closest_port(maze, start_hex) -> list[int]:
     """
     Find the closest reward port(s) to a given hex for a given maze configuration.
     Returns a list to handle cases where multiple ports are equally close.
@@ -360,6 +373,7 @@ def get_closest_port(maze, start_hex: int) -> list[int]:
     """
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
+    start_hex = resolve_port(start_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
 
     # Calculate distance to each reward port
     distances = {
@@ -389,6 +403,7 @@ def get_hexes_from_port(maze, start_hex: int, reward_port) -> int:
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
 
+    start_hex = resolve_port(start_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
     port_hex = resolve_port(reward_port)
 
     # Get the shortest path length between start_hex and the reward port
@@ -410,6 +425,8 @@ def get_hexes_from_closest_port(maze, start_hex: int) -> int:
     """
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
+    
+    start_hex = resolve_port(start_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
 
     # Calculate distance to each reward port and return the minimum
     distances = [
@@ -419,25 +436,74 @@ def get_hexes_from_closest_port(maze, start_hex: int) -> int:
     return min(distances)
 
 
-def get_hex_distance(maze, start_hex: int, target_hex: int) -> int:
+def get_hex_distance(maze, start_hex, target_hex) -> int:
     """
     Find the minimum hex distance between a pair of hexes for a given maze configuration.
-    Adjacent hexes have a distance of 1. 
+    Adjacent hexes have a distance of 1.
 
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze represented in any valid format
-        start_hex (int): The hex to calculate distance from
-        target_hex (int): The hex to calculate distance to
+        start_hex (int or str): The hex to calculate distance from (int, or A/B/C for ports)
+        target_hex (int or str): The hex to calculate distance to (int, or A/B/C for ports)
 
     Returns:
         int: The number of hexes from start_hex to target_hex
     """
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
+    start_hex = resolve_port(start_hex)
+    target_hex = resolve_port(target_hex)
 
     # Get the shortest path length between start_hex and target_hex
     return nx.shortest_path_length(graph, source=start_hex, target=target_hex)
+
+
+def get_hexes_between(maze, start_hex: int, target_hex: int, dead_end_ok=True, non_optimal_ok=True) -> set[int]:
+    """
+    Get all hexes that lie between two hexes in a maze. Removes start_hex
+    and target_hex from the graph, then returns the connected component
+    containing the shortest path hexes (plus start_hex and target_hex themselves).
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_hex (int): The starting hex
+        target_hex (int): The target hex
+        dead_end_ok (bool): If True (default), include dead-end hexes in the
+            corridor. If False, exclude them.
+        non_optimal_ok (bool): If True (default), include non-optimal
+            (longer-than-optimal but not dead-end) hexes. If False, exclude them.
+
+    Returns:
+        set[int]: All hexes between start_hex and target_hex, filtered by
+            the dead_end_ok and non_optimal_ok options
+    """
+    graph = maze_to_graph(maze)
+    
+    start_hex = resolve_port(start_hex) # may not be not a port hex, but allow A/B/C for 1/2/3 anyway
+    target_hex = resolve_port(target_hex) # may not be not a port hex, but allow A/B/C for 1/2/3 anyway
+
+    # Get a hex on the shortest path to identify the right component
+    path = nx.shortest_path(graph, source=start_hex, target=target_hex)
+
+    # Remove start and target from the graph
+    subgraph = graph.copy()
+    subgraph.remove_nodes_from([start_hex, target_hex])
+
+    # Find the connected component containing the shortest path hexes
+    between = {start_hex, target_hex}
+    if len(path) > 2:
+        path_hex = path[1]  # a hex on the path (not start or target)
+        between.update(nx.node_connected_component(subgraph, path_hex))
+
+    # Filter out dead-end and/or non-optimal hexes if requested
+    if not dead_end_ok or not non_optimal_ok:
+        dead_ends = get_dead_end_hexes(maze) if not dead_end_ok else set()
+        non_optimal = get_non_optimal_non_dead_end_hexes(maze) if not non_optimal_ok else set()
+        between -= dead_ends | non_optimal
+
+    return between
 
 
 def get_safe_hex_distance(maze, start_hex: int, target_hex: int) -> int:
@@ -459,6 +525,9 @@ def get_safe_hex_distance(maze, start_hex: int, target_hex: int) -> int:
     """
     # Convert all valid maze representations to a barrier set
     barriers = maze_to_barrier_set(maze)
+    
+    start_hex = resolve_port(start_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
+    target_hex = resolve_port(target_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
 
     # Remove source and target hex from barriers if they are present
     barriers.discard(start_hex)
@@ -494,6 +563,8 @@ def get_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, min_d
     """
     # Convert all valid maze representations to a nx.Graph object
     graph = maze_to_graph(maze)
+    
+    start_hex = resolve_port(start_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
 
     # Get a dict of shortest path lengths from the start_hex to all other hexes
     shortest_paths = nx.single_source_shortest_path_length(graph, start_hex)
@@ -524,6 +595,8 @@ def get_safe_hexes_within_distance(maze, start_hex: int, max_distance=math.inf, 
     """
     # Convert all valid maze representations to a barrier set
     barriers = maze_to_barrier_set(maze)
+    
+    start_hex = resolve_port(start_hex) # likely not a port hex, but allow A/B/C for 1/2/3 anyway
 
     # Remove start hex from barriers if it is present
     barriers.discard(start_hex)
