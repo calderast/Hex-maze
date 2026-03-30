@@ -36,6 +36,8 @@ __all__ = [
     "optimal_path_order_changed",
     "no_common_choice_points",
     "get_old_and_new_paths",
+    "get_all_path_pairs",
+    "get_most_similar_paths",
     "get_path_divergence_point",
     "get_path_convergence_point",
     "get_hexes_before_divergence",
@@ -441,6 +443,40 @@ def get_old_and_new_paths(maze_1, maze_2, start_port, end_port) -> tuple[list[li
     return old_paths, new_paths
 
 
+def get_all_path_pairs(maze_1, maze_2, start_port, end_port) -> list[tuple[list, list]]:
+    """
+    Given 2 hex mazes and a pair of reward ports, return all combinations
+    of old/new optimal paths as (old_path, new_path) pairs, sorted from
+    most similar (fewest differing hexes) to least similar.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        list[tuple[list, list]]: All (old_path, new_path) pairs sorted by
+            similarity (fewest differing hexes first). Empty list if paths
+            are identical.
+    """
+    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
+
+    if have_common_path(old_paths, new_paths):
+        return []
+
+    pairs = []
+    for old_path in old_paths:
+        for new_path in new_paths:
+            diff = len(set(old_path).symmetric_difference(set(new_path)))
+            pairs.append((old_path, new_path, diff))
+
+    pairs.sort(key=lambda x: x[2])
+    return [(old_path, new_path) for old_path, new_path, _ in pairs]
+
+
 def get_most_similar_paths(maze_1, maze_2, start_port, end_port) -> tuple[list, list] | None:
     """
     Given 2 hex mazes and a pair of reward ports, find the most similar pair
@@ -458,24 +494,10 @@ def get_most_similar_paths(maze_1, maze_2, start_port, end_port) -> tuple[list, 
         tuple[list, list]: The most similar pair of (old_path, new_path),
             or None if the paths are identical (no divergence).
     """
-    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
-
-    # If there is a common path, no divergence
-    if have_common_path(old_paths, new_paths):
+    all_pairs = get_all_path_pairs(maze_1, maze_2, start_port, end_port)
+    if not all_pairs:
         return None
-
-    best_old_path = old_paths[0]
-    best_new_path = new_paths[0]
-    min_diff = 25
-    for old_path in old_paths:
-        for new_path in new_paths:
-            diff = len(set(old_path).symmetric_difference(set(new_path)))
-            if diff < min_diff:
-                min_diff = diff
-                best_old_path = old_path
-                best_new_path = new_path
-
-    return best_old_path, best_new_path
+    return all_pairs[0]
 
 
 def get_path_divergence_point(maze_1, maze_2, start_port, end_port) -> int:
