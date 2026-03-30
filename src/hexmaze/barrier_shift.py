@@ -441,6 +441,43 @@ def get_old_and_new_paths(maze_1, maze_2, start_port, end_port) -> tuple[list[li
     return old_paths, new_paths
 
 
+def get_most_similar_paths(maze_1, maze_2, start_port, end_port) -> tuple[list, list] | None:
+    """
+    Given 2 hex mazes and a pair of reward ports, find the most similar pair
+    of old/new optimal paths (the pair with the fewest differing hexes).
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        tuple[list, list]: The most similar pair of (old_path, new_path),
+            or None if the paths are identical (no divergence).
+    """
+    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
+
+    # If there is a common path, no divergence
+    if have_common_path(old_paths, new_paths):
+        return None
+
+    best_old_path = old_paths[0]
+    best_new_path = new_paths[0]
+    min_diff = 25
+    for old_path in old_paths:
+        for new_path in new_paths:
+            diff = len(set(old_path).symmetric_difference(set(new_path)))
+            if diff < min_diff:
+                min_diff = diff
+                best_old_path = old_path
+                best_new_path = new_path
+
+    return best_old_path, best_new_path
+
+
 def get_path_divergence_point(maze_1, maze_2, start_port, end_port) -> int:
     """
     Given 2 hex mazes and a pair of reward ports, find the choice point where
@@ -462,23 +499,11 @@ def get_path_divergence_point(maze_1, maze_2, start_port, end_port) -> int:
         int: The hex where the old and new paths diverge (the last shared hex
             from the start port), or None if the paths are identical.
     """
-    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
-
-    # If there is a common path, no divergence
-    if have_common_path(old_paths, new_paths):
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
         return None
 
-    # Find the most similar pair of old/new paths
-    best_old_path = old_paths[0]
-    best_new_path = new_paths[0]
-    min_diff = 25
-    for old_path in old_paths:
-        for new_path in new_paths:
-            diff = len(set(old_path).symmetric_difference(set(new_path)))
-            if diff < min_diff:
-                min_diff = diff
-                best_old_path = old_path
-                best_new_path = new_path
+    best_old_path, best_new_path = result
 
     # Walk from the start and find the last shared hex before divergence
     divergence_point = best_old_path[0]
@@ -512,23 +537,11 @@ def get_path_convergence_point(maze_1, maze_2, start_port, end_port) -> int:
         int: The hex where the old and new paths reconverge (the first shared
             hex walking back from the end port), or None if the paths are identical.
     """
-    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
-
-    # If there is a common path, no convergence point needed
-    if have_common_path(old_paths, new_paths):
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
         return None
 
-    # Find the most similar pair of old/new paths
-    best_old_path = old_paths[0]
-    best_new_path = new_paths[0]
-    min_diff = 25
-    for old_path in old_paths:
-        for new_path in new_paths:
-            diff = len(set(old_path).symmetric_difference(set(new_path)))
-            if diff < min_diff:
-                min_diff = diff
-                best_old_path = old_path
-                best_new_path = new_path
+    best_old_path, best_new_path = result
 
     # Walk from the end and find the first shared hex before the paths differ
     convergence_point = best_old_path[-1]
@@ -594,43 +607,36 @@ def get_hexes_after_divergence(maze_1, maze_2, start_port, end_port) -> tuple[se
             - new_path_hexes: Hexes unique to the new path between divergence and convergence
             Returns (set(), set()) if the paths are identical (no divergence).
     """
-    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
-
-    if have_common_path(old_paths, new_paths):
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
         return set(), set()
 
-    # Find the most similar pair of old/new paths
-    best_old_path = old_paths[0]
-    best_new_path = new_paths[0]
-    min_diff = 25
-    for old_path in old_paths:
-        for new_path in new_paths:
-            diff = len(set(old_path).symmetric_difference(set(new_path)))
-            if diff < min_diff:
-                min_diff = diff
-                best_old_path = old_path
-                best_new_path = new_path
+    best_old_path, best_new_path = result
 
-    # Find divergence (walking from start) and convergence (walking from end)
-    divergence_idx = 0
-    for i, (hex_old, hex_new) in enumerate(zip(best_old_path, best_new_path)):
+    # Find divergence point (last shared hex walking from start)
+    divergence = best_old_path[0]
+    for hex_old, hex_new in zip(best_old_path, best_new_path):
         if hex_old == hex_new:
-            divergence_idx = i
+            divergence = hex_old
         else:
             break
 
-    convergence_idx_old = len(best_old_path) - 1
-    convergence_idx_new = len(best_new_path) - 1
-    for i_old, i_new in zip(range(len(best_old_path) - 1, -1, -1), range(len(best_new_path) - 1, -1, -1)):
-        if best_old_path[i_old] == best_new_path[i_new]:
-            convergence_idx_old = i_old
-            convergence_idx_new = i_new
+    # Find convergence point (first shared hex walking from end)
+    convergence = best_old_path[-1]
+    for hex_old, hex_new in zip(reversed(best_old_path), reversed(best_new_path)):
+        if hex_old == hex_new:
+            convergence = hex_old
         else:
             break
 
-    # Slice each path between divergence and convergence (exclusive of both)
-    old_path_hexes = set(best_old_path[divergence_idx + 1:convergence_idx_old])
-    new_path_hexes = set(best_new_path[divergence_idx + 1:convergence_idx_new])
+    # Slice paths between divergence and convergence (exclusive of both endpoints)
+    div_idx_old = best_old_path.index(divergence)
+    conv_idx_old = best_old_path.index(convergence)
+    old_path_hexes = set(best_old_path[div_idx_old + 1:conv_idx_old])
+
+    div_idx_new = best_new_path.index(divergence)
+    conv_idx_new = best_new_path.index(convergence)
+    new_path_hexes = set(best_new_path[div_idx_new + 1:conv_idx_new])
 
     # Remove any shared hexes so the sets are non-overlapping
     shared = old_path_hexes & new_path_hexes
