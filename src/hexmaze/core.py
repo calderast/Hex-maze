@@ -1079,9 +1079,13 @@ def divide_into_thirds_from_port(maze, start_port) -> list[set]:
 
     thirds = [set(), set(), set()]
     for port in [1, 2, 3]:
-        # Each port gets its own corridor + its own choice point(s)
         thirds[port - 1].update(regions[f"to_{port}"])
-        thirds[port - 1].update(regions[f"choice_point_{port}"])
+        # Other ports' choice points belong to their third, excluding
+        # any that are also the start port's choice point
+        if port != start_port:
+            thirds[port - 1].update(
+                regions[f"choice_point_{port}"] - regions[f"choice_point_{start_port}"]
+            )
 
     # Loop segments touching the start port get assigned to the other port
     for other in other_ports:
