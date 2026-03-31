@@ -72,9 +72,11 @@ Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`]
 `Tutorials/` also includes the following tutorial notebooks:
 - [Demos of useful hex maze functions](./Tutorials/10_Hex_Maze_Functions.ipynb)
 - [Plotting hex mazes and barrier change sequences](./Tutorials/11_Plotting_Hex_Mazes.ipynb)
+- [Comparing optimal paths between mazes for barrier shift sessions](./Tutorials/12_Compare_Maze_Paths.ipynb)
 - [Searching the maze configuration database for the mazes you want](./Tutorials/20_Maze_Configuration_Database_Search.ipynb)
 - [Searching the barrier sequence database for the sequence you want](./Tutorials/21_Barrier_Sequence_Database_Search.ipynb)
 - [Generating barrier sequences with custom criteria](./Tutorials/33_Generate_Custom_Barrier_Sequence_Database.ipynb)
+- [Modeling port values based on choices and reward outcomes](./Tutorials/40_Port_Value_Models.ipynb)
 
 These 3 are also provided for reference:
 - [How the hex maze database was generated](./Tutorials/30_Generate_Hex_Maze_Database.ipynb)
@@ -138,7 +140,7 @@ Learns expected reward values for each port from binary reward sequences.
 - **`BayesianPortLearner`** — Beta-binomial conjugate model with credible intervals
 - **`HiddenStatePortLearner`** — Bayesian belief over permutations of known reward probabilities
 
-All port learners support maximum-likelihood fitting (`.fit()`), BIC model comparison, and trial-by-trial history. See the port learning [README](src/hexmaze/rl/port_learning/README.md) for detailed docs.
+All port learners support maximum-likelihood fitting (`.fit_rewards()` and `.fit_choices()`), BIC model comparison, and trial-by-trial history. See the port learning [README](src/hexmaze/rl/port_learning/README.md) for detailed docs.
 
 ### Hex value learning (trajectory-based)
 
@@ -172,7 +174,7 @@ If you use **Hex-maze-neuro** in your research, please cite it as:
 @software{crater_hexmazeneuro_2026,
   author       = {Crater, Stephanie},
   title        = {Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis},
-  version      = {1.1.1},
+  version      = {1.1.2},
   year         = {2026},
   month        = mar,
   publisher    = {Zenodo},

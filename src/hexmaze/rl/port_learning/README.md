@@ -110,8 +110,10 @@ All port learners share these methods:
 | `get_history()` | Full trial-by-trial record (values, errors/surprise, model internals at each step) |
 | `choice_probabilities(available_ports)` | Softmax probabilities over current port values |
 | `reset()` | Re-initialize to starting state, keeping parameters |
-| `nll(ports, rewards)` | Negative log-likelihood of a reward sequence under current parameters |
-| `fit(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL via L-BFGS-B. Returns fitted instance with `.nll_`, `.bic_` attributes |
+| `reward_nll(ports, rewards)` | Negative log-likelihood of a reward sequence under current parameters |
+| `choice_nll(ports, rewards)` | Negative log-likelihood of a port choice sequence under current parameters |
+| `fit_rewards(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL via L-BFGS-B. Returns fitted instance with `.reward_nll_`, `.reward_bic_` attributes |
+| `fit_choices(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL via L-BFGS-B. Returns fitted instance with `.choice_nll_`, `.choice_bic_` attributes |
 
 **Shared parameters:**
 
@@ -150,13 +152,13 @@ ports   = ['A', 'B', 'C', 'A', 'B', 'C', 'A', 'B']
 rewards = [1,    0,   0,   1,   1,   0,   1,   0  ]
 
 # Fit models to data
-rw_fit    = RescorlaWagner.fit(ports, rewards)
-bayes_fit = BayesianPortLearner.fit(ports, rewards)
-hs_fit    = HiddenStatePortLearner.fit(ports, rewards)
+rw_fit    = RescorlaWagner.fit_rewards(ports, rewards)
+bayes_fit = BayesianPortLearner.fit_rewards(ports, rewards)
+hs_fit    = HiddenStatePortLearner.fit_rewards(ports, rewards)
 
-print(f"RW:    NLL={rw_fit.nll_:.2f}, BIC={rw_fit.bic_:.2f}, alpha={rw_fit.alpha:.3f}")
-print(f"Bayes: NLL={bayes_fit.nll_:.2f}, BIC={bayes_fit.bic_:.2f}")
-print(f"HS:    NLL={hs_fit.nll_:.2f}, BIC={hs_fit.bic_:.2f}")
+print(f"RW:    NLL={rw_fit.reward_nll_:.2f}, BIC={rw_fit.reward_bic_:.2f}, alpha={rw_fit.alpha:.3f}")
+print(f"Bayes: NLL={bayes_fit.reward_nll_:.2f}, BIC={bayes_fit.reward_bic_:.2f}")
+print(f"HS:    NLL={hs_fit.reward_nll_:.2f}, BIC={hs_fit.reward_bic_:.2f}")
 
 # Step through trials manually
 rw = RescorlaWagner(alpha=0.3, decay=0.05)
@@ -185,7 +187,7 @@ for state in hs.get_state_posteriors():
 
 Each model's free parameters are fit by minimizing negative log-likelihood (NLL) over the port visit / reward sequence.
 
-All models expose `.nll_` and `.bic_` after fitting. 
+All models expose `.reward_nll_`/`.choice_nll_` and `.reward_bic_`/`.choice_bic_` after fitting. 
 
 We can compare the fit of different models using Bayesian Information Criterion (BIC).
 
@@ -196,9 +198,9 @@ All of our models only have 2 free parameters (for now) so we can also just comp
 
 ```python
 bics = {
-    'Rescorla-Wagner': rw_fit.bic_,
-    'Bayesian':        bayes_fit.bic_,
-    'Hidden State':    hs_fit.bic_,
+    'Rescorla-Wagner': rw_fit.reward_bic_,
+    'Bayesian':        bayes_fit.reward_bic_,
+    'Hidden State':    hs_fit.reward_bic_,
 }
 best = min(bics, key=bics.get)
 print(f"Best model: {best} (BIC={bics[best]:.1f})")
