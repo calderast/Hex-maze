@@ -6,10 +6,14 @@ This module contains functions for comparing different maze configurations
 and generating optimal barrier change sequences.
 """
 
+import math
+import networkx as nx
 import numpy as np
 import pandas as pd
 from .utils import (
     maze_to_barrier_set,
+    maze_to_graph,
+    resolve_port,
     get_rotated_barriers,
     get_reflected_barriers,
     get_isomorphic_mazes,
@@ -18,6 +22,8 @@ from .core import (
     get_critical_choice_points,
     get_optimal_paths,
     get_reward_path_lengths,
+    get_hexes_between,
+    get_hexes_within_distance,
 )
 
 # Define the public interface for this module
@@ -33,6 +39,14 @@ __all__ = [
     "at_least_one_path_shorter_and_longer",
     "optimal_path_order_changed",
     "no_common_choice_points",
+    "get_old_and_new_paths",
+    "get_all_path_pairs",
+    "get_most_similar_paths",
+    "get_path_divergence_point",
+    "get_path_convergence_point",
+    "get_hexes_before_divergence",
+    "get_optimal_path_hexes_after_divergence",
+    "get_hexes_after_divergence",
     "get_barrier_change",
     "get_barrier_changes",
     "get_next_barrier_sets",
@@ -407,6 +421,378 @@ def no_common_choice_points(maze_1, maze_2) -> bool:
 
     # Check if there are no choice points in common
     return choice_points_1.isdisjoint(choice_points_2)
+
+
+def get_old_and_new_paths(maze_1, maze_2, start_port, end_port) -> tuple[list[list], list[list]]:
+    """
+    Given 2 hex mazes (e.g. before and after a barrier change) and a pair of
+    reward ports, return the old and new optimal paths between those ports.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        tuple[list[list], list[list]]:
+            - old_paths: List of optimal paths between the ports in maze_1
+            - new_paths: List of optimal paths between the ports in maze_2
+    """
+    start_port = resolve_port(start_port)
+    end_port = resolve_port(end_port)
+    old_paths = get_optimal_paths(maze_1, start_hex=start_port, target_hex=end_port)
+    new_paths = get_optimal_paths(maze_2, start_hex=start_port, target_hex=end_port)
+    return old_paths, new_paths
+
+
+def get_all_path_pairs(maze_1, maze_2, start_port, end_port) -> list[tuple[list, list]]:
+    """
+    Given 2 hex mazes and a pair of reward ports, return all combinations
+    of old/new optimal paths as (old_path, new_path) pairs, sorted from
+    most similar (fewest differing hexes) to least similar.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        list[tuple[list, list]]: All (old_path, new_path) pairs sorted by
+            similarity (fewest differing hexes first). Empty list if paths
+            are identical.
+    """
+    old_paths, new_paths = get_old_and_new_paths(maze_1, maze_2, start_port, end_port)
+
+    if have_common_path(old_paths, new_paths):
+        return []
+
+    pairs = []
+    for old_path in old_paths:
+        for new_path in new_paths:
+            diff = len(set(old_path).symmetric_difference(set(new_path)))
+            pairs.append((old_path, new_path, diff))
+
+    pairs.sort(key=lambda x: x[2])
+    return [(old_path, new_path) for old_path, new_path, _ in pairs]
+
+
+def get_most_similar_paths(maze_1, maze_2, start_port, end_port) -> tuple[list, list] | None:
+    """
+    Given 2 hex mazes and a pair of reward ports, find the most similar pair
+    of old/new optimal paths (the pair with the fewest differing hexes).
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        tuple[list, list]: The most similar pair of (old_path, new_path),
+            or None if the paths are identical (no divergence).
+    """
+    all_pairs = get_all_path_pairs(maze_1, maze_2, start_port, end_port)
+    if not all_pairs:
+        return None
+    return all_pairs[0]
+
+
+def get_path_divergence_point(maze_1, maze_2, start_port, end_port) -> int:
+    """
+    Given 2 hex mazes and a pair of reward ports, find the choice point where
+    the old and new optimal paths diverge — the last hex they share (in order
+    from the start port) before taking different routes.
+
+    When there are multiple optimal paths, the most similar pair of old/new
+    paths is used (the pair with the fewest differing hexes).
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        int: The hex where the old and new paths diverge (the last shared hex
+            from the start port), or None if the paths are identical.
+    """
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
+        return None
+
+    best_old_path, best_new_path = result
+
+    # Walk from the start and find the last shared hex before divergence
+    divergence_point = best_old_path[0]
+    for hex_old, hex_new in zip(best_old_path, best_new_path):
+        if hex_old == hex_new:
+            divergence_point = hex_old
+        else:
+            break
+
+    return divergence_point
+
+
+def get_path_convergence_point(maze_1, maze_2, start_port, end_port) -> int:
+    """
+    Given 2 hex mazes and a pair of reward ports, find the point where
+    the old and new optimal paths reconverge — the last shared hex (walking
+    backwards from the end port) before the paths differ.
+
+    When there are multiple optimal paths, the most similar pair of old/new
+    paths is used (the pair with the fewest differing hexes).
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+
+    Returns:
+        int: The hex where the old and new paths reconverge (the first shared
+            hex walking back from the end port), or None if the paths are identical.
+    """
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
+        return None
+
+    best_old_path, best_new_path = result
+
+    # Walk from the end and find the first shared hex before the paths differ
+    convergence_point = best_old_path[-1]
+    for hex_old, hex_new in zip(reversed(best_old_path), reversed(best_new_path)):
+        if hex_old == hex_new:
+            convergence_point = hex_old
+        else:
+            break
+
+    return convergence_point
+
+
+def get_hexes_before_divergence(maze_1, maze_2, start_port, end_port,
+                                dead_end_ok=True, non_optimal_ok=True,
+                                distance_from_divergence=math.inf) -> set[int]:
+    """
+    Given 2 hex mazes and a pair of reward ports, get all hexes between the
+    start port and the point where the old and new optimal paths diverge.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+        dead_end_ok (bool): If True (default), include dead-end hexes.
+            If False, exclude them.
+        non_optimal_ok (bool): If True (default), include non-optimal hexes.
+            If False, exclude them.
+        distance_from_divergence (int or float): Maximum hex distance from the
+            divergence point. Only hexes within this distance are included.
+            Defaults to inf (no restriction).
+
+    Returns:
+        set[int]: All hexes between the start port and the divergence point,
+            or an empty set if the paths are identical (no divergence).
+    """
+    start_port = resolve_port(start_port)
+    divergence_point = get_path_divergence_point(maze_1, maze_2, start_port, end_port)
+
+    if divergence_point is None:
+        return set()
+
+    hexes = get_hexes_between(maze_1, start_port, divergence_point, dead_end_ok=dead_end_ok, non_optimal_ok=non_optimal_ok)
+
+    # Optionally restrict to only hexes within a given distance of the divergence point
+    if distance_from_divergence != math.inf:
+        near_divergence = get_hexes_within_distance(maze_2, divergence_point, max_distance=distance_from_divergence)
+        hexes &= near_divergence
+
+    return hexes
+
+
+def get_optimal_path_hexes_after_divergence(maze_1, maze_2, start_port, end_port,
+                                             distance_from_divergence=math.inf) -> tuple[set[int], set[int]]:
+    """
+    Given 2 hex mazes and a pair of reward ports, get the hexes on the old
+    and new optimal paths between the divergence and convergence points.
+    Returns only hexes unique to each path (no overlap).
+
+    When there are multiple optimal paths, the most similar pair of old/new
+    paths is used.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+        distance_from_divergence (int or float): Maximum hex distance from the
+            divergence point. Only hexes within this distance are included.
+            Defaults to inf (no restriction).
+
+    Returns:
+        tuple[set[int], set[int]]:
+            - old_path_hexes: Hexes unique to the old path between divergence and convergence
+            - new_path_hexes: Hexes unique to the new path between divergence and convergence
+            Returns (set(), set()) if the paths are identical (no divergence).
+    """
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
+        return set(), set()
+
+    best_old_path, best_new_path = result
+
+    # Find divergence point (last shared hex walking from start)
+    divergence = best_old_path[0]
+    for hex_old, hex_new in zip(best_old_path, best_new_path):
+        if hex_old == hex_new:
+            divergence = hex_old
+        else:
+            break
+
+    # Find convergence point (first shared hex walking from end)
+    convergence = best_old_path[-1]
+    for hex_old, hex_new in zip(reversed(best_old_path), reversed(best_new_path)):
+        if hex_old == hex_new:
+            convergence = hex_old
+        else:
+            break
+
+    # Slice paths between divergence and convergence (exclusive of both endpoints)
+    div_idx_old = best_old_path.index(divergence)
+    conv_idx_old = best_old_path.index(convergence)
+    old_path_hexes = set(best_old_path[div_idx_old + 1:conv_idx_old])
+
+    div_idx_new = best_new_path.index(divergence)
+    conv_idx_new = best_new_path.index(convergence)
+    new_path_hexes = set(best_new_path[div_idx_new + 1:conv_idx_new])
+
+    # Optionally restrict to only hexes within a given distance of the divergence point
+    if distance_from_divergence != math.inf:
+        near_divergence = get_hexes_within_distance(maze_1, divergence, max_distance=distance_from_divergence)
+        old_path_hexes &= near_divergence
+        near_divergence = get_hexes_within_distance(maze_2, divergence, max_distance=distance_from_divergence)
+        new_path_hexes &= near_divergence
+
+    # Remove any shared hexes so the sets are non-overlapping
+    shared = old_path_hexes & new_path_hexes
+    old_path_hexes -= shared
+    new_path_hexes -= shared
+
+    return old_path_hexes, new_path_hexes
+
+
+def get_hexes_after_divergence(maze_1, maze_2, start_port, end_port, distance=5) -> tuple[set[int], set[int]]:
+    """
+    Given 2 hex mazes and a pair of reward ports, get the hexes within a given
+    distance of the divergence point along the old and new path directions.
+
+    Removes the pre-divergence hexes and the divergence point itself from each
+    maze graph, then does BFS from the first hex after divergence on the old
+    and new paths respectively. This ensures the BFS can only expand forward
+    into the post-divergence region.
+
+    When there are multiple optimal paths, the most similar pair of old/new
+    paths is used.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+        distance (int): Maximum hex distance from the divergence point. Defaults to 5.
+
+    Returns:
+        tuple[set[int], set[int]]:
+            - old_hexes: Hexes within distance of divergence in the old path direction
+            - new_hexes: Hexes within distance of divergence in the new path direction
+            Returns (set(), set()) if the paths are identical (no divergence).
+    """
+    # Get the most similar pair of old/new optimal paths
+    result = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+    if result is None:
+        return set(), set()
+
+    best_old_path, best_new_path = result
+
+    # Find divergence point (last shared hex walking from start)
+    divergence = best_old_path[0]
+    for hex_old, hex_new in zip(best_old_path, best_new_path):
+        if hex_old == hex_new:
+            divergence = hex_old
+        else:
+            break
+
+    # Get the first hex after divergence on each path — these are the BFS start points
+    div_idx_old = best_old_path.index(divergence)
+    div_idx_new = best_new_path.index(divergence)
+    first_old = best_old_path[div_idx_old + 1]
+    first_new = best_new_path[div_idx_new + 1]
+
+    # Get all hexes before divergence and after convergence (including dead ends and non-optimal offshoots)
+    # Post-convergence is the same as pre-divergence with the port order switched
+    pre_divergence = get_hexes_before_divergence(maze_1, maze_2, start_port, end_port)
+    post_convergence = get_hexes_before_divergence(maze_1, maze_2, end_port, start_port)
+
+    # Remove pre-divergence, post-convergence, and the divergence point from each maze graph,
+    # so the BFS can only expand forward into the post-divergence region
+    exclude = pre_divergence | post_convergence | {divergence}
+
+    graph_1 = maze_to_graph(maze_1)
+    old_subgraph = graph_1.subgraph(set(graph_1.nodes()) - exclude)
+
+    graph_2 = maze_to_graph(maze_2)
+    new_subgraph = graph_2.subgraph(set(graph_2.nodes()) - exclude)
+
+    # BFS from the first hex after divergence on each subgraph.
+    # nx.bfs_layers yields sets of nodes at each BFS depth: layer 0 = {first_old}, layer 1 = its neighbors, etc.
+    # We collect `distance` layers (first_old is already 1 step from divergence, so distance=1 → layer 0 only)
+    # Track BFS depth for each hex so we can resolve overlaps
+    old_depth = {}
+    for layer_idx, layer in enumerate(nx.bfs_layers(old_subgraph, first_old)):
+        if layer_idx >= distance:
+            break
+        for h in layer:
+            old_depth[h] = layer_idx
+
+    new_depth = {}
+    for layer_idx, layer in enumerate(nx.bfs_layers(new_subgraph, first_new)):
+        if layer_idx >= distance:
+            break
+        for h in layer:
+            new_depth[h] = layer_idx
+
+    # Assign shared hexes to whichever side they are closer to (by BFS depth).
+    # If equidistant, exclude from both
+    old_hexes = set(old_depth.keys())
+    new_hexes = set(new_depth.keys())
+    shared = old_hexes & new_hexes
+    for h in shared:
+        if old_depth[h] < new_depth[h]:
+            new_hexes.discard(h)
+        elif new_depth[h] < old_depth[h]:
+            old_hexes.discard(h)
+        else:
+            old_hexes.discard(h)
+            new_hexes.discard(h)
+
+    return old_hexes, new_hexes
 
 
 def get_barrier_change(maze_1, maze_2) -> tuple[int, int]:
