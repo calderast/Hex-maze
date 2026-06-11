@@ -1,37 +1,75 @@
 """
-hex_maze_td_learner.py
+td_learner.py
 
-Minimal TD value-propagation agent for the hex maze.
-Supports TD(0) forward updates, TD(1) backward pass,
-self-generated trials, and clamped trajectory learning.
+TD(lambda) value-propagation agent for the hex maze.
+
+Model-free component of a Krausz et al. 2023-style hex-value learner
+("Dual credit assignment processes underlie dopamine signals in a complex
+spatial environment", Neuron). Value is learned over maze locations via
+temporal-difference learning with eligibility traces. The single ``lam``
+(lambda) knob spans the family:
+
+    lam = 0.0  -> pure TD(0): one-step bootstrapping, value propagates
+                 backward one hex per repeated traversal (the paper's
+                 model-free process).
+    lam = 1.0  -> Monte-Carlo: full discounted return assigned along the
+                 whole path within a single trial.
+    0 < lam<1  -> eligibility-trace blend of all intermediate horizons.
+
+Two orthogonal representation flags let you trade off paper-fidelity against
+sensible self-generated behavior:
+
+    directional : bool
+        False -> value over hexes (49 states), V[hex].
+        True  -> value over directional hex-states, i.e. directed edges
+                 (prev_hex, cur_hex) ~ 126 states. This is the paper's
+                 representation and is what produces approach-dependent ramps.
+
+    goal_conditioned : bool
+        False -> a single shared value function (the paper's choice). Faithful
+                 for *fitting* observed trajectories, but when used to *generate*
+                 behavior it will happily run back up the value gradient to the
+                 port it just left.
+        True  -> one value function per context, keyed by the start/excluded
+                 port (3 tables). The just-departed port is not a reward target
+                 on the current trip, so its basin is not attractive. Use this
+                 for simulate().
+
+Reward ports are always terminal (the paper's treatment): reward is delivered
+on the transition into the port, the port bootstraps value 0, and each trip is
+an episode with the eligibility trace reset between trips.
+
+Paper-exact model-free preset:
+
+    HexMazeTDLearner(
+        graph, reward_probs,
+        lam=0.0, directional=True, goal_conditioned=False,
+        priors=("flat", 0.2),
+    )
+
+Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
 """
 
 import random
 import numpy as np
 from ...utils import create_empty_hex_maze
-from ...core import get_safe_hex_distance, divide_into_thirds
+from ...core import get_safe_hex_distance
 from ...utils import REWARD_PORTS, resolve_port
 
 
 class HexMazeTDLearner:
-    """
-    TD learner maintaining 3 V-tables (one per starting port) over a hex maze.
-
-    Two modes of learning:
-        - simulate(): agent picks actions via softmax, runs TD updates online
-        - learn(): feed in existing maze trajectories with rewards
-
-    Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
-    """
+    """TD(lambda) hex-value learner. See module docstring for the flags."""
 
     def __init__(
         self,
         graph,
         reward_probs,
-        td0_alpha=0.3,
+        alpha=0.3,
         gamma=0.95,
+        lam=0.0,
         temperature=1.0,
-        td1_alpha=0.1,
+        directional=False,
+        goal_conditioned=True,
         priors=None,
         no_backtrack=False,
     ):
@@ -42,168 +80,195 @@ class HexMazeTDLearner:
             Hex maze graph (hexes 1-49, edges are adjacencies).
         reward_probs : list of float
             [p1, p2, p3] reward probability at ports 1/A, 2/B, 3/C.
-        td0_alpha : float
-            Learning rate for TD(0). Set to 0 to disable TD(0) updates.
+        alpha : float
+            TD learning rate.
         gamma : float
             Discount factor.
+        lam : float
+            Eligibility-trace decay (TD-lambda). 0 = TD(0), 1 = Monte Carlo.
         temperature : float
             Softmax temperature for action selection.
-        td1_alpha : float
-            Learning rate for TD(1). Set to 0 to disable TD(1) updates.
+        directional : bool
+            If True, states are directed edges (prev_hex, cur_hex); else hexes.
+        goal_conditioned : bool
+            If True, keep one value function per start/excluded port (3 tables);
+            else a single shared value function.
         priors : None, "uniform", ("flat", value), or list of 3 floats
-            V-table initialization strategy:
+            Value initialization strategy:
             - None: all zeros
-            - "uniform": 0.5 at goal ports, gamma^distance elsewhere (empty maze)
-            - ("flat", value): constant value for ALL hexes including start port
+            - "uniform": 0.5-weighted gamma^distance toward goal ports
+            - ("flat", value): constant value for every state
             - [p1, p2, p3]: per-port priors with gamma^distance discounting
         no_backtrack : bool
-            If True, agent avoids revisiting states within a trial (simulation mode).
+            If True, the agent avoids revisiting states within a trial (simulate).
         """
         self.graph = graph
         self.reward_probs = {i + 1: reward_probs[i] for i in range(3)}
-        self.td0_alpha = td0_alpha
+        self.alpha = alpha
         self.gamma = gamma
+        self.lam = lam
         self.temperature = temperature
-        self.td1_alpha = td1_alpha
+        self.directional = directional
+        self.goal_conditioned = goal_conditioned
         self.no_backtrack = no_backtrack
         self._priors = priors
 
-        self.maze_thirds = divide_into_thirds(graph)
+        # Contexts: one value table per excluded/start port, or a single shared one.
+        self.contexts = list(REWARD_PORTS) if goal_conditioned else [None]
 
+        self._prior_table = None  # {context: {hex: value}} or None
         self.V = {}
-        self.init_v_tables()
-        self.apply_priors(priors)
+        self.reset()
 
+    #  Setup / priors
 
-    def init_v_tables(self):
-        """Initialize V[port][hex] for all 3 ports and all hexes."""
-        for port in REWARD_PORTS:
-            self.V[port] = {hex: 0.0 for hex in self.graph.nodes()}
+    def reset(self):
+        """Clear all value tables and rebuild priors. States are created lazily."""
+        self.V = {ctx: {} for ctx in self.contexts}
+        self._build_prior_table(self._priors)
 
-    def apply_priors(self, priors):
-        """Prior initialization."""
+    def _build_prior_table(self, priors):
+        """Precompute {context: {hex: prior value}} (or None for all-zeros)."""
         if priors is None:
-            return
+            self._prior_table = None
         elif priors == "uniform":
-            self.apply_distance_priors([0.5, 0.5, 0.5])
+            self._prior_table = self._distance_priors([0.5, 0.5, 0.5])
         elif isinstance(priors, tuple) and len(priors) == 2 and priors[0] == "flat":
-            self.apply_flat_priors(priors[1])
+            value = priors[1]
+            self._prior_table = {
+                ctx: {h: value for h in self.graph.nodes()} for ctx in self.contexts
+            }
         elif isinstance(priors, (list, tuple)) and len(priors) == 3:
-            self.apply_distance_priors(list(priors))
+            self._prior_table = self._distance_priors(list(priors))
         else:
             raise ValueError(
                 f"priors must be None, 'uniform', ('flat', value), or [p1, p2, p3], got {priors!r}"
             )
 
-    def apply_distance_priors(self, port_values):
+    def _distance_priors(self, port_values):
         """
-        Set V[start_port][hex] = max over goal ports of
-        port_value[goal] * gamma^(distance from hex to goal).
-        Uses the empty maze for distances.
+        Build distance-discounted priors per context.
+
+        For each context, value(hex) = max over that context's goal ports of
+        port_value[goal] * gamma^(distance from hex to goal), using the empty maze
+        for distances. A context's goals are all ports except its key (the excluded
+        port); a non-goal-conditioned (None) context uses all three ports as goals.
         """
         empty_maze = create_empty_hex_maze()
         pv = {i + 1: port_values[i] for i in range(3)}
-
-        for start_port in REWARD_PORTS:
-            goal_ports = [p for p in REWARD_PORTS if p != start_port]
-            for hex in self.graph.nodes():
-                if hex in goal_ports:
-                    self.V[start_port][hex] = pv[hex]
+        table = {}
+        for ctx in self.contexts:
+            goals = [p for p in REWARD_PORTS if p != ctx]  # ctx=None -> all ports
+            table[ctx] = {}
+            for h in self.graph.nodes():
+                if h in goals:
+                    table[ctx][h] = pv[h]
                 else:
-                    best = 0.0
-                    for goal in goal_ports:
-                        dist = get_safe_hex_distance(empty_maze, start_hex=hex, target_hex=goal)
-                        best = max(best, pv[goal] * (self.gamma ** dist))
-                    self.V[start_port][hex] = best
+                    table[ctx][h] = max(
+                        (pv[g] * (self.gamma ** get_safe_hex_distance(empty_maze, start_hex=h, target_hex=g))
+                         for g in goals),
+                        default=0.0,
+                    )
+        return table
 
-    def apply_flat_priors(self, value):
-        """Set every state in every V-table to the same constant value."""
-        for port in REWARD_PORTS:
-            for hex in self.graph.nodes():
-                self.V[port][hex] = value
-
-    #  Reset values / swap maze graph
-
-    def reset(self):
-        """Reset all V-tables and re-apply priors."""
-        self.init_v_tables()
-        self.apply_priors(self._priors)
+    def _prior_for_hex(self, ctx, hex):
+        """Prior value for a hex in a context (0.0 when no priors set)."""
+        if self._prior_table is None:
+            return 0.0
+        return self._prior_table[ctx].get(hex, 0.0)
 
     def set_graph(self, new_graph):
         """
-        Swap the maze graph (e.g. after barrier changes).
-        New hexes get the mean of their neighbors' values (TODO: do we like this?).
-        Removed hexes are deleted from V-tables.
+        Swap the maze graph (e.g. after a barrier change). States are lazily
+        re-created against the new graph; stale states are dropped.
         """
         self.graph = new_graph
-        self.maze_thirds = divide_into_thirds(new_graph)
+        valid = set(new_graph.nodes())
+        for ctx in self.contexts:
+            for state in list(self.V[ctx]):
+                if self._hex_of(state) not in valid:
+                    del self.V[ctx][state]
 
-        for port in REWARD_PORTS:
-            for hex in new_graph.nodes():
-                if hex not in self.V[port]:
-                    nbrs = list(new_graph.neighbors(hex))
-                    self.V[port][hex] = (
-                        float(np.mean([self.V[port].get(n, 0.0) for n in nbrs]))
-                        if nbrs else 0.0
-                    )
-            for hex in list(self.V[port]):
-                if hex not in new_graph:
-                    del self.V[port][hex]
+    #  State helpers
 
-    # Table update logic
-    # Update tables for path-independent hexes for all ports but the target port
-    # Or when the rat is in the initial maze third, update for the start port only
+    def _ctx(self, start_port):
+        """The value table key for a trip starting at start_port."""
+        return start_port if self.goal_conditioned else None
 
-    def get_hex_third(self, hex):
-        """Return which port's third (1, 2, 3) a hex belongs to, or None for choice hex."""
-        for i, third_set in enumerate(self.maze_thirds):
-            if hex in third_set:
-                return REWARD_PORTS[i]
-        return None
+    def _state(self, prev, cur):
+        """State key for arriving at `cur` from `prev` (None at trip start)."""
+        return (prev, cur) if self.directional else cur
 
-    def tables_to_update(self, state, start_port):
+    def _hex_of(self, state):
+        """The maze hex underlying a state key."""
+        return state[1] if self.directional else state
+
+    def _val(self, ctx, state):
+        """Read a state's value, lazily initializing it to its prior."""
+        table = self.V[ctx]
+        v = table.get(state)
+        if v is None:
+            v = self._prior_for_hex(ctx, self._hex_of(state))
+            table[state] = v
+        return v
+
+    #  TD(lambda) core
+
+    def _trace_step(self, ctx, state, delta, e):
         """
-        Which V-tables to update for a given state.
-        - State in same third as start_port (or choice hex): [start_port]
-        - State in a different third T: all ports except T
+        Apply one TD error through the eligibility trace: bump the current
+        state's trace, update every traced state, then decay all traces.
         """
-        third = self.get_hex_third(state)
-        if third == start_port or third is None:
-            return [start_port]
-        return [p for p in REWARD_PORTS if p != third]
+        e[state] = e.get(state, 0.0) + 1.0
+        decay = self.gamma * self.lam
+        for s in list(e):
+            self.V[ctx][s] = self._val(ctx, s) + self.alpha * delta * e[s]
+            e[s] *= decay
+            if e[s] < 1e-6:
+                del e[s]
 
-    #  TD updates
-
-    def td0_step(self, state, reward, next_state, start_port):
-        """TD(0): V(s) += td0_alpha * [r + gamma * V(s') - V(s)]."""
-        for port in self.tables_to_update(state, start_port):
-            V = self.V[port]
-            next_v = 0.0 if next_state in REWARD_PORTS else V[next_state]
-            V[state] += self.td0_alpha * (reward + self.gamma * next_v - V[state])
-
-    def td0_terminal(self, state, reward, start_port):
-        """Update a terminal state: V(s) += td0_alpha * (reward - V(s))."""
-        for port in self.tables_to_update(state, start_port):
-            V = self.V[port]
-            V[state] += self.td0_alpha * (reward - V[state])
-
-    def td1_backward(self, path, reward, start_port):
+    def _learn_path(self, path, reward, ctx, record=False):
         """
-        TD(1) backward pass: for each state s_t (including terminal),
-        V(s_t) += td1_alpha * (gamma^(T-t) * reward - V(s_t)).
-        """
-        T = len(path) - 1
-        for t in range(T, -1, -1):
-            state = path[t]
-            discounted_return = (self.gamma ** (T - t)) * reward
-            for port in self.tables_to_update(state, start_port):
-                V = self.V[port]
-                V[state] += self.td1_alpha * (discounted_return - V[state])
+        Run a single TD(lambda) pass over a known path within one context.
 
-    #  Learn values based on a given hex path
+        Reward is delivered at the terminal state (path[-1]). Returns a list of
+        per-step snapshots when record=True, else None.
+        """
+        history = []
+        if record:
+            history.append(self._snapshot(path[0]))
+
+        e = {}
+        last_t = len(path) - 2  # index of the final transition
+
+        for t in range(len(path) - 1):
+            prev = path[t - 1] if t > 0 else None
+            cur, nxt = path[t], path[t + 1]
+            state = self._state(prev, cur)
+            next_state = self._state(cur, nxt)
+
+            if t == last_t:
+                # Terminal transition: reward is delivered here and the terminal
+                # state is bootstrapped at 0 (ports are terminal, as in the paper;
+                # a mid-maze trajectory end is treated the same way).
+                self._trace_step(ctx, state, reward - self._val(ctx, state), e)
+                # Record the terminal state's reward expectation without bootstrapping from it.
+                self.V[ctx][next_state] = self._val(ctx, next_state) + self.alpha * (
+                    reward - self._val(ctx, next_state)
+                )
+            else:
+                # Ordinary rewardless transition: bootstrap from the next state.
+                self._trace_step(ctx, state, self.gamma * self._val(ctx, next_state) - self._val(ctx, state), e)
+
+            if record:
+                history.append(self._snapshot(nxt))
+
+        return history if record else None
+
+    #  Learn from supplied trajectories
 
     def _resolve_start_port(self, path, start_port):
-        """Resolve start_port: use given value, or default to path[0] if it's a reward port."""
+        """Resolve start_port from the argument or path[0] (which must be a port)."""
         if start_port is not None:
             return resolve_port(start_port)
         if path[0] in REWARD_PORTS:
@@ -215,101 +280,41 @@ class HexMazeTDLearner:
 
     def process_trajectory(self, path, reward, start_port=None):
         """
-        Run TD(0) forward updates along a path, then optionally TD(1) backward.
+        Run a TD(lambda) update along a single path.
 
         Parameters
         ----------
         path : list of int
-            Sequence of states visited.
+            Sequence of hexes visited.
         reward : float
-            Reward obtained at terminal state (path[-1]).
+            Reward obtained at the terminal state (path[-1]).
         start_port : int or str, optional
-            Which port the trial started from (1/2/3 or A/B/C).
-            Defaults to path[0] if it's a reward port.
+            Port the trip started from (1/2/3 or A/B/C). Defaults to path[0]
+            if it is a reward port.
         """
         start_port = self._resolve_start_port(path, start_port)
-        if self.td0_alpha:
-            for t in range(len(path) - 1):
-                s, s_next = path[t], path[t + 1]
-                r = reward if t == len(path) - 2 else 0.0
-                self.td0_step(s, r, s_next, start_port)
-
-            terminal = path[-1]
-            if terminal in REWARD_PORTS:
-                self.td0_terminal(terminal, reward, start_port)
-
-        if self.td1_alpha:
-            self.td1_backward(path, reward, start_port)
+        self._learn_path(path, reward, self._ctx(start_port))
 
     def process_trajectory_with_history(self, path, reward, start_port=None):
         """
-        Same as process_trajectory, but records V-table snapshots at each step.
-
-        Parameters
-        ----------
-        path : list of int
-            Sequence of states visited.
-        reward : float
-            Reward obtained at terminal state (path[-1]).
-        start_port : int or str, optional
-            Which port the trial started from (1/2/3 or A/B/C).
-            Defaults to path[0] if it's a reward port.
-
-        Returns
-        -------
-        list of dict
-            One entry per step. Each dict has:
-            - "state": current hex
-            - "values": {port: {hex: value}} snapshot of all V-tables after the update
+        Same as process_trajectory, but returns a per-step snapshot of the
+        collapsed per-hex value tables (one entry per visited hex).
         """
         start_port = self._resolve_start_port(path, start_port)
-        history = []
-
-        # Record initial values before any updates
-        history.append({
-            "state": path[0],
-            "values": {port: self.V[port].copy() for port in REWARD_PORTS},
-        })
-
-        if self.td0_alpha:
-            for t in range(len(path) - 1):
-                s, s_next = path[t], path[t + 1]
-                r = reward if t == len(path) - 2 else 0.0
-                self.td0_step(s, r, s_next, start_port)
-                history.append({
-                    "state": s_next,
-                    "values": {port: self.V[port].copy() for port in REWARD_PORTS},
-                })
-
-            terminal = path[-1]
-            if terminal in REWARD_PORTS:
-                self.td0_terminal(terminal, reward, start_port)
-                history[-1]["values"] = {port: self.V[port].copy() for port in REWARD_PORTS}
-
-        if self.td1_alpha:
-            self.td1_backward(path, reward, start_port)
-            # Record final state after backward pass
-            history.append({
-                "state": path[-1],
-                "values": {port: self.V[port].copy() for port in REWARD_PORTS},
-            })
-
-        return history
+        return self._learn_path(path, reward, self._ctx(start_port), record=True)
 
     def learn(self, trajectories, rewards, start_ports=None):
         """
-        Run TD updates on externally-provided trajectories.
+        Run TD updates over a batch of externally-provided trajectories.
 
         Parameters
         ----------
         trajectories : list of list of int
-            Each element is a path [s0, s1, ..., s_terminal].
-            May start mid-maze, not necessarily at a port.
+            Each path [s0, s1, ..., s_terminal].
         rewards : list of float
-            Reward for each trajectory (0.0 or 1.0).
+            Reward for each trajectory.
         start_ports : list of int or str, optional
-            Which port each trajectory's trial started from (1/2/3 or A/B/C).
-            Defaults to each trajectory's first state (must be a reward port).
+            Start port for each trajectory; defaults to each path[0].
         """
         if start_ports is None:
             start_ports = [None] * len(trajectories)
@@ -317,31 +322,16 @@ class HexMazeTDLearner:
             if len(path) >= 2:
                 self.process_trajectory(path, reward, start_port)
 
-
-    #  Simulate hex paths using softmax action selection
+    #  Self-generated simulation
 
     def simulate(self, start_state, n_trials=65, max_steps=200):
         """
-        Run n_trials of self-generated exploration with online TD updates.
-        Each trial starts from the previous trial's terminal state.
-
-        Parameters
-        ----------
-        start_state : int
-            Starting state for the first trial.
-        n_trials : int
-            Number of trials.
-        max_steps : int
-            Maximum steps per trial before timeout.
-
-        Returns
-        -------
-        list of dict
-            One dict per trial: {"path": [...], "reward": float, "start_port": int}
+        Run n_trials of self-generated exploration with TD updates. Each trial
+        starts from the previous trial's terminal state. Returns a list of
+        {"path", "reward", "start_port"} dicts.
         """
         results = []
         current_state = start_state
-
         for _ in range(n_trials):
             if current_state in REWARD_PORTS:
                 start_port = current_state
@@ -353,44 +343,34 @@ class HexMazeTDLearner:
             path, reward = self.run_trial(current_state, start_port, goal_states, max_steps)
             results.append({"path": path, "reward": reward, "start_port": start_port})
             current_state = path[-1]
-
         return results
 
     def run_trial(self, start_state, start_port, goal_states, max_steps):
-        """Execute one self-generated trial with online TD updates."""
+        """Roll out one trial under the current policy, then apply a TD(lambda) update."""
+        ctx = self._ctx(start_port)
         state = start_state
         path = [state]
         visited = {state}
         reward = 0.0
 
         for _ in range(max_steps):
-            action = self.choose_action(state, start_port, visited)
-            if action is None:
+            nxt = self.choose_action(state, ctx, visited)
+            if nxt is None:
                 break
-
-            path.append(action)
-            visited.add(action)
-
-            if action in goal_states:
-                reward = self.sample_reward(action)
-                if self.td0_alpha:
-                    self.td0_step(state, reward, action, start_port)
-                    self.td0_terminal(action, reward, start_port)
+            path.append(nxt)
+            visited.add(nxt)
+            if nxt in goal_states:
+                reward = self.sample_reward(nxt)
                 break
+            state = nxt
 
-            if self.td0_alpha:
-                self.td0_step(state, 0.0, action, start_port)
-            state = action
-
-        if self.td1_alpha:
-            self.td1_backward(path, reward, start_port)
-
+        self._learn_path(path, reward, ctx)
         return path, reward
 
     #  Action selection
 
     def get_neighbors(self, state, visited=None):
-        """Get available neighbors, respecting no_backtrack."""
+        """Available neighbors of `state`, respecting no_backtrack."""
         neighbors = list(self.graph.neighbors(state))
         if self.no_backtrack and visited is not None:
             unvisited = [n for n in neighbors if n not in visited]
@@ -398,62 +378,75 @@ class HexMazeTDLearner:
                 return unvisited
         return neighbors
 
-    def choose_action(self, state, start_port, visited=None):
-        """Pick next state via softmax over V-values. Returns None if stuck."""
+    def choose_action(self, state, ctx, visited=None):
+        """Pick the next hex via softmax over the value of entering each neighbor."""
         neighbors = self.get_neighbors(state, visited)
         if not neighbors:
             return None
-        probs = self.softmax_probs(neighbors, start_port)
-        return np.random.choice(neighbors, p=probs)
+        probs = self._softmax_probs(state, neighbors, ctx)
+        return int(np.random.choice(neighbors, p=probs))
 
-    def softmax_probs(self, neighbors, start_port):
-        """Compute softmax probabilities over neighbor V-values."""
-        V = self.V[start_port]
-        vals = np.array([V[n] for n in neighbors])
+    def _softmax_probs(self, state, neighbors, ctx):
+        """Softmax over the value of the state reached by moving to each neighbor."""
+        vals = np.array([self._val(ctx, self._state(state, n)) for n in neighbors])
         scaled = vals / self.temperature
         scaled -= scaled.max()
         exp_v = np.exp(scaled)
         return exp_v / exp_v.sum()
 
     def sample_reward(self, state):
-        """Sample binary reward at a reward port."""
+        """Sample a binary reward at a reward port."""
         if state in self.reward_probs and random.random() < self.reward_probs[state]:
             return 1.0
         return 0.0
 
-    #  Get state values
+    #  Inspection
 
     def action_probabilities(self, state, start_port):
         """
-        Softmax choice probabilities at a state under a given V-table.
+        Softmax choice probabilities at a hex under a given context.
 
-        Parameters
-        ----------
-        state : int
-            Maze hex to evaluate.
-        start_port : int or str
-            Which V-table to use (1/2/3 or A/B/C).
-
-        Returns
-        -------
-        dict of {int: float}
-            {neighbor_hex: probability}
+        Returns {neighbor_hex: probability}.
         """
-        start_port = resolve_port(start_port)
+        ctx = self._ctx(resolve_port(start_port))
         neighbors = list(self.graph.neighbors(state))
         if not neighbors:
             return {}
-        probs = self.softmax_probs(neighbors, start_port)
+        probs = self._softmax_probs(state, neighbors, ctx)
         return dict(zip(neighbors, probs.tolist()))
 
-    def get_state_values(self, start_port):
-        """Return a copy of V[start_port] as {hex: value}."""
-        start_port = resolve_port(start_port)
-        return self.V[start_port].copy()
+    def get_state_values(self, start_port, reduce="max"):
+        """
+        Collapsed per-hex values {hex: value} for a context.
 
-    def get_max_state_values(self):
-        """Return {hex: max value across all 3 V-tables}."""
+        With directional states, each hex is aggregated over its incoming
+        directed-edge states via `reduce` ("max" or "mean"). Hexes with no
+        learned state fall back to their prior.
+        """
+        ctx = self._ctx(resolve_port(start_port))
+        return self._collapse(ctx, reduce)
+
+    def get_max_state_values(self, reduce="max"):
+        """{hex: max collapsed value across all contexts}."""
+        per_ctx = [self._collapse(ctx, reduce) for ctx in self.contexts]
+        return {h: max(d[h] for d in per_ctx) for h in self.graph.nodes()}
+
+    def _collapse(self, ctx, reduce="max"):
+        """Aggregate a context's value table down to {hex: value}."""
+        agg = {h: [] for h in self.graph.nodes()}
+        for state, value in self.V[ctx].items():
+            h = self._hex_of(state)
+            if h in agg:
+                agg[h].append(value)
+        reducer = np.max if reduce == "max" else np.mean
         return {
-            hex: max(self.V[port][hex] for port in REWARD_PORTS)
-            for hex in self.V[REWARD_PORTS[0]]
+            h: (float(reducer(vals)) if vals else self._prior_for_hex(ctx, h))
+            for h, vals in agg.items()
+        }
+
+    def _snapshot(self, state_hex):
+        """One history entry: current hex plus collapsed per-context value maps."""
+        return {
+            "state": state_hex,
+            "values": {ctx: self._collapse(ctx) for ctx in self.contexts},
         }
