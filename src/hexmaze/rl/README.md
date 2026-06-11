@@ -51,32 +51,57 @@ All port learners share the same interface:
 
 Learns values over individual hexes from maze trajectories (sequences of hex visits). 
 
-### `HexMazeTDLearner` — TD value learning
+### `HexMazeTDLearner` — TD(λ) value learning
 
-TD (temporal-difference) value learner that maintains 3 V-tables (one per starting port).
+Model-free hex-value learner using temporal-difference learning with eligibility
+traces (the model-free process of Krausz et al. 2023, *Neuron*). A single `lam`
+knob spans the family from TD(0) to Monte Carlo.
 
-- Learns **V(hex)** — the value of being at a given hex
-- Supports both **TD(0)** (forward, one-step) and **TD(1)** (backward, full-path) updates
-- On-policy: updates use the value of the hex the agent actually moved to
+- Learns **V(state)** — the value of being at a maze location
+- On-policy: choices are softmax over the value of the location you would move into
 
-**TD(0) update** (at each step along the trajectory):
-
-```text
-V(hex) ← V(hex) + α₀ · [r + γ · V(next_hex) - V(hex)]
-```
-
-**TD(1) backward pass** (after the full trajectory, for each hex at time t):
+**TD(λ) update** (eligibility trace `e`, applied each step; `δ` is the TD error):
 
 ```text
-V(hex_t) ← V(hex_t) + α₁ · [γ^(T-t) · R - V(hex_t)]
+e(state) += 1
+for every traced state s:
+    V(s) ← V(s) + α · δ · e(s)
+    e(s) ← γ · λ · e(s)
 ```
 
-where T is the final step and R (0 or 1) is the reward.
+`λ = 0` is pure TD(0) (one-step bootstrap; value propagates back one hex per
+repeated traversal — the paper's model-free signature). `λ = 1` is the
+Monte-Carlo return. Intermediate `λ` blends all horizons via the trace.
 
-**Parameters:**
+**Representation flags:**
 
-- **`td0_alpha`**: learning rate for TD(0) forward updates (default 0.3; set to 0 to disable)
-- **`td1_alpha`**: learning rate for TD(1) backward pass (default 0.1; set to 0 to disable)
+- **`directional`** (default `False`): if `True`, states are directed edges
+  `(prev_hex, cur_hex)` (~126 states, the paper's representation) instead of
+  plain hexes (49). Produces approach-dependent value ramps.
+- **`goal_conditioned`** (default `True`): if `True`, keep one value table per
+  start/excluded port (3 tables) so the just-departed port is not an attractive
+  goal during `simulate()`. If `False`, use a single shared table (the paper's
+  choice — faithful for *fitting*, but will run back toward the departed port
+  when used to *generate* behavior).
+- **`alpha`**: TD learning rate (default 0.3).
+- **`lam`**: eligibility-trace decay (default 0.0 = TD(0)).
+
+Reward ports are always terminal (the paper's treatment): reward is delivered on
+the transition into the port, the port bootstraps value 0, and each trip is an
+episode with the eligibility trace reset between trips.
+
+**Paper-exact model-free preset:**
+
+```python
+HexMazeTDLearner(
+    graph, reward_probs,
+    lam=0.0, directional=True, goal_conditioned=False,
+    priors=("flat", 0.2),
+)
+```
+
+> Note: the model-based / path-independent inference component of the paper's
+> dual-process model is **not** implemented here — this is the model-free half only.
 
 ### `HexMazeQLearner` — Q-learning
 
@@ -130,12 +155,17 @@ Both hex learners share the same interface:
 
 **Table update logic:**
 
-Both learners use the same rule for deciding which of the 3 tables to update at a given hex:
+The **Q-learner** uses a maze-thirds rule to decide which of the 3 tables to update at a given hex:
 
 - If the hex is in the same third as the start port (or is a critical choice point): update only the start port's table
 - If the hex is in a different third T: update all tables except T's
 
 TODO: decide if I like this. Figure out what to do with mazes that have more than 1 critical choice point!
+
+The **TD(λ) learner** does not share value across tables: a trip updates only the
+active context's table (the start/excluded port when `goal_conditioned=True`, or
+the single shared table otherwise). Cross-context / path-independent generalization
+is intentionally left to a future model-based component.
 
 **`start_port` defaults:**
 
