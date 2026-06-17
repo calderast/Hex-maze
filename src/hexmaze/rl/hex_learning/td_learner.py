@@ -329,11 +329,16 @@ class HexMazeTDLearner:
 
     #  Self-generated simulation
 
-    def simulate(self, start_state, n_trials=65, max_steps=200):
+    def simulate(self, start_state, n_trials=65, max_steps=200, record_history=False):
         """
         Run n_trials of self-generated exploration with TD updates. Each trial
         starts from the previous trial's terminal state. Returns a list of
         {"path", "reward", "start_port"} dicts.
+
+        When record_history=True, each result dict also carries a "history": the
+        per-step list of value snapshots (see snapshot()) captured as the TD
+        update propagates along that trial's path. Use this to build step-by-step
+        learning animations (snapshot_values() collapses a snapshot to {hex: value}).
         """
         results = []
         current_hex = start_state
@@ -345,13 +350,23 @@ class HexMazeTDLearner:
                 start_port = REWARD_PORTS[0]
                 goal_hexes = list(REWARD_PORTS)
 
-            path, reward = self.run_trial(current_hex, start_port, goal_hexes, max_steps)
-            results.append({"path": path, "reward": reward, "start_port": start_port})
+            path, reward, history = self.run_trial(
+                current_hex, start_port, goal_hexes, max_steps, record=record_history
+            )
+            result = {"path": path, "reward": reward, "start_port": start_port}
+            if record_history:
+                result["history"] = history
+            results.append(result)
             current_hex = path[-1]
         return results
 
-    def run_trial(self, start_hex, start_port, goal_hexes, max_steps):
-        """Roll out one trial under the current policy, then apply a TD(lambda) update."""
+    def run_trial(self, start_hex, start_port, goal_hexes, max_steps, record=False):
+        """
+        Roll out one trial under the current policy, then apply a TD(lambda) update.
+
+        Returns (path, reward, history), where history is the per-step value
+        snapshot list when record=True, else None.
+        """
         context = self.context_for_port(start_port)
         current_hex = start_hex
         path = [current_hex]
@@ -369,8 +384,8 @@ class HexMazeTDLearner:
                 break
             current_hex = next_hex
 
-        self.learn_path(path, reward, context)
-        return path, reward
+        history = self.learn_path(path, reward, context, record=record)
+        return path, reward, history
 
     #  Action selection
 
@@ -454,4 +469,19 @@ class HexMazeTDLearner:
         return {
             "state": current_hex,
             "values": {context: self.collapse_to_hex_values(context) for context in self.contexts},
+        }
+
+    def snapshot_values(self, snapshot, start_port=None):
+        """
+        Collapse a recorded snapshot to a single {hex: value} map for plotting.
+
+        With start_port given, returns that context's map; otherwise returns the
+        max value across all contexts (like get_max_state_values).
+        """
+        per_context = snapshot["values"]
+        if start_port is not None:
+            return dict(per_context[self.context_for_port(resolve_port(start_port))])
+        return {
+            hex: max(table.get(hex, 0.0) for table in per_context.values())
+            for hex in self.graph.nodes()
         }
