@@ -48,9 +48,11 @@ from .barrier_shift import (
 
 # Define the public interface for this module
 __all__ = [
-    "get_distance_to_nearest_neighbor", 
+    "get_distance_to_nearest_neighbor",
     "get_hex_sizes_from_centroids",
+    "get_hex_vertices",
     "get_hex_centroids",
+    "get_permanent_barrier_centroids",
     "classify_triangle_vertices",
     "get_maze_orientation",
     "snap_centroids_to_grid",
@@ -126,6 +128,38 @@ def get_hex_sizes_from_centroids(hex_centroids: dict[int, tuple]) -> dict:
     return hex_sizes_dict
 
 
+def get_hex_vertices(hex_centroids: dict[int, tuple], orientation: float = math.pi / 6) -> dict[int, list[tuple]]:
+    """
+    Given a dictionary of hex centroids, compute the 6 vertices of each hex.
+
+    Circumradii are inferred from nearest-neighbor centroid distances (via
+    get_hex_sizes_from_centroids), so this works for both ideal and empirical
+    centroid dicts. The default orientation (π/6) matches the orientation used
+    by plot_hex_maze.
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex: (x, y) centroid coordinates
+        orientation (float): Angle in radians of the first vertex from the
+            positive x-axis. Defaults to π/6.
+
+    Returns:
+        dict[int, list[tuple]]: Dictionary of hex: [(x0,y0), ..., (x5,y5)],
+            6 vertices in counterclockwise order starting from the vertex
+            at angle `orientation`.
+    """
+    hex_radii = get_hex_sizes_from_centroids(hex_centroids)['hex_radii_dict']
+    angles = [orientation + i * math.pi / 3 for i in range(6)]
+
+    return {
+        hex_id: [
+            (cx + hex_radii[hex_id] * math.cos(a),
+             cy + hex_radii[hex_id] * math.sin(a))
+            for a in angles
+        ]
+        for hex_id, (cx, cy) in hex_centroids.items()
+    }
+
+
 def get_min_max_centroids(hex_centroids: dict[int, tuple]) -> tuple[float, float, float, float]:
     """
     Given a dictionary of hex: (x, y) centroid, return the min and max
@@ -191,6 +225,64 @@ def get_hex_centroids(view_angle:Literal[1, 2, 3]=1, scale:float=1, shift=[0, 0]
     hex_positions = {hex: (x + x_shift, y + y_shift) for hex, (x, y) in hex_positions.items()}
 
     return hex_positions
+
+
+def get_permanent_barrier_centroids(view_angle:Literal[1, 2, 3]=1, scale:float=1, shift=[0, 0]) -> dict[int, tuple]:
+    """
+    Calculate the (x, y) coordinates of each permanent barrier centroid.
+    Centroids are calculated relative to the centroid of the topmost hex at (0,0)
+    (as in get_hex_centroids).
+
+    Parameters:
+        view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
+            when viewing the hex maze. Defaults to 1
+        scale (float): The width of each hex (length of the long diagonal). Defaults to 1
+        shift (list): The x and y shift of the coordinates (after scaling).
+
+    Returns:
+        dict: a dictionary of barrier: (x, y) coordinate of centroid
+    """
+
+    # Number of hexes in each vertical row of the hex maze
+    hexes_per_row = [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7]
+    # Permanent barriers in order from top to bottom, left to right (assuming view_angle=1)
+    permanent_barrier_list = [50, 52, 51, 55, 54, 53, 59, 58, 57, 56, 64, 63, 62, 61, 60]
+    # If hex 2 should be on top instead, rotate permanent barriers counterclockwise
+    if view_angle == 2:
+        permanent_barrier_list = [rotate_hex(hex, direction="counterclockwise") for hex in permanent_barrier_list]
+    # If hex 3 should be on top instead, rotate permanent barriers clockwise
+    elif view_angle == 3:
+        permanent_barrier_list = [rotate_hex(hex, direction="clockwise") for hex in permanent_barrier_list]
+
+    y_offset = math.sqrt(3) / 2 * scale
+
+    # Recompute the y positions exactly as in get_hex_centroids
+    y_shift = 0
+    row_y = []
+    for row, hexes_in_this_row in enumerate(hexes_per_row):
+        if row % 2 == 0 and row != 0:
+            y_shift += y_offset / 2
+        row_y.append(-row * y_offset + y_shift)
+
+    barrier_positions = {}
+    count = 0
+    # Interstitial rows sit between rows (1,2), (3,4), (5,6), (7,8), (9,10).
+    # The number of barriers in each interstitial row is 1, 2, 3, 4, 5 (= pair).
+    for pair in range(1, 6):
+        row_above = pair * 2       # rows 2, 4, 6, 8, 10
+        row_below = pair * 2 + 1   # rows 3, 5, 7, 9, 11
+        n_barriers = pair          # permanent barriers nestled between this pair of rows
+
+        # y is halfway between the two rows
+        y = (row_y[row_above] + row_y[row_below]) / 2
+
+        # x positions are centered, spaced one hex-width apart
+        for i in range(n_barriers):
+            x = (i + 0.5) * 3 / 2 * scale - n_barriers * 3 / 4 * scale
+            barrier_positions[permanent_barrier_list[count]] = (x + shift[0], y + shift[1])
+            count += 1
+
+    return barrier_positions
 
 
 def classify_triangle_vertices(vertices: list[tuple]) -> dict[str, tuple]:
