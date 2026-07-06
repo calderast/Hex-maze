@@ -456,6 +456,11 @@ def plot_reward_image(ax, position, rewarded, scale=1.0):
     img_name = "reward_droplet.png" if rewarded else "no_reward_x.png"
     img_path = Path(__file__).parent / "assets" / img_name
     img = Image.open(img_path)
+
+    # imshow draws the first image row at the top of the extent, which appears at the
+    # bottom when the y axis is inverted, so pre-flip the image to keep it upright
+    if ax.yaxis_inverted():
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
     img_width, img_height = img.size
     img_scale = scale * 1.2 / max(img_width, img_height)
 
