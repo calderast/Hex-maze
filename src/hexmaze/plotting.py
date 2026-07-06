@@ -9,6 +9,7 @@ import matplotlib.axes
 import matplotlib.colors
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import warnings
 from collections import defaultdict
 from itertools import chain
 import networkx as nx
@@ -456,6 +457,11 @@ def plot_reward_image(ax, position, rewarded, scale=1.0):
     img_name = "reward_droplet.png" if rewarded else "no_reward_x.png"
     img_path = Path(__file__).parent / "assets" / img_name
     img = Image.open(img_path)
+
+    # imshow draws the first image row at the top of the extent, which appears at the
+    # bottom when the y axis is inverted, so pre-flip the image to keep it upright
+    if ax.yaxis_inverted():
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
     img_width, img_height = img.size
     img_scale = scale * 1.2 / max(img_width, img_height)
 
@@ -567,6 +573,7 @@ def plot_hex_maze(
         colormap: Union[str, matplotlib.colors.Colormap] = "plasma",
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
+        hex_alpha: Optional[Union[float, Mapping[int, float]]] = None,
         rat: int = None,
         rat_to: int = None,
         rat_from: int = None,
@@ -650,6 +657,9 @@ def plot_hex_maze(
         vmax (float): Maximum value for colormap normalization, if using `color_by`.
             Values in `color_by` greater than `vmax` will be clipped to the highest color.
             If None, the maximum of `color_by` values is used. Defaults to None.
+        hex_alpha (float or dict): Transparency of the hexes. A single float (0 transparent
+            to 1 opaque) applies to all hexes, or a dict of hex_id: alpha sets it per hex
+            (hexes not in the dict stay opaque). Defaults to None (fully opaque).
         rat (int): Hex where the rat is located. If specified, plots a long evans rat at this hex.
             By default the rat faces vertically up. Use rat_to or rat_from to change direction.
         rat_to (int): Hex the rat is going to (facing towards). The rat will be rotated to
@@ -672,7 +682,17 @@ def plot_hex_maze(
         as they are also shown by the movement arrow. If show_barriers=False, the new_barrier hex
         will not be shown even if show_barrier_change=True (because no barriers are shown with this option.)
     - show_optimal_paths has the lowest precedence (will be overridden by all other highlights).
+    - hex_alpha is not compatible with show_permanent_barriers=True. It will flip show_permanent_barriers=False
+        and carry on. If you do have a legitimate case for using both of these, I can update how we render 
+        the permanent barriers to make these arguments compatible, but for now I don't see us wanting this.
     """
+    # hex_alpha is not supported with show_permanent_barriers, because translucent hexes
+    # blend with the barrier-colored background triangles instead of fading cleanly and it gets ugly
+    if hex_alpha is not None and show_barriers and show_permanent_barriers:
+        warnings.warn("hex_alpha is not supported with show_permanent_barriers=True, "
+                      "setting show_permanent_barriers=False")
+        show_permanent_barriers = False
+
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
 
@@ -881,6 +901,10 @@ def plot_hex_maze(
 
     # Add each hex to the plot
     for hex, (x, y) in hex_coordinates.items():
+        if isinstance(hex_alpha, Mapping):
+            alpha = hex_alpha.get(hex, 1.0)
+        else:
+            alpha = hex_alpha  # None (opaque) or a single float for all hexes
         hexagon = patches.RegularPolygon(
             (x, y),
             numVertices=6,
@@ -888,6 +912,7 @@ def plot_hex_maze(
             orientation=math.pi / 6,
             facecolor=hex_colors[hex],
             edgecolor="white",
+            alpha=alpha,
         )
         ax.add_patch(hexagon)
 
