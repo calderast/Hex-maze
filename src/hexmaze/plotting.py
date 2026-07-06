@@ -27,8 +27,9 @@ from typing import (
 )
 
 from .utils import (
-    create_empty_hex_maze, 
+    create_empty_hex_maze,
     maze_to_barrier_set,
+    resolve_port,
     rotate_hex,
 )
 from .core import (
@@ -440,6 +441,39 @@ def plot_rat_image(ax, position, heading_angle, scale=1.0):
     ax.imshow(rotated_img, extent=extent, zorder=10, interpolation='bilinear')
 
 
+def plot_reward_image(ax, position, rewarded, scale=1.0):
+    """
+    Plot a reward droplet (if rewarded) or a no-reward X (if not rewarded)
+    at the specified position.
+
+    Parameters:
+        ax (matplotlib.axes.Axes): The axis on which to plot the image
+        position (tuple): (x, y) coordinates where to place the image
+        rewarded (bool): If True, plot the reward droplet. If False, plot the no-reward X
+        scale (float): Scale factor for the image size relative to hex size
+    """
+    # Load the reward droplet or no-reward X image
+    img_name = "reward_droplet.png" if rewarded else "no_reward_x.png"
+    img_path = Path(__file__).parent / "assets" / img_name
+    img = Image.open(img_path)
+    img_width, img_height = img.size
+    img_scale = scale * 1.2 / max(img_width, img_height)
+
+    # Calculate the extent (left, right, bottom, top) for imshow
+    # Center the image at the position
+    display_width = img_width * img_scale
+    display_height = img_height * img_scale
+    extent = [
+        position[0] - display_width / 2,
+        position[0] + display_width / 2,
+        position[1] - display_height / 2,
+        position[1] + display_height / 2
+    ]
+
+    # Display the image
+    ax.imshow(img, extent=extent, zorder=10, interpolation='bilinear')
+
+
 def get_stats_coords(hex_centroids: dict[int, tuple], invert_yaxis: bool = False) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
@@ -536,6 +570,7 @@ def plot_hex_maze(
         rat: int = None,
         rat_to: int = None,
         rat_from: int = None,
+        reward: Optional[tuple[Union[int, str], bool]] = None,
         scale: float = 1.0,
         shift: Sequence[float] = (0.0, 0.0),
         ax: Optional[matplotlib.axes.Axes] = None,
@@ -621,6 +656,9 @@ def plot_hex_maze(
             point towards this hex. Only used if rat is specified. Defaults to None (rat faces up).
         rat_from (int): Hex the rat came from (facing away from). The rat will be rotated to
             point away from this hex. Only used if rat is specified. Ignored if rat_to is set.
+        reward (tuple): Tuple of (port, rewarded) where port is a reward port (1, 2, 3 or
+            "A", "B", "C") and rewarded is a bool. Plots a reward droplet (if True) or a
+            no-reward X (if False) outside the specified reward port. Defaults to None
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
@@ -933,8 +971,8 @@ def plot_hex_maze(
     xlim = [min_x - scale, max_x + scale]
     ylim = [min_y - scale, max_y + scale]
 
-    # If showing reward probabilites, add a little space 
-    if reward_probabilities is not None:
+    # If showing reward probabilites or reward outcome, add a little space
+    if reward_probabilities is not None or reward is not None:
         xlim = [xlim[0] - scale, xlim[1] + scale]
         ylim = [ylim[0] - scale, ylim[1] + scale]
 
@@ -984,6 +1022,20 @@ def plot_hex_maze(
 
         # Plot the rat on the maze
         plot_rat_image(ax, rat_position, heading_angle, scale=scale)
+
+    # Optional - plot a reward droplet or no-reward X outside a reward port
+    if reward is not None:
+        port, rewarded = reward
+        port = resolve_port(port)
+        if port not in (1, 2, 3):
+            raise ValueError(f"Reward port must be 1, 2, 3 or A, B, C (got {port})")
+        # Get the position outside the reward port (shifted outward from the maze centroid,
+        # same as where reward probabilities are shown)
+        port_positions = scale_triangle_from_centroid(
+            vertices=[hex_coordinates_copy[1], hex_coordinates_copy[2], hex_coordinates_copy[3]],
+            shift=scale * 1.25,
+        )
+        plot_reward_image(ax, port_positions[port - 1], rewarded, scale=scale)
 
     # If no axis was provided as an argument, show the plot now
     if show_plot:
