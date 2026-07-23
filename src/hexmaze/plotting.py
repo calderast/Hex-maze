@@ -228,6 +228,16 @@ def get_hex_centroids(view_angle:Literal[1, 2, 3]=1, scale:float=1, shift=[0, 0]
     return hex_positions
 
 
+def get_parallelogram_centroid(top: tuple, middle: tuple, bottom: tuple) -> tuple[float, float]:
+    """
+    Helper for get_permanent_barrier_centroids and get_edge_hex_centroids. 
+    `top` and `bottom` are real hex centroids, both adjacent to the real hex centroid `middle`. 
+    Returns the 4th centroid that completes the parallelogram formed by the 3, 
+    i.e. `middle`'s missing neighbor on the opposite side from the parallelogram's diagonal.
+    """
+    return tuple(np.array(top) + np.array(bottom) - np.array(middle))
+
+
 def get_permanent_barrier_centroids(
     hex_centroids: Optional[dict[int, tuple[float, float]]] = None,
     view_angle: Literal[1, 2, 3] = 1,
@@ -240,9 +250,7 @@ def get_permanent_barrier_centroids(
 
     Each centroid is found by completing the parallelogram formed by 3 real neighboring hex
     centroids, so if hex_centroids is provided, this works for both ideal and empirical
-    centroid dicts (e.g. from video tracking). The 3 hexes used for each barrier are fixed
-    (based on the standard hex numbering, with hex 1 at the top point), so this assumes
-    hex_centroids follows that same numbering.
+    centroid dicts (e.g. from video tracking).
 
     Parameters:
         hex_centroids (dict): Optional. Dictionary of hex_id: (x, y) centroid of that hex.
@@ -262,32 +270,22 @@ def get_permanent_barrier_centroids(
         view_angle=view_angle, scale=scale, shift=shift
     )
     return {
-        50: _parallelogram_centroid(hc[4], hc[6], hc[8]),
-        52: _parallelogram_centroid(hc[8], hc[11], hc[14]),
-        51: _parallelogram_centroid(hc[7], hc[10], hc[13]),
-        55: _parallelogram_centroid(hc[14], hc[18], hc[22]),
-        54: _parallelogram_centroid(hc[13], hc[17], hc[21]),
-        53: _parallelogram_centroid(hc[12], hc[16], hc[20]),
-        59: _parallelogram_centroid(hc[22], hc[27], hc[32]),
-        58: _parallelogram_centroid(hc[21], hc[26], hc[31]),
-        57: _parallelogram_centroid(hc[20], hc[25], hc[30]),
-        56: _parallelogram_centroid(hc[19], hc[24], hc[29]),
-        64: _parallelogram_centroid(hc[32], hc[38], hc[49]),
-        63: _parallelogram_centroid(hc[31], hc[37], hc[42]),
-        62: _parallelogram_centroid(hc[30], hc[36], hc[41]),
-        61: _parallelogram_centroid(hc[29], hc[35], hc[40]),
-        60: _parallelogram_centroid(hc[28], hc[34], hc[39]),
+        50: get_parallelogram_centroid(hc[4], hc[6], hc[8]),
+        52: get_parallelogram_centroid(hc[8], hc[11], hc[14]),
+        51: get_parallelogram_centroid(hc[7], hc[10], hc[13]),
+        55: get_parallelogram_centroid(hc[14], hc[18], hc[22]),
+        54: get_parallelogram_centroid(hc[13], hc[17], hc[21]),
+        53: get_parallelogram_centroid(hc[12], hc[16], hc[20]),
+        59: get_parallelogram_centroid(hc[22], hc[27], hc[32]),
+        58: get_parallelogram_centroid(hc[21], hc[26], hc[31]),
+        57: get_parallelogram_centroid(hc[20], hc[25], hc[30]),
+        56: get_parallelogram_centroid(hc[19], hc[24], hc[29]),
+        64: get_parallelogram_centroid(hc[32], hc[38], hc[49]),
+        63: get_parallelogram_centroid(hc[31], hc[37], hc[42]),
+        62: get_parallelogram_centroid(hc[30], hc[36], hc[41]),
+        61: get_parallelogram_centroid(hc[29], hc[35], hc[40]),
+        60: get_parallelogram_centroid(hc[28], hc[34], hc[39]),
     }
-
-
-def _parallelogram_centroid(top: tuple, middle: tuple, bottom: tuple) -> tuple[float, float]:
-    """
-    Helper for get_edge_hex_centroids. `top` and `bottom` are real hex centroids, both
-    adjacent to the real hex centroid `middle`. Returns the 4th centroid that completes the
-    parallelogram formed by the 3 - i.e. `middle`'s missing neighbor on the opposite side
-    from the parallelogram's diagonal.
-    """
-    return tuple(np.array(top) + np.array(bottom) - np.array(middle))
 
 
 def get_edge_hex_centroids(hex_centroids: dict[int, tuple[float, float]]) -> dict[str, tuple[float, float]]:
@@ -318,26 +316,26 @@ def get_edge_hex_centroids(hex_centroids: dict[int, tuple[float, float]]) -> dic
     """
     hc = hex_centroids
     open_half_hexes = {
-        "4_left": _parallelogram_centroid(hc[1], hc[4], hc[6]),
-        "4_right": _parallelogram_centroid(hc[1], hc[4], hc[5]),
-        "49_left": _parallelogram_centroid(hc[2], hc[49], hc[47]),
-        "49_right": _parallelogram_centroid(hc[2], hc[49], hc[38]),
-        "48_left": _parallelogram_centroid(hc[3], hc[48], hc[33]),
-        "48_right": _parallelogram_centroid(hc[3], hc[48], hc[43]),
+        "4_left": get_parallelogram_centroid(hc[1], hc[4], hc[6]),
+        "4_right": get_parallelogram_centroid(hc[1], hc[4], hc[5]),
+        "49_left": get_parallelogram_centroid(hc[2], hc[49], hc[47]),
+        "49_right": get_parallelogram_centroid(hc[2], hc[49], hc[38]),
+        "48_left": get_parallelogram_centroid(hc[3], hc[48], hc[33]),
+        "48_right": get_parallelogram_centroid(hc[3], hc[48], hc[43]),
     }
     edge_barriers = {
-        "8_half": _parallelogram_centroid(hc[6], hc[8], hc[11]),
-        "14_half": _parallelogram_centroid(hc[11], hc[14], hc[18]),
-        "22_half": _parallelogram_centroid(hc[18], hc[22], hc[27]),
-        "32_half": _parallelogram_centroid(hc[27], hc[32], hc[38]),
-        "7_half": _parallelogram_centroid(hc[5], hc[7], hc[9]),
-        "12_half": _parallelogram_centroid(hc[9], hc[12], hc[15]),
-        "19_half": _parallelogram_centroid(hc[15], hc[19], hc[23]),
-        "28_half": _parallelogram_centroid(hc[23], hc[28], hc[33]),
-        "42_half": _parallelogram_centroid(hc[47], hc[42], hc[46]),
-        "41_half": _parallelogram_centroid(hc[46], hc[41], hc[45]),
-        "40_half": _parallelogram_centroid(hc[45], hc[40], hc[44]),
-        "39_half": _parallelogram_centroid(hc[44], hc[39], hc[43]),
+        "8_half": get_parallelogram_centroid(hc[6], hc[8], hc[11]),
+        "14_half": get_parallelogram_centroid(hc[11], hc[14], hc[18]),
+        "22_half": get_parallelogram_centroid(hc[18], hc[22], hc[27]),
+        "32_half": get_parallelogram_centroid(hc[27], hc[32], hc[38]),
+        "7_half": get_parallelogram_centroid(hc[5], hc[7], hc[9]),
+        "12_half": get_parallelogram_centroid(hc[9], hc[12], hc[15]),
+        "19_half": get_parallelogram_centroid(hc[15], hc[19], hc[23]),
+        "28_half": get_parallelogram_centroid(hc[23], hc[28], hc[33]),
+        "42_half": get_parallelogram_centroid(hc[47], hc[42], hc[46]),
+        "41_half": get_parallelogram_centroid(hc[46], hc[41], hc[45]),
+        "40_half": get_parallelogram_centroid(hc[45], hc[40], hc[44]),
+        "39_half": get_parallelogram_centroid(hc[44], hc[39], hc[43]),
     }
     return {**open_half_hexes, **edge_barriers}
 
