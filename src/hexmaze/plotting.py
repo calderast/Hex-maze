@@ -2,7 +2,7 @@
 plotting.py
 
 This module contains functions for plotting hex mazes, plotting barrier sequences,
-and working with hex centroids.
+and working with hex centroids and coordinates.
 """
 
 import matplotlib.axes
@@ -48,13 +48,18 @@ from .barrier_shift import (
 
 # Define the public interface for this module
 __all__ = [
-    "get_distance_to_nearest_neighbor", 
+    "get_distance_to_nearest_neighbor",
     "get_hex_sizes_from_centroids",
+    "get_hex_vertices",
     "get_hex_centroids",
+    "get_permanent_barrier_centroids",
+    "get_edge_hex_centroids",
     "classify_triangle_vertices",
     "get_maze_orientation",
     "snap_centroids_to_grid",
     "scale_triangle_from_centroid",
+    "get_maze_bounding_box",
+    "is_point_in_maze",
     "plot_rat_image",
     "plot_hex_maze",
     "plot_barrier_change_sequence",
@@ -126,6 +131,36 @@ def get_hex_sizes_from_centroids(hex_centroids: dict[int, tuple]) -> dict:
     return hex_sizes_dict
 
 
+def get_hex_vertices(hex_centroids: dict[int, tuple]) -> dict[int, list[tuple]]:
+    """
+    Given a dictionary of hex centroids, compute the 6 vertices of each hex.
+
+    Circumradii are inferred from nearest-neighbor centroid distances (via
+    get_hex_sizes_from_centroids), so this works for both ideal and empirical
+    centroid dicts. Orientation matches plot_hex_maze's hexagons (flat tops).
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex: (x, y) centroid coordinates
+
+    Returns:
+        dict[int, list[tuple]]: Dictionary of hex: [(x0,y0), ..., (x5,y5)],
+            6 vertices in counterclockwise order starting from the top-left vertex.
+    """
+    hex_radii = get_hex_sizes_from_centroids(hex_centroids)['hex_radii_dict']
+    # matplotlib.patches.RegularPolygon places its first vertex straight up (90°) before
+    # applying its orientation param (pi/6 in plot_hex_maze), so the first vertex here is at 120°
+    angles = [math.pi / 2 + math.pi / 6 + i * math.pi / 3 for i in range(6)]
+
+    return {
+        hex_id: [
+            (cx + hex_radii[hex_id] * math.cos(a),
+             cy + hex_radii[hex_id] * math.sin(a))
+            for a in angles
+        ]
+        for hex_id, (cx, cy) in hex_centroids.items()
+    }
+
+
 def get_min_max_centroids(hex_centroids: dict[int, tuple]) -> tuple[float, float, float, float]:
     """
     Given a dictionary of hex: (x, y) centroid, return the min and max
@@ -191,6 +226,118 @@ def get_hex_centroids(view_angle:Literal[1, 2, 3]=1, scale:float=1, shift=[0, 0]
     hex_positions = {hex: (x + x_shift, y + y_shift) for hex, (x, y) in hex_positions.items()}
 
     return hex_positions
+
+
+def get_parallelogram_centroid(top: tuple, middle: tuple, bottom: tuple) -> tuple[float, float]:
+    """
+    Helper for get_permanent_barrier_centroids and get_edge_hex_centroids. 
+    `top` and `bottom` are real hex centroids, both adjacent to the real hex centroid `middle`. 
+    Returns the 4th centroid that completes the parallelogram formed by the 3, 
+    i.e. `middle`'s missing neighbor on the opposite side from the parallelogram's diagonal.
+    """
+    return tuple(np.array(top) + np.array(bottom) - np.array(middle))
+
+
+def get_permanent_barrier_centroids(
+    hex_centroids: Optional[dict[int, tuple[float, float]]] = None,
+    view_angle: Literal[1, 2, 3] = 1,
+    scale: float = 1,
+    shift: Sequence[float] = (0.0, 0.0),
+) -> dict[int, tuple[float, float]]:
+    """
+    Calculate the (x, y) centroids of the 15 interior permanent barrier hexes (50-64),
+    nestled fully between pairs of rows in the interior of the maze.
+
+    Each centroid is found by completing the parallelogram formed by 3 real neighboring hex
+    centroids, so if hex_centroids is provided, this works for both ideal and empirical
+    centroid dicts (e.g. from video tracking).
+
+    Parameters:
+        hex_centroids (dict): Optional. Dictionary of hex_id: (x, y) centroid of that hex.
+            Must include all 49 hexes. If provided, this overrides view_angle/scale/shift.
+            Defaults to None
+        view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle,
+            if hex_centroids is not specified. Defaults to 1
+        scale (float): The width of each hex (length of the long diagonal),
+            if hex_centroids is not specified. Defaults to 1
+        shift (list): The x and y shift of the coordinates (after scaling),
+            if hex_centroids is not specified.
+
+    Returns:
+        dict[int, tuple]: barrier_id: (x, y) centroid, for each of the 15 permanent barriers.
+    """
+    hc = hex_centroids if hex_centroids is not None else get_hex_centroids(
+        view_angle=view_angle, scale=scale, shift=shift
+    )
+    return {
+        50: get_parallelogram_centroid(hc[4], hc[6], hc[8]),
+        52: get_parallelogram_centroid(hc[8], hc[11], hc[14]),
+        51: get_parallelogram_centroid(hc[7], hc[10], hc[13]),
+        55: get_parallelogram_centroid(hc[14], hc[18], hc[22]),
+        54: get_parallelogram_centroid(hc[13], hc[17], hc[21]),
+        53: get_parallelogram_centroid(hc[12], hc[16], hc[20]),
+        59: get_parallelogram_centroid(hc[22], hc[27], hc[32]),
+        58: get_parallelogram_centroid(hc[21], hc[26], hc[31]),
+        57: get_parallelogram_centroid(hc[20], hc[25], hc[30]),
+        56: get_parallelogram_centroid(hc[19], hc[24], hc[29]),
+        64: get_parallelogram_centroid(hc[32], hc[38], hc[49]),
+        63: get_parallelogram_centroid(hc[31], hc[37], hc[42]),
+        62: get_parallelogram_centroid(hc[30], hc[36], hc[41]),
+        61: get_parallelogram_centroid(hc[29], hc[35], hc[40]),
+        60: get_parallelogram_centroid(hc[28], hc[34], hc[39]),
+    }
+
+
+def get_edge_hex_centroids(hex_centroids: dict[int, tuple[float, float]]) -> dict[str, tuple[float, float]]:
+    """
+    Calculate the (x, y) centroids of all half-hexes lining the maze's outer boundary: 12
+    permanent edge barriers (4 per side of the base triangle) plus 6 open half-hexes next to the
+    reward ports (2 per port, one on each adjacent edge).
+
+    These don't have their own hex IDs, so we refer to them based on the closest full hex: 
+    4_left and 4_right for the open half-hexes next to port 1 (A), 49_left and 49_right
+    for those next to port 2 (B), and 48_left and 48_right for those next to port 3 (C).
+    "Left" and "right" are from the perspective of approaching that reward port from the maze center.
+    For the barrier half-hexes, they are e.g. "8_half" based on the closest full hex.
+
+    Each centroid is found by completing the parallelogram formed by 3 real neighboring hex
+    centroids, so this works with any hex_centroids dict (both the ideal grid from get_hex_centroids
+    or empirical centroids (e.g. from the hex maze video)).
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+
+    Returns:
+        dict[str, tuple]: (x, y) centroid, one per half-hex. The reward port hexes (1, 2, 3)
+            each have 2 neighboring half-hexes, keyed by the adjacent hex plus "_left" or
+            "_right" (e.g. "4_left", "4_right" for the two half-hexes next to port 1). Every
+            other pivot hex has exactly 1 neighboring half-hex, keyed by "{hex_id}_half"
+            (e.g. "8_half").
+    """
+    hc = hex_centroids
+    open_half_hexes = {
+        "4_left": get_parallelogram_centroid(hc[1], hc[4], hc[6]),
+        "4_right": get_parallelogram_centroid(hc[1], hc[4], hc[5]),
+        "49_left": get_parallelogram_centroid(hc[2], hc[49], hc[47]),
+        "49_right": get_parallelogram_centroid(hc[2], hc[49], hc[38]),
+        "48_left": get_parallelogram_centroid(hc[3], hc[48], hc[33]),
+        "48_right": get_parallelogram_centroid(hc[3], hc[48], hc[43]),
+    }
+    edge_barriers = {
+        "8_half": get_parallelogram_centroid(hc[6], hc[8], hc[11]),
+        "14_half": get_parallelogram_centroid(hc[11], hc[14], hc[18]),
+        "22_half": get_parallelogram_centroid(hc[18], hc[22], hc[27]),
+        "32_half": get_parallelogram_centroid(hc[27], hc[32], hc[38]),
+        "7_half": get_parallelogram_centroid(hc[5], hc[7], hc[9]),
+        "12_half": get_parallelogram_centroid(hc[9], hc[12], hc[15]),
+        "19_half": get_parallelogram_centroid(hc[15], hc[19], hc[23]),
+        "28_half": get_parallelogram_centroid(hc[23], hc[28], hc[33]),
+        "42_half": get_parallelogram_centroid(hc[47], hc[42], hc[46]),
+        "41_half": get_parallelogram_centroid(hc[46], hc[41], hc[45]),
+        "40_half": get_parallelogram_centroid(hc[45], hc[40], hc[44]),
+        "39_half": get_parallelogram_centroid(hc[44], hc[39], hc[43]),
+    }
+    return {**open_half_hexes, **edge_barriers}
 
 
 def classify_triangle_vertices(vertices: list[tuple]) -> dict[str, tuple]:
@@ -390,6 +537,89 @@ def get_base_triangle_coords(
     # Return the 3 vertices of the maze base
     else:
         return vertices
+
+
+def get_maze_bounding_box(
+    hex_centroids: Mapping[int, tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """
+    Get the vertices of the polygon bounding the maze's physical footprint, for use with
+    is_point_in_maze (e.g. to check whether tracked position data falls within the maze).
+
+    This traces a triangle with its 3 corners chopped off at the outward-facing edge of
+    each reward port hex (1, 2, and 3), so the full footprint of the maze is included 
+    in the bounding box.
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex 
+
+    Returns:
+        list[tuple]: The (x, y) vertices of the polygon bounding the maze, in order
+    """
+    port_hexes = [1, 2, 3]
+    port_hex_vertices = get_hex_vertices(hex_centroids)
+
+    # The direction from the maze centroid to each port hex determines that hex's
+    # outward-facing edge (the 2 vertices farthest along this direction)
+    maze_centroid = np.mean([hex_centroids[h] for h in port_hexes], axis=0)
+
+    bounding_vertices = []
+    for h in port_hexes:
+        direction = np.array(hex_centroids[h]) - maze_centroid
+        direction = direction / np.linalg.norm(direction)
+        verts = np.array(port_hex_vertices[h])
+        outer_idx = np.argsort(verts @ direction)[-2:]
+        bounding_vertices.extend(tuple(v) for v in verts[outer_idx])
+
+    # Sort vertices by angle around their centroid to form a valid simple polygon
+    polygon_centroid = np.mean(bounding_vertices, axis=0)
+    bounding_vertices.sort(key=lambda p: math.atan2(p[1] - polygon_centroid[1], p[0] - polygon_centroid[0]))
+
+    return bounding_vertices
+
+
+def is_point_in_maze(
+    point: tuple[float, float],
+    hex_centroids: Mapping[int, tuple[float, float]],
+    tolerance: Optional[float] = None,
+) -> bool:
+    """
+    Determine whether a point falls within the maze's physical footprint (e.g. to check
+    whether tracked position data falls within the maze), given a dictionary of hex centroids.
+
+    Parameters:
+        point (tuple): (x, y) coordinates of the point to test
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+        tolerance (float): How far outside the maze boundary a point can be and still count
+            as inside (e.g. to allow for tracking noise/jitter). Specify this in the same
+            units as the hex centroids.
+            Defaults to 1/20 of the hex scale (inferred from centroids).
+
+    Returns:
+        bool: True if the point is inside the maze (within tolerance of the boundary)
+    """
+    bounding_box = get_maze_bounding_box(hex_centroids=hex_centroids)
+
+    if tolerance is None:
+        tolerance = 0.05 * get_hex_sizes_from_centroids(hex_centroids)["avg_hex_radius"] * 2
+
+    # A point within `tolerance` of any boundary edge counts as inside
+    p = np.array(point)
+    n = len(bounding_box)
+    for i in range(n):
+        a, b = np.array(bounding_box[i]), np.array(bounding_box[(i + 1) % n])
+        t = np.clip(np.dot(p - a, b - a) / np.dot(b - a, b - a), 0, 1)
+        if np.linalg.norm(p - (a + t * (b - a))) <= tolerance:
+            return True
+
+    x, y = point
+    inside = False
+    x1, y1 = bounding_box[-1]
+    for x2, y2 in bounding_box:
+        if ((y1 > y) != (y2 > y)) and (x < (x2 - x1) * (y - y1) / (y2 - y1) + x1):
+            inside = not inside
+        x1, y1 = x2, y2
+    return inside
 
 
 def load_rat_image():
