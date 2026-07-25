@@ -60,6 +60,7 @@ __all__ = [
     "scale_triangle_from_centroid",
     "get_maze_bounding_box",
     "is_point_in_maze",
+    "are_points_in_maze",
     "plot_rat_image",
     "plot_hex_maze",
     "plot_barrier_change_sequence",
@@ -578,6 +579,65 @@ def get_maze_bounding_box(
     return bounding_vertices
 
 
+def are_points_in_maze(
+    points,
+    hex_centroids: Mapping[int, tuple[float, float]],
+    tolerance: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Determine which of many points fall within the maze's physical footprint (e.g. to check
+    whether tracked position data falls within the maze), given a dictionary of hex centroids.
+
+    This is the vectorized version of is_point_in_maze. It builds the maze bounding box once
+    and tests every point against it at once, which matters when checking a whole recording
+    session - calling is_point_in_maze in a loop rebuilds the bounding box on every call.
+
+    Parameters:
+        points (array-like): Shape (n_points, 2) array of (x, y) coordinates to test
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+        tolerance (float): How far outside the maze boundary a point can be and still count
+            as inside (e.g. to allow for tracking noise/jitter). Specify this in the same
+            units as the hex centroids.
+            Defaults to 1/20 of the hex scale (inferred from centroids).
+
+    Returns:
+        np.ndarray: Boolean array of shape (n_points,), True where that point is inside the
+            maze (within tolerance of the boundary). Points with nan coordinates are False.
+    """
+    bounding_box = np.asarray(get_maze_bounding_box(hex_centroids=hex_centroids), dtype=float)
+
+    if tolerance is None:
+        tolerance = 0.05 * get_hex_sizes_from_centroids(hex_centroids)["avg_hex_radius"] * 2
+
+    points = np.asarray(points, dtype=float).reshape(-1, 2)
+    x, y = points[:, 0], points[:, 1]
+
+    # Ray casting: a point is inside the polygon if a ray cast from it in the +x direction
+    # crosses an odd number of polygon edges. We walk the edges and flip a boolean each time
+    # the edge is crossed. Comparisons against nan are always False, so points with nan
+    # coordinates never cross an edge and come out as not in the maze.
+    inside = np.zeros(len(points), dtype=bool)
+    x1, y1 = bounding_box[-1]
+    for x2, y2 in bounding_box:
+        # A horizontal edge can never be crossed by a horizontal ray, so skip it
+        # (this also avoids dividing by zero below)
+        if y2 != y1:
+            inside ^= ((y1 > y) != (y2 > y)) & (x < (x2 - x1) * (y - y1) / (y2 - y1) + x1)
+        x1, y1 = x2, y2
+
+    # A point within `tolerance` of any boundary edge also counts as inside. For each edge,
+    # find the closest point on that edge to each of our points and check the distance.
+    for i in range(len(bounding_box)):
+        edge_start = bounding_box[i]
+        edge_vector = bounding_box[(i + 1) % len(bounding_box)] - edge_start
+        # How far along the edge the closest point is, clipped to [0, 1] to stay on the segment
+        t = np.clip(((points - edge_start) @ edge_vector) / (edge_vector @ edge_vector), 0, 1)
+        closest_point_on_edge = edge_start + t[:, np.newaxis] * edge_vector
+        inside |= np.linalg.norm(points - closest_point_on_edge, axis=1) <= tolerance
+
+    return inside
+
+
 def is_point_in_maze(
     point: tuple[float, float],
     hex_centroids: Mapping[int, tuple[float, float]],
@@ -597,29 +657,11 @@ def is_point_in_maze(
 
     Returns:
         bool: True if the point is inside the maze (within tolerance of the boundary)
+
+    See also:
+        are_points_in_maze, the vectorized version, for checking many points at once
     """
-    bounding_box = get_maze_bounding_box(hex_centroids=hex_centroids)
-
-    if tolerance is None:
-        tolerance = 0.05 * get_hex_sizes_from_centroids(hex_centroids)["avg_hex_radius"] * 2
-
-    # A point within `tolerance` of any boundary edge counts as inside
-    p = np.array(point)
-    n = len(bounding_box)
-    for i in range(n):
-        a, b = np.array(bounding_box[i]), np.array(bounding_box[(i + 1) % n])
-        t = np.clip(np.dot(p - a, b - a) / np.dot(b - a, b - a), 0, 1)
-        if np.linalg.norm(p - (a + t * (b - a))) <= tolerance:
-            return True
-
-    x, y = point
-    inside = False
-    x1, y1 = bounding_box[-1]
-    for x2, y2 in bounding_box:
-        if ((y1 > y) != (y2 > y)) and (x < (x2 - x1) * (y - y1) / (y2 - y1) + x1):
-            inside = not inside
-        x1, y1 = x2, y2
-    return inside
+    return bool(are_points_in_maze([point], hex_centroids, tolerance=tolerance)[0])
 
 
 def load_rat_image():
