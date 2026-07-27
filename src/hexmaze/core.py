@@ -85,27 +85,18 @@ for path in STRAIGHT_PATHS_INSIDE_MAZE:
 # Store illegal straight paths as a set of tuples for O(1) lookup time
 ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_paths_list_training}
 
-# Integer axial coordinates (a, b) of each hex on the standard triangular
-# lattice, where adjacent hexes differ by exactly one of the six unit steps
-# {(0,1), (1,-1), (-1,0), (0,-1), (-1,1), (1,0)}. The basis is oriented so that
-# the 2D cross product a1*b2 - b1*a2 has the same sign as the geometric cross
-# product in real (x, y) space - this lets us classify left/right turns from
-# hex IDs alone, without needing plot centroids. See get_hex_exit_direction.
-HEX_AXIAL_COORDS: dict[int, tuple[int, int]] = {
-    1: (0, 0),
-    4: (0, -1),
-    6: (-1, -1), 5: (1, -2),
-    8: (-1, -2), 7: (1, -3),
-    11: (-2, -2), 10: (0, -3), 9: (2, -4),
-    14: (-2, -3), 13: (0, -4), 12: (2, -5),
-    18: (-3, -3), 17: (-1, -4), 16: (1, -5), 15: (3, -6),
-    22: (-3, -4), 21: (-1, -5), 20: (1, -6), 19: (3, -7),
-    27: (-4, -4), 26: (-2, -5), 25: (0, -6), 24: (2, -7), 23: (4, -8),
-    32: (-4, -5), 31: (-2, -6), 30: (0, -7), 29: (2, -8), 28: (4, -9),
-    38: (-5, -5), 37: (-3, -6), 36: (-1, -7), 35: (1, -8), 34: (3, -9), 33: (5, -10),
-    49: (-5, -6), 42: (-3, -7), 41: (-1, -8), 40: (1, -9), 39: (3, -10), 48: (5, -11),
-    2: (-6, -6), 47: (-4, -7), 46: (-2, -8), 45: (0, -9), 44: (2, -10), 43: (4, -11), 3: (6, -12),
-}
+
+# Cache the standard hex centroids on first use. Deferred import avoids a
+# circular import at load time (plotting.py imports from core.py).
+_STANDARD_HEX_CENTROIDS: dict[int, tuple[float, float]] | None = None
+
+def _get_standard_hex_centroids() -> dict[int, tuple[float, float]]:
+    """Return the standard hex centroids dict, computing it once and caching."""
+    global _STANDARD_HEX_CENTROIDS
+    if _STANDARD_HEX_CENTROIDS is None:
+        from .plotting import get_hex_centroids
+        _STANDARD_HEX_CENTROIDS = get_hex_centroids()
+    return _STANDARD_HEX_CENTROIDS
 
 
 # Define the public interface for this module
@@ -1213,8 +1204,8 @@ def get_port_choice_direction(start_port, end_port) -> str:
 def get_choice_direction(start_port, end_port) -> str:
     """Deprecated alias for get_port_choice_direction."""
     warnings.warn(
-        "get_choice_direction is deprecated and will be removed in a future release; "
-        "use get_port_choice_direction instead.",
+        "get_choice_direction is deprecated and the name will be removed in a future release. "
+        "It has been renamed to get_port_choice_direction.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -1223,18 +1214,16 @@ def get_choice_direction(start_port, end_port) -> str:
 
 def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> str:
     """
-    Classify an exit from a junction as 'left' or 'right' relative to the
-    rat's heading direction.
+    Classify an exit from a junction as 'left', 'right', or 'back' relative
+    to the rat's heading direction.
 
     The heading vector goes from entry_hex to junction_hex (the direction the
     rat was traveling when it arrived at the junction). The exit vector goes
     from junction_hex to exit_hex (the direction the rat would travel if it
-    took that exit).
-
-    Uses each hex's integer axial coordinates on the standard triangular
-    lattice (HEX_AXIAL_COORDS). The 2D cross product in these coordinates has
-    the same sign as the cross product in real (x, y) space, so left vs right
-    can be determined from hex IDs alone.
+    took that exit). The sign of their 2D cross product determines the turn:
+    positive => exit is counterclockwise of the heading (left), negative =>
+    clockwise (right). If the rat turns back the way it came (exit_hex ==
+    entry_hex), the exit is classified as 'back'.
 
     Parameters:
         entry_hex (int): The hex the rat came from
@@ -1242,19 +1231,26 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
         exit_hex (int): The candidate exit hex
 
     Returns:
-        str: 'left' if exit is counterclockwise of the heading, 'right' if clockwise
+        str: 'left' if exit is counterclockwise of the heading, 'right' if
+            clockwise, 'back' if the rat is turning around (exit == entry)
     """
-    ea, eb = HEX_AXIAL_COORDS[entry_hex]
-    ja, jb = HEX_AXIAL_COORDS[junction_hex]
-    xa, xb = HEX_AXIAL_COORDS[exit_hex]
+    if exit_hex == entry_hex:
+        return "back"
+
+    centroids = _get_standard_hex_centroids()
+    entry_x, entry_y = centroids[entry_hex]
+    junction_x, junction_y = centroids[junction_hex]
+    exit_x, exit_y = centroids[exit_hex]
 
     # Heading vector: direction the rat was traveling (entry -> junction)
-    heading_a, heading_b = ja - ea, jb - eb
+    heading_vec_x = junction_x - entry_x
+    heading_vec_y = junction_y - entry_y
     # Exit vector: direction the rat would go (junction -> exit)
-    exit_a, exit_b = xa - ja, xb - jb
+    exit_vec_x = exit_x - junction_x
+    exit_vec_y = exit_y - junction_y
 
     # 2D cross product: positive means exit is counterclockwise (left) of heading
-    cross = heading_a * exit_b - heading_b * exit_a
+    cross = heading_vec_x * exit_vec_y - heading_vec_y * exit_vec_x
     return "left" if cross > 0 else "right"
 
 
@@ -1265,7 +1261,7 @@ def get_junction_left_right_map(maze) -> dict[tuple[int, int], dict[str, int]]:
 
     A 3-way junction is a hex with exactly 3 open neighbors. When the rat enters
     from one neighbor, it has a choice of 2 exits. This uses each hex's integer
-    axial coordinates (via get_hex_exit_direction) to determine which exit is
+    hex centroids (via get_hex_exit_direction) to determine which exit is
     left vs right relative to the rat's heading.
 
     Parameters:
