@@ -969,15 +969,16 @@ def divide_into_thirds(maze) -> list[set]:
                 thirds.append(set(maze_component))
                 break
 
+    # WIP: keeping commented out for now so this change doesn't silently change behavior
     # Any unclassified, non-choice-point hex that is path-independent to a port belongs in that port's third
     # See maze '8,9,11,17,20,23,31,34,38,46' as an example: this addition 
     # adds hex 30 to port 2's third and hex 40 to port 3's third.
-    if has_single_cp_cycle:
-        all_third_hexes = thirds[0] | thirds[1] | thirds[2]
-        for port in [1, 2, 3]:
-            for h in get_path_independent_hexes_to_port(maze, port):
-                if h not in all_third_hexes and h not in choice_points:
-                    thirds[port - 1].add(h)
+    # if has_single_cp_cycle:
+    #     all_third_hexes = thirds[0] | thirds[1] | thirds[2]
+    #     for port in [1, 2, 3]:
+    #         for h in get_path_independent_hexes_to_port(maze, port):
+    #             if h not in all_third_hexes and h not in choice_points:
+    #                 thirds[port - 1].add(h)
 
     return thirds
 
