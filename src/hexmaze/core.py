@@ -84,6 +84,28 @@ for path in STRAIGHT_PATHS_INSIDE_MAZE:
 # Store illegal straight paths as a set of tuples for O(1) lookup time
 ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_paths_list_training}
 
+# Integer axial coordinates (a, b) of each hex on the standard triangular
+# lattice, where adjacent hexes differ by exactly one of the six unit steps
+# {(0,1), (1,-1), (-1,0), (0,-1), (-1,1), (1,0)}. The basis is oriented so that
+# the 2D cross product a1*b2 - b1*a2 has the same sign as the geometric cross
+# product in real (x, y) space - this lets us classify left/right turns from
+# hex IDs alone, without needing plot centroids. See classify_exit_direction.
+HEX_AXIAL_COORDS: dict[int, tuple[int, int]] = {
+    1: (0, 0),
+    4: (0, -1),
+    6: (-1, -1), 5: (1, -2),
+    8: (-1, -2), 7: (1, -3),
+    11: (-2, -2), 10: (0, -3), 9: (2, -4),
+    14: (-2, -3), 13: (0, -4), 12: (2, -5),
+    18: (-3, -3), 17: (-1, -4), 16: (1, -5), 15: (3, -6),
+    22: (-3, -4), 21: (-1, -5), 20: (1, -6), 19: (3, -7),
+    27: (-4, -4), 26: (-2, -5), 25: (0, -6), 24: (2, -7), 23: (4, -8),
+    32: (-4, -5), 31: (-2, -6), 30: (0, -7), 29: (2, -8), 28: (4, -9),
+    38: (-5, -5), 37: (-3, -6), 36: (-1, -7), 35: (1, -8), 34: (3, -9), 33: (5, -10),
+    49: (-5, -6), 42: (-3, -7), 41: (-1, -8), 40: (1, -9), 39: (3, -10), 48: (5, -11),
+    2: (-6, -6), 47: (-4, -7), 46: (-2, -8), 45: (0, -9), 44: (2, -10), 43: (4, -11), 3: (6, -12),
+}
+
 
 # Define the public interface for this module
 __all__ = [
@@ -1186,57 +1208,56 @@ def get_choice_direction(start_port, end_port) -> str:
         return None
     
     
-def classify_exit_direction(entry_centroid, junction_centroid, exit_centroid):
+def classify_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> str:
     """
     Classify an exit from a junction as 'left' or 'right' relative to the
-    rat's heading direction, using the 2D cross product.
+    rat's heading direction.
 
-    The heading vector goes from entry_centroid to junction_centroid (the
-    direction the rat was traveling when it arrived at the junction). The
-    exit vector goes from junction_centroid to exit_centroid (the direction
-    the rat would travel if it took that exit).
+    The heading vector goes from entry_hex to junction_hex (the direction the
+    rat was traveling when it arrived at the junction). The exit vector goes
+    from junction_hex to exit_hex (the direction the rat would travel if it
+    took that exit).
 
-    The sign of the cross product (heading × exit) determines the turn direction:
-        positive => exit is to the LEFT of the heading (counterclockwise turn)
-        negative => exit is to the RIGHT of the heading (clockwise turn)
+    Uses each hex's integer axial coordinates on the standard triangular
+    lattice (HEX_AXIAL_COORDS). The 2D cross product in these coordinates has
+    the same sign as the cross product in real (x, y) space, so left vs right
+    can be determined from hex IDs alone.
 
     Parameters:
-        entry_centroid (tuple): (x, y) coordinates of the hex the rat came from
-        junction_centroid (tuple): (x, y) coordinates of the junction hex
-        exit_centroid (tuple): (x, y) coordinates of the candidate exit hex
+        entry_hex (int): The hex the rat came from
+        junction_hex (int): The junction hex the rat is currently at
+        exit_hex (int): The candidate exit hex
 
     Returns:
-        str: 'left' or 'right'
+        str: 'left' if exit is counterclockwise of the heading, 'right' if clockwise
     """
+    ea, eb = HEX_AXIAL_COORDS[entry_hex]
+    ja, jb = HEX_AXIAL_COORDS[junction_hex]
+    xa, xb = HEX_AXIAL_COORDS[exit_hex]
+
     # Heading vector: direction the rat was traveling (entry -> junction)
-    heading_x = junction_centroid[0] - entry_centroid[0]
-    heading_y = junction_centroid[1] - entry_centroid[1]
-
+    heading_a, heading_b = ja - ea, jb - eb
     # Exit vector: direction the rat would go (junction -> exit)
-    exit_x = exit_centroid[0] - junction_centroid[0]
-    exit_y = exit_centroid[1] - junction_centroid[1]
+    exit_a, exit_b = xa - ja, xb - jb
 
-    # 2D cross product: positive means exit is to the left of the heading
-    cross = heading_x * exit_y - heading_y * exit_x
+    # 2D cross product: positive means exit is counterclockwise (left) of heading
+    cross = heading_a * exit_b - heading_b * exit_a
     return "left" if cross > 0 else "right"
 
 
-def get_junction_left_right_map(maze, hex_centroids=None):
+def get_junction_left_right_map(maze) -> dict[tuple[int, int], dict[str, int]]:
     """
     For every 3-way junction in the maze and every possible entry direction,
     classify the two exit neighbors as 'left' or 'right'.
 
     A 3-way junction is a hex with exactly 3 open neighbors. When the rat enters
-    from one neighbor, it has a choice of 2 exits. This function uses the 2D cross
-    product (via classify_exit_direction) to determine which exit is left vs right
-    relative to the rat's heading.
+    from one neighbor, it has a choice of 2 exits. This uses each hex's integer
+    axial coordinates (via classify_exit_direction) to determine which exit is
+    left vs right relative to the rat's heading.
 
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze represented in any valid format
-        hex_centroids (dict, optional): A dict mapping hex IDs (int) to (x, y)
-            centroid coordinates. If None, uses get_hex_centroids() from the
-            plotting module to get the standard hex grid coordinates.
 
     Returns:
         dict: Maps (junction_hex, entry_hex) tuples to a dict with keys
@@ -1244,28 +1265,19 @@ def get_junction_left_right_map(maze, hex_centroids=None):
 
             Example: {(10, 7): {'left': 13, 'right': 11}, ...}
     """
-    # Use standard centroids if none provided
-    if hex_centroids is None:
-        from .plotting import get_hex_centroids
-        hex_centroids = get_hex_centroids()
-
     graph = maze_to_graph(maze)
     junction_hexes = get_all_choice_points(maze)
 
     lr_map = {}
     for junc in junction_hexes:
         neighbors = list(graph.neighbors(junc))
-        junc_centroid = hex_centroids[junc]
 
         # For each possible entry direction, classify the two exits
         for entry in neighbors:
             exits = [n for n in neighbors if n != entry]
-            entry_centroid = hex_centroids[entry]
 
             # Classify first exit; the other is the opposite direction
-            direction = classify_exit_direction(
-                entry_centroid, junc_centroid, hex_centroids[exits[0]]
-            )
+            direction = classify_exit_direction(entry, junc, exits[0])
             if direction == "left":
                 lr_map[(junc, entry)] = {"left": exits[0], "right": exits[1]}
             else:
