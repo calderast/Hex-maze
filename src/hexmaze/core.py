@@ -86,17 +86,17 @@ for path in STRAIGHT_PATHS_INSIDE_MAZE:
 ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_paths_list_training}
 
 
-# Cache the standard hex centroids on first use. Deferred import avoids a
-# circular import at load time (plotting.py imports from core.py).
-_STANDARD_HEX_CENTROIDS: dict[int, tuple[float, float]] | None = None
+# Cache the standard hex centroids on first use. We use these for classifying hexes as left/right
+# Deferred import avoids a circular import at load time (plotting.py imports from core.py).
+STANDARD_HEX_CENTROIDS: dict[int, tuple[float, float]] | None = None
 
-def _get_standard_hex_centroids() -> dict[int, tuple[float, float]]:
+def get_standard_hex_centroids() -> dict[int, tuple[float, float]]:
     """Return the standard hex centroids dict, computing it once and caching."""
-    global _STANDARD_HEX_CENTROIDS
-    if _STANDARD_HEX_CENTROIDS is None:
+    global STANDARD_HEX_CENTROIDS
+    if STANDARD_HEX_CENTROIDS is None:
         from .plotting import get_hex_centroids
-        _STANDARD_HEX_CENTROIDS = get_hex_centroids()
-    return _STANDARD_HEX_CENTROIDS
+        STANDARD_HEX_CENTROIDS = get_hex_centroids()
+    return STANDARD_HEX_CENTROIDS
 
 
 # Define the public interface for this module
@@ -1237,7 +1237,7 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
     if exit_hex == entry_hex:
         return "back"
 
-    centroids = _get_standard_hex_centroids()
+    centroids = get_standard_hex_centroids()
     entry_x, entry_y = centroids[entry_hex]
     junction_x, junction_y = centroids[junction_hex]
     exit_x, exit_y = centroids[exit_hex]
