@@ -2,13 +2,14 @@
 plotting.py
 
 This module contains functions for plotting hex mazes, plotting barrier sequences,
-and working with hex centroids.
+and working with hex centroids and coordinates.
 """
 
 import matplotlib.axes
 import matplotlib.colors
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import warnings
 from collections import defaultdict
 from itertools import chain
 import networkx as nx
@@ -27,8 +28,9 @@ from typing import (
 )
 
 from .utils import (
-    create_empty_hex_maze, 
+    create_empty_hex_maze,
     maze_to_barrier_set,
+    resolve_port,
     rotate_hex,
 )
 from .core import (
@@ -46,13 +48,19 @@ from .barrier_shift import (
 
 # Define the public interface for this module
 __all__ = [
-    "get_distance_to_nearest_neighbor", 
+    "get_distance_to_nearest_neighbor",
     "get_hex_sizes_from_centroids",
+    "get_hex_vertices",
     "get_hex_centroids",
+    "get_permanent_barrier_centroids",
+    "get_edge_hex_centroids",
     "classify_triangle_vertices",
     "get_maze_orientation",
     "snap_centroids_to_grid",
     "scale_triangle_from_centroid",
+    "get_maze_bounding_box",
+    "is_point_in_maze",
+    "are_points_in_maze",
     "plot_rat_image",
     "plot_hex_maze",
     "plot_barrier_change_sequence",
@@ -124,6 +132,36 @@ def get_hex_sizes_from_centroids(hex_centroids: dict[int, tuple]) -> dict:
     return hex_sizes_dict
 
 
+def get_hex_vertices(hex_centroids: dict[int, tuple]) -> dict[int, list[tuple]]:
+    """
+    Given a dictionary of hex centroids, compute the 6 vertices of each hex.
+
+    Circumradii are inferred from nearest-neighbor centroid distances (via
+    get_hex_sizes_from_centroids), so this works for both ideal and empirical
+    centroid dicts. Orientation matches plot_hex_maze's hexagons (flat tops).
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex: (x, y) centroid coordinates
+
+    Returns:
+        dict[int, list[tuple]]: Dictionary of hex: [(x0,y0), ..., (x5,y5)],
+            6 vertices in counterclockwise order starting from the top-left vertex.
+    """
+    hex_radii = get_hex_sizes_from_centroids(hex_centroids)['hex_radii_dict']
+    # matplotlib.patches.RegularPolygon places its first vertex straight up (90°) before
+    # applying its orientation param (pi/6 in plot_hex_maze), so the first vertex here is at 120°
+    angles = [math.pi / 2 + math.pi / 6 + i * math.pi / 3 for i in range(6)]
+
+    return {
+        hex_id: [
+            (cx + hex_radii[hex_id] * math.cos(a),
+             cy + hex_radii[hex_id] * math.sin(a))
+            for a in angles
+        ]
+        for hex_id, (cx, cy) in hex_centroids.items()
+    }
+
+
 def get_min_max_centroids(hex_centroids: dict[int, tuple]) -> tuple[float, float, float, float]:
     """
     Given a dictionary of hex: (x, y) centroid, return the min and max
@@ -189,6 +227,118 @@ def get_hex_centroids(view_angle:Literal[1, 2, 3]=1, scale:float=1, shift=[0, 0]
     hex_positions = {hex: (x + x_shift, y + y_shift) for hex, (x, y) in hex_positions.items()}
 
     return hex_positions
+
+
+def get_parallelogram_centroid(top: tuple, middle: tuple, bottom: tuple) -> tuple[float, float]:
+    """
+    Helper for get_permanent_barrier_centroids and get_edge_hex_centroids. 
+    `top` and `bottom` are real hex centroids, both adjacent to the real hex centroid `middle`. 
+    Returns the 4th centroid that completes the parallelogram formed by the 3, 
+    i.e. `middle`'s missing neighbor on the opposite side from the parallelogram's diagonal.
+    """
+    return tuple(np.array(top) + np.array(bottom) - np.array(middle))
+
+
+def get_permanent_barrier_centroids(
+    hex_centroids: Optional[dict[int, tuple[float, float]]] = None,
+    view_angle: Literal[1, 2, 3] = 1,
+    scale: float = 1,
+    shift: Sequence[float] = (0.0, 0.0),
+) -> dict[int, tuple[float, float]]:
+    """
+    Calculate the (x, y) centroids of the 15 interior permanent barrier hexes (50-64),
+    nestled fully between pairs of rows in the interior of the maze.
+
+    Each centroid is found by completing the parallelogram formed by 3 real neighboring hex
+    centroids, so if hex_centroids is provided, this works for both ideal and empirical
+    centroid dicts (e.g. from video tracking).
+
+    Parameters:
+        hex_centroids (dict): Optional. Dictionary of hex_id: (x, y) centroid of that hex.
+            Must include all 49 hexes. If provided, this overrides view_angle/scale/shift.
+            Defaults to None
+        view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle,
+            if hex_centroids is not specified. Defaults to 1
+        scale (float): The width of each hex (length of the long diagonal),
+            if hex_centroids is not specified. Defaults to 1
+        shift (list): The x and y shift of the coordinates (after scaling),
+            if hex_centroids is not specified.
+
+    Returns:
+        dict[int, tuple]: barrier_id: (x, y) centroid, for each of the 15 permanent barriers.
+    """
+    hc = hex_centroids if hex_centroids is not None else get_hex_centroids(
+        view_angle=view_angle, scale=scale, shift=shift
+    )
+    return {
+        50: get_parallelogram_centroid(hc[4], hc[6], hc[8]),
+        52: get_parallelogram_centroid(hc[8], hc[11], hc[14]),
+        51: get_parallelogram_centroid(hc[7], hc[10], hc[13]),
+        55: get_parallelogram_centroid(hc[14], hc[18], hc[22]),
+        54: get_parallelogram_centroid(hc[13], hc[17], hc[21]),
+        53: get_parallelogram_centroid(hc[12], hc[16], hc[20]),
+        59: get_parallelogram_centroid(hc[22], hc[27], hc[32]),
+        58: get_parallelogram_centroid(hc[21], hc[26], hc[31]),
+        57: get_parallelogram_centroid(hc[20], hc[25], hc[30]),
+        56: get_parallelogram_centroid(hc[19], hc[24], hc[29]),
+        64: get_parallelogram_centroid(hc[32], hc[38], hc[49]),
+        63: get_parallelogram_centroid(hc[31], hc[37], hc[42]),
+        62: get_parallelogram_centroid(hc[30], hc[36], hc[41]),
+        61: get_parallelogram_centroid(hc[29], hc[35], hc[40]),
+        60: get_parallelogram_centroid(hc[28], hc[34], hc[39]),
+    }
+
+
+def get_edge_hex_centroids(hex_centroids: dict[int, tuple[float, float]]) -> dict[str, tuple[float, float]]:
+    """
+    Calculate the (x, y) centroids of all half-hexes lining the maze's outer boundary: 12
+    permanent edge barriers (4 per side of the base triangle) plus 6 open half-hexes next to the
+    reward ports (2 per port, one on each adjacent edge).
+
+    These don't have their own hex IDs, so we refer to them based on the closest full hex: 
+    4_left and 4_right for the open half-hexes next to port 1 (A), 49_left and 49_right
+    for those next to port 2 (B), and 48_left and 48_right for those next to port 3 (C).
+    "Left" and "right" are from the perspective of approaching that reward port from the maze center.
+    For the barrier half-hexes, they are e.g. "8_half" based on the closest full hex.
+
+    Each centroid is found by completing the parallelogram formed by 3 real neighboring hex
+    centroids, so this works with any hex_centroids dict (both the ideal grid from get_hex_centroids
+    or empirical centroids (e.g. from the hex maze video)).
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+
+    Returns:
+        dict[str, tuple]: (x, y) centroid, one per half-hex. The reward port hexes (1, 2, 3)
+            each have 2 neighboring half-hexes, keyed by the adjacent hex plus "_left" or
+            "_right" (e.g. "4_left", "4_right" for the two half-hexes next to port 1). Every
+            other pivot hex has exactly 1 neighboring half-hex, keyed by "{hex_id}_half"
+            (e.g. "8_half").
+    """
+    hc = hex_centroids
+    open_half_hexes = {
+        "4_left": get_parallelogram_centroid(hc[1], hc[4], hc[6]),
+        "4_right": get_parallelogram_centroid(hc[1], hc[4], hc[5]),
+        "49_left": get_parallelogram_centroid(hc[2], hc[49], hc[47]),
+        "49_right": get_parallelogram_centroid(hc[2], hc[49], hc[38]),
+        "48_left": get_parallelogram_centroid(hc[3], hc[48], hc[33]),
+        "48_right": get_parallelogram_centroid(hc[3], hc[48], hc[43]),
+    }
+    edge_barriers = {
+        "8_half": get_parallelogram_centroid(hc[6], hc[8], hc[11]),
+        "14_half": get_parallelogram_centroid(hc[11], hc[14], hc[18]),
+        "22_half": get_parallelogram_centroid(hc[18], hc[22], hc[27]),
+        "32_half": get_parallelogram_centroid(hc[27], hc[32], hc[38]),
+        "7_half": get_parallelogram_centroid(hc[5], hc[7], hc[9]),
+        "12_half": get_parallelogram_centroid(hc[9], hc[12], hc[15]),
+        "19_half": get_parallelogram_centroid(hc[15], hc[19], hc[23]),
+        "28_half": get_parallelogram_centroid(hc[23], hc[28], hc[33]),
+        "42_half": get_parallelogram_centroid(hc[47], hc[42], hc[46]),
+        "41_half": get_parallelogram_centroid(hc[46], hc[41], hc[45]),
+        "40_half": get_parallelogram_centroid(hc[45], hc[40], hc[44]),
+        "39_half": get_parallelogram_centroid(hc[44], hc[39], hc[43]),
+    }
+    return {**open_half_hexes, **edge_barriers}
 
 
 def classify_triangle_vertices(vertices: list[tuple]) -> dict[str, tuple]:
@@ -390,6 +540,130 @@ def get_base_triangle_coords(
         return vertices
 
 
+def get_maze_bounding_box(
+    hex_centroids: Mapping[int, tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """
+    Get the vertices of the polygon bounding the maze's physical footprint, for use with
+    is_point_in_maze (e.g. to check whether tracked position data falls within the maze).
+
+    This traces a triangle with its 3 corners chopped off at the outward-facing edge of
+    each reward port hex (1, 2, and 3), so the full footprint of the maze is included 
+    in the bounding box.
+
+    Parameters:
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex 
+
+    Returns:
+        list[tuple]: The (x, y) vertices of the polygon bounding the maze, in order
+    """
+    port_hexes = [1, 2, 3]
+    port_hex_vertices = get_hex_vertices(hex_centroids)
+
+    # The direction from the maze centroid to each port hex determines that hex's
+    # outward-facing edge (the 2 vertices farthest along this direction)
+    maze_centroid = np.mean([hex_centroids[h] for h in port_hexes], axis=0)
+
+    bounding_vertices = []
+    for h in port_hexes:
+        direction = np.array(hex_centroids[h]) - maze_centroid
+        direction = direction / np.linalg.norm(direction)
+        verts = np.array(port_hex_vertices[h])
+        outer_idx = np.argsort(verts @ direction)[-2:]
+        bounding_vertices.extend(tuple(v) for v in verts[outer_idx])
+
+    # Sort vertices by angle around their centroid to form a valid simple polygon
+    polygon_centroid = np.mean(bounding_vertices, axis=0)
+    bounding_vertices.sort(key=lambda p: math.atan2(p[1] - polygon_centroid[1], p[0] - polygon_centroid[0]))
+
+    return bounding_vertices
+
+
+def are_points_in_maze(
+    points,
+    hex_centroids: Mapping[int, tuple[float, float]],
+    tolerance: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Determine which of many points fall within the maze's physical footprint (e.g. to check
+    whether tracked position data falls within the maze), given a dictionary of hex centroids.
+
+    This is the vectorized version of is_point_in_maze. It builds the maze bounding box once
+    and tests every point against it at once, which matters when checking a whole recording
+    session - calling is_point_in_maze in a loop rebuilds the bounding box on every call.
+
+    Parameters:
+        points (array-like): Shape (n_points, 2) array of (x, y) coordinates to test
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+        tolerance (float): How far outside the maze boundary a point can be and still count
+            as inside (e.g. to allow for tracking noise/jitter). Specify this in the same
+            units as the hex centroids.
+            Defaults to 1/20 of the hex scale (inferred from centroids).
+
+    Returns:
+        np.ndarray: Boolean array of shape (n_points,), True where that point is inside the
+            maze (within tolerance of the boundary). Points with nan coordinates are False.
+    """
+    bounding_box = np.asarray(get_maze_bounding_box(hex_centroids=hex_centroids), dtype=float)
+
+    if tolerance is None:
+        tolerance = 0.05 * get_hex_sizes_from_centroids(hex_centroids)["avg_hex_radius"] * 2
+
+    points = np.asarray(points, dtype=float).reshape(-1, 2)
+    x, y = points[:, 0], points[:, 1]
+
+    # Ray casting: a point is inside the polygon if a ray cast from it in the +x direction
+    # crosses an odd number of polygon edges. We walk the edges and flip a boolean each time
+    # the edge is crossed. Comparisons against nan are always False, so points with nan
+    # coordinates never cross an edge and come out as not in the maze.
+    inside = np.zeros(len(points), dtype=bool)
+    x1, y1 = bounding_box[-1]
+    for x2, y2 in bounding_box:
+        # A horizontal edge can never be crossed by a horizontal ray, so skip it
+        # (this also avoids dividing by zero below)
+        if y2 != y1:
+            inside ^= ((y1 > y) != (y2 > y)) & (x < (x2 - x1) * (y - y1) / (y2 - y1) + x1)
+        x1, y1 = x2, y2
+
+    # A point within `tolerance` of any boundary edge also counts as inside. For each edge,
+    # find the closest point on that edge to each of our points and check the distance.
+    for i in range(len(bounding_box)):
+        edge_start = bounding_box[i]
+        edge_vector = bounding_box[(i + 1) % len(bounding_box)] - edge_start
+        # How far along the edge the closest point is, clipped to [0, 1] to stay on the segment
+        t = np.clip(((points - edge_start) @ edge_vector) / (edge_vector @ edge_vector), 0, 1)
+        closest_point_on_edge = edge_start + t[:, np.newaxis] * edge_vector
+        inside |= np.linalg.norm(points - closest_point_on_edge, axis=1) <= tolerance
+
+    return inside
+
+
+def is_point_in_maze(
+    point: tuple[float, float],
+    hex_centroids: Mapping[int, tuple[float, float]],
+    tolerance: Optional[float] = None,
+) -> bool:
+    """
+    Determine whether a point falls within the maze's physical footprint (e.g. to check
+    whether tracked position data falls within the maze), given a dictionary of hex centroids.
+
+    Parameters:
+        point (tuple): (x, y) coordinates of the point to test
+        hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex
+        tolerance (float): How far outside the maze boundary a point can be and still count
+            as inside (e.g. to allow for tracking noise/jitter). Specify this in the same
+            units as the hex centroids.
+            Defaults to 1/20 of the hex scale (inferred from centroids).
+
+    Returns:
+        bool: True if the point is inside the maze (within tolerance of the boundary)
+
+    See also:
+        are_points_in_maze, the vectorized version, for checking many points at once
+    """
+    return bool(are_points_in_maze([point], hex_centroids, tolerance=tolerance)[0])
+
+
 def load_rat_image():
     """
     Helper to load the rat image file from the assets directory.
@@ -438,6 +712,44 @@ def plot_rat_image(ax, position, heading_angle, scale=1.0):
 
     # Display the image
     ax.imshow(rotated_img, extent=extent, zorder=10, interpolation='bilinear')
+
+
+def plot_reward_image(ax, position, rewarded, scale=1.0):
+    """
+    Plot a reward droplet (if rewarded) or a no-reward X (if not rewarded)
+    at the specified position.
+
+    Parameters:
+        ax (matplotlib.axes.Axes): The axis on which to plot the image
+        position (tuple): (x, y) coordinates where to place the image
+        rewarded (bool): If True, plot the reward droplet. If False, plot the no-reward X
+        scale (float): Scale factor for the image size relative to hex size
+    """
+    # Load the reward droplet or no-reward X image
+    img_name = "reward_droplet.png" if rewarded else "no_reward_x.png"
+    img_path = Path(__file__).parent / "assets" / img_name
+    img = Image.open(img_path)
+
+    # imshow draws the first image row at the top of the extent, which appears at the
+    # bottom when the y axis is inverted, so pre-flip the image to keep it upright
+    if ax.yaxis_inverted():
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
+    img_width, img_height = img.size
+    img_scale = scale * 1.2 / max(img_width, img_height)
+
+    # Calculate the extent (left, right, bottom, top) for imshow
+    # Center the image at the position
+    display_width = img_width * img_scale
+    display_height = img_height * img_scale
+    extent = [
+        position[0] - display_width / 2,
+        position[0] + display_width / 2,
+        position[1] - display_height / 2,
+        position[1] + display_height / 2
+    ]
+
+    # Display the image
+    ax.imshow(img, extent=extent, zorder=10, interpolation='bilinear')
 
 
 def get_stats_coords(hex_centroids: dict[int, tuple], invert_yaxis: bool = False) -> dict[str, tuple]:
@@ -533,9 +845,11 @@ def plot_hex_maze(
         colormap: Union[str, matplotlib.colors.Colormap] = "plasma",
         vmin: Optional[float] = None,
         vmax: Optional[float] = None,
+        hex_alpha: Optional[Union[float, Mapping[int, float]]] = None,
         rat: int = None,
         rat_to: int = None,
         rat_from: int = None,
+        reward: Optional[tuple[Union[int, str], bool]] = None,
         scale: float = 1.0,
         shift: Sequence[float] = (0.0, 0.0),
         ax: Optional[matplotlib.axes.Axes] = None,
@@ -615,12 +929,18 @@ def plot_hex_maze(
         vmax (float): Maximum value for colormap normalization, if using `color_by`.
             Values in `color_by` greater than `vmax` will be clipped to the highest color.
             If None, the maximum of `color_by` values is used. Defaults to None.
+        hex_alpha (float or dict): Transparency of the hexes. A single float (0 transparent
+            to 1 opaque) applies to all hexes, or a dict of hex_id: alpha sets it per hex
+            (hexes not in the dict stay opaque). Defaults to None (fully opaque).
         rat (int): Hex where the rat is located. If specified, plots a long evans rat at this hex.
             By default the rat faces vertically up. Use rat_to or rat_from to change direction.
         rat_to (int): Hex the rat is going to (facing towards). The rat will be rotated to
             point towards this hex. Only used if rat is specified. Defaults to None (rat faces up).
         rat_from (int): Hex the rat came from (facing away from). The rat will be rotated to
             point away from this hex. Only used if rat is specified. Ignored if rat_to is set.
+        reward (tuple): Tuple of (port, rewarded) where port is a reward port (1, 2, 3 or
+            "A", "B", "C") and rewarded is a bool. Plots a reward droplet (if True) or a
+            no-reward X (if False) outside the specified reward port. Defaults to None
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
@@ -634,7 +954,17 @@ def plot_hex_maze(
         as they are also shown by the movement arrow. If show_barriers=False, the new_barrier hex
         will not be shown even if show_barrier_change=True (because no barriers are shown with this option.)
     - show_optimal_paths has the lowest precedence (will be overridden by all other highlights).
+    - hex_alpha is not compatible with show_permanent_barriers=True. It will flip show_permanent_barriers=False
+        and carry on. If you do have a legitimate case for using both of these, I can update how we render 
+        the permanent barriers to make these arguments compatible, but for now I don't see us wanting this.
     """
+    # hex_alpha is not supported with show_permanent_barriers, because translucent hexes
+    # blend with the barrier-colored background triangles instead of fading cleanly and it gets ugly
+    if hex_alpha is not None and show_barriers and show_permanent_barriers:
+        warnings.warn("hex_alpha is not supported with show_permanent_barriers=True, "
+                      "setting show_permanent_barriers=False")
+        show_permanent_barriers = False
+
     # Create an empty hex maze
     hex_maze = create_empty_hex_maze()
 
@@ -843,6 +1173,10 @@ def plot_hex_maze(
 
     # Add each hex to the plot
     for hex, (x, y) in hex_coordinates.items():
+        if isinstance(hex_alpha, Mapping):
+            alpha = hex_alpha.get(hex, 1.0)
+        else:
+            alpha = hex_alpha  # None (opaque) or a single float for all hexes
         hexagon = patches.RegularPolygon(
             (x, y),
             numVertices=6,
@@ -850,6 +1184,7 @@ def plot_hex_maze(
             orientation=math.pi / 6,
             facecolor=hex_colors[hex],
             edgecolor="white",
+            alpha=alpha,
         )
         ax.add_patch(hexagon)
 
@@ -933,8 +1268,8 @@ def plot_hex_maze(
     xlim = [min_x - scale, max_x + scale]
     ylim = [min_y - scale, max_y + scale]
 
-    # If showing reward probabilites, add a little space 
-    if reward_probabilities is not None:
+    # If showing reward probabilites or reward outcome, add a little space
+    if reward_probabilities is not None or reward is not None:
         xlim = [xlim[0] - scale, xlim[1] + scale]
         ylim = [ylim[0] - scale, ylim[1] + scale]
 
@@ -984,6 +1319,20 @@ def plot_hex_maze(
 
         # Plot the rat on the maze
         plot_rat_image(ax, rat_position, heading_angle, scale=scale)
+
+    # Optional - plot a reward droplet or no-reward X outside a reward port
+    if reward is not None:
+        port, rewarded = reward
+        port = resolve_port(port)
+        if port not in (1, 2, 3):
+            raise ValueError(f"Reward port must be 1, 2, 3 or A, B, C (got {port})")
+        # Get the position outside the reward port (shifted outward from the maze centroid,
+        # same as where reward probabilities are shown)
+        port_positions = scale_triangle_from_centroid(
+            vertices=[hex_coordinates_copy[1], hex_coordinates_copy[2], hex_coordinates_copy[3]],
+            shift=scale * 1.25,
+        )
+        plot_reward_image(ax, port_positions[port - 1], rewarded, scale=scale)
 
     # If no axis was provided as an argument, show the plot now
     if show_plot:
