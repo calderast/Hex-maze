@@ -8,6 +8,7 @@ including generating hex maze configurations and calculating various hex maze at
 import networkx as nx
 import numpy as np
 import math
+import warnings
 from collections import Counter
 
 from typing import Union
@@ -85,6 +86,19 @@ for path in STRAIGHT_PATHS_INSIDE_MAZE:
 ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_paths_list_training}
 
 
+# Cache the standard hex centroids on first use. We use these for classifying hexes as left/right
+# Deferred import avoids a circular import at load time (plotting.py imports from core.py).
+STANDARD_HEX_CENTROIDS: dict[int, tuple[float, float]] | None = None
+
+def get_standard_hex_centroids() -> dict[int, tuple[float, float]]:
+    """Return the standard hex centroids dict, computing it once and caching."""
+    global STANDARD_HEX_CENTROIDS
+    if STANDARD_HEX_CENTROIDS is None:
+        from .plotting import get_hex_centroids
+        STANDARD_HEX_CENTROIDS = get_hex_centroids()
+    return STANDARD_HEX_CENTROIDS
+
+
 # Define the public interface for this module
 __all__ = [
     "get_critical_choice_points", 
@@ -114,7 +128,13 @@ __all__ = [
     "get_num_dead_ends",
     "is_valid_path",
     "divide_into_thirds",
-    "get_choice_direction",
+    "classify_hexes_by_region",
+    "divide_into_thirds_from_port",
+    "tag_hexes",
+    "get_hex_exit_direction",
+    "get_junction_left_right_map",
+    "get_port_choice_direction",
+    "get_choice_direction",  # deprecated alias for get_port_choice_direction
     "has_illegal_straight_path",
     "is_valid_maze",
     "is_valid_training_maze",
@@ -927,8 +947,9 @@ def divide_into_thirds(maze) -> list[set]:
     # Maze '8,9,11,17,20,23,31,34,38,46' is an example of this.
     # In this case, we remove the entire cycle containing the choice point(s).
     # Re-evaluate if we encounter a maze where this is not the best way to deal with this.
-    if len(components) < 3:
-        maze_graph =  maze_to_graph(maze)
+    has_single_cp_cycle = (len(components) < 3)
+    if has_single_cp_cycle:
+        maze_graph = maze_to_graph(maze)
         cycle_basis = nx.cycle_basis(maze_graph)
         # Remove all hexes that are part of cycles that include a choice point
         hexes_to_remove = {
@@ -945,13 +966,215 @@ def divide_into_thirds(maze) -> list[set]:
     for hex in [1, 2, 3]:
         for maze_component in components:
             if hex in maze_component:
-                thirds.append(maze_component)
+                thirds.append(set(maze_component))
                 break
+
+    # WIP: keeping commented out for now so this change doesn't silently change behavior
+    # Any unclassified, non-choice-point hex that is path-independent to a port belongs in that port's third
+    # See maze '8,9,11,17,20,23,31,34,38,46' as an example: this addition 
+    # adds hex 30 to port 2's third and hex 40 to port 3's third.
+    # if has_single_cp_cycle:
+    #     all_third_hexes = thirds[0] | thirds[1] | thirds[2]
+    #     for port in [1, 2, 3]:
+    #         for h in get_path_independent_hexes_to_port(maze, port):
+    #             if h not in all_third_hexes and h not in choice_points:
+    #                 thirds[port - 1].add(h)
 
     return thirds
 
 
-def get_choice_direction(start_port, end_port) -> str:
+def classify_hexes_by_region(maze) -> dict[str, set[int]]:
+    """
+    Classify open hexes in a maze into regions based on the critical choice
+    points. Each hex is assigned to one of:
+        - 'to_1', 'to_2', 'to_3': hexes between a port and its choice point
+        - 'loop_12', 'loop_13', 'loop_23': hexes on the choice loop between
+            two port-specific choice points
+        - 'choice_point_1', 'choice_point_2', 'choice_point_3': the choice
+            points themselves
+
+    For mazes with no choice loops, loop sets will be empty.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        dict[str, set[int]]: Dictionary mapping region names to sets of hexes
+    """
+    graph = maze_to_graph(maze)
+
+    # Get port-specific choice points
+    cp = {}
+    all_cps = set()
+    for port in [1, 2, 3]:
+        cp[port] = get_critical_choice_points(maze, start_port=port)
+        all_cps.update(cp[port])
+
+    # Remove all choice points and find connected components
+    subgraph = graph.copy()
+    subgraph.remove_nodes_from(all_cps)
+    components = list(nx.connected_components(subgraph))
+
+    regions = {
+        "to_1": set(), "to_2": set(), "to_3": set(),
+        "loop_12": set(), "loop_13": set(), "loop_23": set(),
+        "choice_point_1": cp[1], "choice_point_2": cp[2], "choice_point_3": cp[3],
+    }
+    
+    # TODO: for cases where there are multiple choice points from a given port,
+    # how we should define the loop hexes is a little unclear.
+    # See maze '8,10,15,25,27,34,37,40,45' as an example of this.
+
+    # Simple case: removing choice points cleanly splits into 3+ components
+    # (one per port, plus any loop segments between choice points)
+    if len(components) >= 3:
+        for component in components:
+            for port in [1, 2, 3]:
+                if port in component:
+                    regions[f"to_{port}"].update(component)
+                    break
+            else:
+                # Loop segment: check which choice points it's adjacent to
+                adjacent_ports = set()
+                for h in component:
+                    for neighbor in graph.neighbors(h):
+                        for port in [1, 2, 3]:
+                            if neighbor in cp[port]:
+                                adjacent_ports.add(port)
+                pair = tuple(sorted(adjacent_ports))
+                if len(pair) == 2:
+                    regions[f"loop_{pair[0]}{pair[1]}"].update(component)
+
+        return regions
+
+    # Edge case: a choice point is on a cycle, so removing choice points
+    # doesn't split into 3 components. Use divide_into_thirds (which now
+    # absorbs effective choice points) to get the thirds.
+    thirds = divide_into_thirds(maze)
+    for port, third_hexes in zip([1, 2, 3], thirds):
+        regions[f"to_{port}"].update(third_hexes)
+
+    # Remaining unclassified hexes are the loop interior
+    all_classified = regions["to_1"] | regions["to_2"] | regions["to_3"] | all_cps
+    loop_hexes = set(graph.nodes) - all_classified
+
+    # Classify loop hexes by which pair of thirds they're adjacent to
+    for component in nx.connected_components(graph.subgraph(loop_hexes)):
+        adjacent_ports = set()
+        for h in component:
+            for neighbor in graph.neighbors(h):
+                for port in [1, 2, 3]:
+                    if neighbor in regions[f"to_{port}"]:
+                        adjacent_ports.add(port)
+        pair = tuple(sorted(adjacent_ports))
+        if len(pair) == 2:
+            regions[f"loop_{pair[0]}{pair[1]}"].update(component)
+
+    return regions
+
+
+def divide_into_thirds_from_port(maze, start_port) -> list[set]:
+    """
+    Like divide_into_thirds, but resolves choice loop ambiguity from the
+    perspective of a given start port. Loop segments between the start port's
+    choice point and another port's choice point are assigned to that other
+    port's third. Loop segments between the other two ports remain unassigned.
+
+    For mazes with no choice loops, this is equivalent to divide_into_thirds.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+
+    Returns:
+        list[set]: [{hexes in port 1's third}, {port 2's third}, {port 3's third}]
+    """
+    start_port = resolve_port(start_port)
+    other_ports = [p for p in [1, 2, 3] if p != start_port]
+    regions = classify_hexes_by_region(maze)
+
+    thirds = [set(), set(), set()]
+    for port in [1, 2, 3]:
+        thirds[port - 1].update(regions[f"to_{port}"])
+        # Other ports' choice points belong to their third, excluding
+        # any that are also the start port's choice point
+        if port != start_port:
+            thirds[port - 1].update(
+                regions[f"choice_point_{port}"] - regions[f"choice_point_{start_port}"]
+            )
+
+    # Loop segments touching the start port get assigned to the other port
+    for other in other_ports:
+        pair = tuple(sorted([start_port, other]))
+        thirds[other - 1].update(regions[f"loop_{pair[0]}{pair[1]}"])
+
+    # loop between the two non-start ports is left unassigned
+
+    return thirds
+
+
+def tag_hexes(maze) -> dict[int, set[str]]:
+    """
+    Given a hex maze, tag each open hex with descriptive labels.
+    Each hex gets a set of tags from:
+        - 'to_port_1', 'to_port_2', 'to_port_3': which third of the maze it belongs to
+        - 'optimal', 'non_optimal', 'dead_end': hex classification
+        - 'choice_point': critical choice point from any port
+        - 'choice_point_1', 'choice_point_2', 'choice_point_3': critical choice point from a specific port
+
+    A hex can have multiple tags (e.g. a hex on the boundary of two thirds
+    that is also on an optimal path).
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        dict[int, set[str]]: Dictionary mapping each open hex to its set of tags
+    """
+    graph = maze_to_graph(maze)
+
+    # Initialize tags for all open hexes
+    hex_tags = {h: set() for h in graph.nodes}
+
+    # Tag by thirds (which port each hex is closest to structurally)
+    thirds = divide_into_thirds(maze)
+    all_third_hexes = set()
+    for port_num, third_hexes in zip([1, 2, 3], thirds):
+        all_third_hexes.update(third_hexes)
+        for h in third_hexes:
+            hex_tags[h].add(f"to_port_{port_num}")
+
+    # Hexes not in any third are part of a choice loop
+    for h in set(graph.nodes) - all_third_hexes:
+        hex_tags[h].add("choice_loop")
+
+    # Tag by hex classification
+    optimal_hexes = get_hexes_on_optimal_paths(maze)
+    non_optimal_hexes = get_non_optimal_non_dead_end_hexes(maze)
+    dead_end_hexes = get_dead_end_hexes(maze)
+
+    for h in optimal_hexes:
+        hex_tags[h].add("optimal")
+    for h in non_optimal_hexes:
+        hex_tags[h].add("non_optimal")
+    for h in dead_end_hexes:
+        hex_tags[h].add("dead_end")
+
+    # Tag choice points (all critical choice points, plus port-specific)
+    all_choice_points = get_critical_choice_points(maze)
+    for h in all_choice_points:
+        hex_tags[h].add("choice_point")
+    for port in [1, 2, 3]:
+        for h in get_critical_choice_points(maze, start_port=port):
+            hex_tags[h].add(f"choice_point_{port}")
+
+    return hex_tags
+
+
+def get_port_choice_direction(start_port, end_port) -> str:
     """
     Get the direction of the rat's port choice ('left' or 'right')
     given the rat's start and end port.
@@ -977,6 +1200,100 @@ def get_choice_direction(start_port, end_port) -> str:
     else:
         # Return None if start_port == end_port
         return None
+
+
+def get_choice_direction(start_port, end_port) -> str:
+    """Deprecated alias for get_port_choice_direction."""
+    warnings.warn(
+        "get_choice_direction is deprecated and the name will be removed in a future release. "
+        "It has been renamed to get_port_choice_direction.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return get_port_choice_direction(start_port, end_port)
+
+
+def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> str:
+    """
+    Classify an exit from a junction as 'left', 'right', or 'back' relative
+    to the rat's heading direction.
+
+    The heading vector goes from entry_hex to junction_hex (the direction the
+    rat was traveling when it arrived at the junction). The exit vector goes
+    from junction_hex to exit_hex (the direction the rat would travel if it
+    took that exit). The sign of their 2D cross product determines the turn:
+    positive => exit is counterclockwise of the heading (left), negative =>
+    clockwise (right). If the rat turns back the way it came (exit_hex ==
+    entry_hex), the exit is classified as 'back'.
+
+    Parameters:
+        entry_hex (int): The hex the rat came from
+        junction_hex (int): The junction hex the rat is currently at
+        exit_hex (int): The candidate exit hex
+
+    Returns:
+        str: 'left' if exit is counterclockwise of the heading, 'right' if
+            clockwise, 'back' if the rat is turning around (exit == entry)
+    """
+    if exit_hex == entry_hex:
+        return "back"
+
+    centroids = get_standard_hex_centroids()
+    entry_x, entry_y = centroids[entry_hex]
+    junction_x, junction_y = centroids[junction_hex]
+    exit_x, exit_y = centroids[exit_hex]
+
+    # Heading vector: direction the rat was traveling (entry -> junction)
+    heading_vec_x = junction_x - entry_x
+    heading_vec_y = junction_y - entry_y
+    # Exit vector: direction the rat would go (junction -> exit)
+    exit_vec_x = exit_x - junction_x
+    exit_vec_y = exit_y - junction_y
+
+    # 2D cross product: positive means exit is counterclockwise (left) of heading
+    cross = heading_vec_x * exit_vec_y - heading_vec_y * exit_vec_x
+    return "left" if cross > 0 else "right"
+
+
+def get_junction_left_right_map(maze) -> dict[tuple[int, int], dict[str, int]]:
+    """
+    For every 3-way junction in the maze and every possible entry direction,
+    classify the two exit neighbors as 'left' or 'right'.
+
+    A 3-way junction is a hex with exactly 3 open neighbors. When the rat enters
+    from one neighbor, it has a choice of 2 exits. This uses each hex's integer
+    hex centroids (via get_hex_exit_direction) to determine which exit is
+    left vs right relative to the rat's heading.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        dict: Maps (junction_hex, entry_hex) tuples to a dict with keys
+            'left' and 'right', each mapping to the corresponding exit hex ID.
+
+            Example: {(10, 7): {'left': 13, 'right': 11}, ...}
+    """
+    graph = maze_to_graph(maze)
+    junction_hexes = get_all_choice_points(maze)
+
+    lr_map = {}
+    for junc in junction_hexes:
+        neighbors = list(graph.neighbors(junc))
+
+        # For each possible entry direction, classify the two exits
+        for entry in neighbors:
+            exits = [n for n in neighbors if n != entry]
+
+            # Classify first exit; the other is the opposite direction
+            direction = get_hex_exit_direction(entry, junc, exits[0])
+            if direction == "left":
+                lr_map[(junc, entry)] = {"left": exits[0], "right": exits[1]}
+            else:
+                lr_map[(junc, entry)] = {"left": exits[1], "right": exits[0]}
+
+    return lr_map
 
 
 def has_illegal_straight_path(maze, training_maze=False):
