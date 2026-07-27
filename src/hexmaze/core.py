@@ -8,6 +8,7 @@ including generating hex maze configurations and calculating various hex maze at
 import networkx as nx
 import numpy as np
 import math
+import warnings
 from collections import Counter
 
 from typing import Union
@@ -89,7 +90,7 @@ ILLEGAL_STRAIGHT_PATHS_TRAINING = {tuple(path) for path in illegal_straight_path
 # {(0,1), (1,-1), (-1,0), (0,-1), (-1,1), (1,0)}. The basis is oriented so that
 # the 2D cross product a1*b2 - b1*a2 has the same sign as the geometric cross
 # product in real (x, y) space - this lets us classify left/right turns from
-# hex IDs alone, without needing plot centroids. See classify_exit_direction.
+# hex IDs alone, without needing plot centroids. See get_hex_exit_direction.
 HEX_AXIAL_COORDS: dict[int, tuple[int, int]] = {
     1: (0, 0),
     4: (0, -1),
@@ -139,9 +140,10 @@ __all__ = [
     "classify_hexes_by_region",
     "divide_into_thirds_from_port",
     "tag_hexes",
-    "classify_exit_direction",
+    "get_hex_exit_direction",
     "get_junction_left_right_map",
-    "get_choice_direction",
+    "get_port_choice_direction",
+    "get_choice_direction",  # deprecated alias for get_port_choice_direction
     "has_illegal_straight_path",
     "is_valid_maze",
     "is_valid_training_maze",
@@ -1180,7 +1182,7 @@ def tag_hexes(maze) -> dict[int, set[str]]:
     return hex_tags
 
 
-def get_choice_direction(start_port, end_port) -> str:
+def get_port_choice_direction(start_port, end_port) -> str:
     """
     Get the direction of the rat's port choice ('left' or 'right')
     given the rat's start and end port.
@@ -1206,9 +1208,20 @@ def get_choice_direction(start_port, end_port) -> str:
     else:
         # Return None if start_port == end_port
         return None
-    
-    
-def classify_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> str:
+
+
+def get_choice_direction(start_port, end_port) -> str:
+    """Deprecated alias for get_port_choice_direction."""
+    warnings.warn(
+        "get_choice_direction is deprecated and will be removed in a future release; "
+        "use get_port_choice_direction instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return get_port_choice_direction(start_port, end_port)
+
+
+def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> str:
     """
     Classify an exit from a junction as 'left' or 'right' relative to the
     rat's heading direction.
@@ -1252,7 +1265,7 @@ def get_junction_left_right_map(maze) -> dict[tuple[int, int], dict[str, int]]:
 
     A 3-way junction is a hex with exactly 3 open neighbors. When the rat enters
     from one neighbor, it has a choice of 2 exits. This uses each hex's integer
-    axial coordinates (via classify_exit_direction) to determine which exit is
+    axial coordinates (via get_hex_exit_direction) to determine which exit is
     left vs right relative to the rat's heading.
 
     Parameters:
@@ -1277,7 +1290,7 @@ def get_junction_left_right_map(maze) -> dict[tuple[int, int], dict[str, int]]:
             exits = [n for n in neighbors if n != entry]
 
             # Classify first exit; the other is the opposite direction
-            direction = classify_exit_direction(entry, junc, exits[0])
+            direction = get_hex_exit_direction(entry, junc, exits[0])
             if direction == "left":
                 lr_map[(junc, entry)] = {"left": exits[0], "right": exits[1]}
             else:
