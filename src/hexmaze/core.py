@@ -117,6 +117,8 @@ __all__ = [
     "classify_hexes_by_region",
     "divide_into_thirds_from_port",
     "tag_hexes",
+    "classify_exit_direction",
+    "get_junction_left_right_map",
     "get_choice_direction",
     "has_illegal_straight_path",
     "is_valid_maze",
