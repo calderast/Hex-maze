@@ -479,21 +479,39 @@ def get_hex_distance(maze, start_hex, target_hex) -> int:
     return nx.shortest_path_length(graph, source=start_hex, target=target_hex)
 
 
-def get_hexes_between(maze, start_hex: int, target_hex: int, dead_end_ok=True, non_optimal_ok=True) -> set[int]:
+def get_hexes_between(
+    maze, start_hex: int, target_hex: int, dead_end_ok=False, non_optimal_ok=False, blocked_hexes=None
+) -> set[int]:
     """
-    Get all hexes that lie between two hexes in a maze. Removes start_hex
-    and target_hex from the graph, then returns the connected component
-    containing the shortest path hexes (plus start_hex and target_hex themselves).
+    Get all hexes that lie between two hexes in a maze. By default this is the
+    optimal route between them (all of the routes, where several tie for shortest).
+
+    Set dead_end_ok and/or non_optimal_ok to True to widen it into the corridor around
+    the route: start_hex and target_hex are removed from the graph and the connected
+    component containing the shortest path hexes is returned, which is everything a rat
+    can reach between the two hexes without passing back through either of them.
+
+    Note that this only carves out a corridor if start_hex and target_hex actually
+    separate it from the rest of the maze. If they lie on a loop, removing them cuts
+    nothing and the connected component is the whole maze, so the "corridor" comes back
+    containing hexes well past target_hex. Pass blocked_hexes to cut the loop.
 
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze represented in any valid format
         start_hex (int): The starting hex
         target_hex (int): The target hex
-        dead_end_ok (bool): If True (default), include dead-end hexes in the
-            corridor. If False, exclude them.
-        non_optimal_ok (bool): If True (default), include non-optimal
-            (longer-than-optimal but not dead-end) hexes. If False, exclude them.
+        dead_end_ok (bool): If True, include dead-end hexes hanging off the corridor.
+            Defaults to False.
+        non_optimal_ok (bool): If True, include non-optimal (longer-than-optimal)
+            hexes in the corridor. Defaults to False. With both this and dead_end_ok
+            False (the default), only the hexes on the optimal path(s) between
+            start_hex and target_hex are returned.
+        blocked_hexes (set[int], optional): Additional hexes to remove from the
+            graph alongside start_hex and target_hex, so the corridor cannot leak
+            around a loop and out the far side. Only affects which hexes count as
+            "between"; whether a hex is a dead end or non-optimal is still judged
+            against the unmodified maze.
 
     Returns:
         set[int]: All hexes between start_hex and target_hex, filtered by
@@ -504,11 +522,16 @@ def get_hexes_between(maze, start_hex: int, target_hex: int, dead_end_ok=True, n
     start_hex = resolve_port(start_hex) # may not be not a port hex, but allow A/B/C for 1/2/3 anyway
     target_hex = resolve_port(target_hex) # may not be not a port hex, but allow A/B/C for 1/2/3 anyway
 
+    # Cut the graph at any blocked hexes first, so both the path we follow and the
+    # component we flood are confined to the side of the maze we asked about
+    blocked = set(blocked_hexes or ()) - {start_hex, target_hex}
+    subgraph = graph.copy()
+    subgraph.remove_nodes_from(blocked)
+
     # Get a hex on the shortest path to identify the right component
-    path = nx.shortest_path(graph, source=start_hex, target=target_hex)
+    path = nx.shortest_path(subgraph, source=start_hex, target=target_hex)
 
     # Remove start and target from the graph
-    subgraph = graph.copy()
     subgraph.remove_nodes_from([start_hex, target_hex])
 
     # Find the connected component containing the shortest path hexes
@@ -517,10 +540,22 @@ def get_hexes_between(maze, start_hex: int, target_hex: int, dead_end_ok=True, n
         path_hex = path[1]  # a hex on the path (not start or target)
         between.update(nx.node_connected_component(subgraph, path_hex))
 
-    # Filter out dead-end and/or non-optimal hexes if requested
+    # Filter out dead-end and/or non-optimal hexes if requested.
+    # Note that "non-optimal" is judged against the optimal path(s) between start_hex and
+    # target_hex, not against get_non_optimal_non_dead_end_hexes, which asks whether a hex is
+    # optimal for ANY pair of reward ports. Using the maze-wide version here would keep every
+    # hex that happens to lie on a different port pair's optimal path (including that pair's
+    # reward port) in the corridor between these two hexes.
     if not dead_end_ok or not non_optimal_ok:
         dead_ends = get_dead_end_hexes(maze) if not dead_end_ok else set()
-        non_optimal = get_non_optimal_non_dead_end_hexes(maze) if not non_optimal_ok else set()
+        if not non_optimal_ok:
+            on_optimal_path = {
+                hex for path in get_optimal_paths(maze, start_hex=start_hex, target_hex=target_hex) for hex in path
+            }
+            # Dead ends are handled by dead_end_ok, so only drop the non-optimal hexes that are not dead ends
+            non_optimal = {hex for hex in between if hex not in on_optimal_path} - get_dead_end_hexes(maze)
+        else:
+            non_optimal = set()
         between -= dead_ends | non_optimal
 
     return between

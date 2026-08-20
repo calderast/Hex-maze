@@ -47,6 +47,7 @@ __all__ = [
     "get_hexes_before_divergence",
     "get_optimal_path_hexes_after_divergence",
     "get_hexes_after_divergence",
+    "classify_hexes_by_barrier_change",
     "get_barrier_change",
     "get_barrier_changes",
     "get_next_barrier_sets",
@@ -582,7 +583,7 @@ def get_path_convergence_point(maze_1, maze_2, start_port, end_port) -> int:
 
 
 def get_hexes_before_divergence(maze_1, maze_2, start_port, end_port,
-                                dead_end_ok=True, non_optimal_ok=True,
+                                dead_end_ok=False, non_optimal_ok=False,
                                 distance_from_divergence=math.inf) -> set[int]:
     """
     Given 2 hex mazes and a pair of reward ports, get all hexes between the
@@ -595,10 +596,12 @@ def get_hexes_before_divergence(maze_1, maze_2, start_port, end_port,
             The second (new) hex maze represented in any valid format
         start_port (int or str): The starting reward port (1/2/3 or A/B/C)
         end_port (int or str): The ending reward port (1/2/3 or A/B/C)
-        dead_end_ok (bool): If True (default), include dead-end hexes.
-            If False, exclude them.
-        non_optimal_ok (bool): If True (default), include non-optimal hexes.
-            If False, exclude them.
+        dead_end_ok (bool): If True, include dead-end hexes hanging off the route.
+            Defaults to False.
+        non_optimal_ok (bool): If True, include non-optimal hexes. Defaults to False.
+            With both this and dead_end_ok False (the default), only the hexes on the
+            route from the start port to the divergence point are returned; set them
+            True to get the whole corridor the rat can reach before the choice.
         distance_from_divergence (int or float): Maximum hex distance from the
             divergence point. Only hexes within this distance are included.
             Defaults to inf (no restriction).
@@ -709,6 +712,11 @@ def get_hexes_after_divergence(maze_1, maze_2, start_port, end_port, distance=5)
     When there are multiple optimal paths, the most similar pair of old/new
     paths is used.
 
+    Note this is NOT only hexes on the optimal paths - this is all hexes (within a
+    given distance) in the general direction of the old and new path. This can
+    be helpful for classifying if a rat is representing the "old path direction"
+    or "new path direction" rather than just hexes optimal on those paths.
+
     Parameters:
         maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
             The first (old) hex maze represented in any valid format
@@ -793,6 +801,193 @@ def get_hexes_after_divergence(maze_1, maze_2, start_port, end_port, distance=5)
             new_hexes.discard(h)
 
     return old_hexes, new_hexes
+
+
+def _hexes_reached_via_third_port(maze, start_port, end_port) -> set[int]:
+    """Helper for classifying old path/new path hexes after a barrier change. Gets
+    the part of the maze that only hangs off the route between two ports via the third port.
+
+    get_hexes_between finds the corridor between 2 hexes by removing those hexes from the
+    maze and taking whatever is still connected to the path between them. That only carves
+    out a corridor if removing those 2 hexes actually splits the maze. Reward ports sit at
+    the ends of the maze, so removing them splits off nothing. So the hexes in the arm
+    leading to the third port would also count as "between" the other 2 ports, and are included.
+
+    Cutting out the ROUTE between the 2 ports instead leaves the arm leading to the
+    third port as its own component, which is what this returns. Passing it back to
+    get_hexes_between as blocked_hexes makes the corridor come back as only the hexes on
+    (or hanging off of) the actual route between the 2 ports of interest.
+    """
+    graph = maze_to_graph(maze)
+    third_port = ({1, 2, 3} - {start_port, end_port}).pop()
+    route = {hex for path in get_optimal_paths(maze, start_port, end_port) for hex in path}
+    
+    # All ports are dead ends so we would never reach this case
+    if third_port in route:
+        return set()
+
+    component_graph = graph.copy()
+    component_graph.remove_nodes_from(route)
+    return set(nx.node_connected_component(component_graph, third_port))
+
+
+def classify_hexes_by_barrier_change(
+    maze_1, maze_2, start_port, end_port, dead_end_ok=False, non_optimal_ok=False
+) -> dict[str, set[int]]:
+    """
+    Given 2 hex mazes that differ by a barrier change and a pair of reward ports,
+    classify every hex by where it sits relative to the change. Each hex is
+    assigned to one of:
+        - 'before_divergence': in the corridor both routes share, before they split
+        - 'old_path': only on the old (maze_1) optimal path, plus anything hanging
+            off it that dead_end_ok / non_optimal_ok let in
+        - 'new_path': only on the new (maze_2) optimal path, plus anything hanging
+            off it that dead_end_ok / non_optimal_ok let in
+        - 'after_convergence': in the corridor they share again, after they rejoin
+        - 'shared': the route between these ports did not change at all, so the
+            whole corridor between them is shared. When this set is non-empty,
+            the four sets above are all empty, and vice versa. The corridor here is
+            the route plus what hangs off it (with the third reward port's arm cut
+            away).
+        - 'other': open in maze_2 but not assigned to any class above. Three kinds of
+            hex end up here: those outside the corridor between these ports, the third
+            reward port's arm, and anything the rat can reach from two stretches of the
+            route without passing the choice point (a loop/bypass)
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first (old) hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second (new) hex maze represented in any valid format
+        start_port (int or str): The starting reward port (1/2/3 or A/B/C)
+        end_port (int or str): The ending reward port (1/2/3 or A/B/C)
+        dead_end_ok (bool): If True, the route classes take in dead-end hexes hanging
+            off the route. Defaults to False.
+        non_optimal_ok (bool): If True, the route classes take in non-optimal hexes
+            around the route. Defaults to False. With both False (the default) the
+            route classes mean "on the route"; with both True they mean "anywhere in
+            the corridor", flood-filling out to everything the rat can reach without
+            leaving that stretch of the maze (see the note below).
+
+    Returns:
+        dict[str, set[int]]: Dictionary mapping class names to sets of hexes
+
+    Notes:
+        Every class is built the same way: cut maze_2 at the route (the stretch both paths
+        share up to the divergence point, the two stretches that differ, and the stretch they
+        share again from the convergence point), then give each component that falls off it to
+        whichever stretch it hangs from. A component hanging off two stretches at once is a
+        bypass the rat can run without passing the choice point, so it goes to 'other' rather
+        than to either.
+
+        Widening the route classes (dead_end_ok=True, non_optimal_ok=True) flood-fills them
+        out from the route to everything the rat can reach in that stretch of the maze. 
+        This may be useful for e.g.:
+        - Looking at neural representations of old/new paths when the rat is in any
+          pre-divergence hex, not only when it is on the optimal path.
+        - Classifying representations as old-path or new-path, where a general "old path area"
+          and "new path area" is more useful than the two exact routes. For path regions 
+          within a given distance from the divergence point, use get_hexes_after_divergence, 
+          which does a breadth-first search out from the divergence point along each path 
+          direction.
+
+        Everything except the old optimal route itself is measured on maze_2 (the maze
+        the rat is actually in), including the hexes absorbed into 'old_path' by
+        dead_end_ok and non_optimal_ok.
+
+        Every hex is in exactly one set. Barriers are left out with the exception of
+        'old_path', which almost always contains the hex the barrier change just 
+        blocked (that hex is a barrier in maze_2 by definition, and it is
+        the whole point of the old path).
+
+        A hex on the old or new path is never counted as before_divergence or
+        after_convergence, so the classification does not depend on the direction of
+        travel: 'old_path' and 'new_path' are the same sets for start->end and
+        end->start, while 'before_divergence' and 'after_convergence' swap.
+
+        Where several paths tie for optimal, get_most_similar_paths decides which
+        old/new pair defines 'old_path' and 'new_path' (the pair differing in the
+        fewest hexes). 'shared' uses all tied paths, as any of them is equally the
+        unchanged route.
+    """
+    start_port = resolve_port(start_port)
+    end_port = resolve_port(end_port)
+    corridor_args = dict(dead_end_ok=dead_end_ok, non_optimal_ok=non_optimal_ok)
+    new_graph = maze_to_graph(maze_2)
+
+    hex_classes = {
+        "before_divergence": set(),
+        "old_path": set(),
+        "new_path": set(),
+        "after_convergence": set(),
+        "shared": set(),
+    }
+
+    divergence_point = get_path_divergence_point(maze_1, maze_2, start_port, end_port)
+    if divergence_point is None:
+        # This pair of ports has the same route in both mazes, so nothing diverged. The corridor
+        # between two reward ports needs the third port's arm cut off it, or it is the whole maze
+        hex_classes["shared"] = get_hexes_between(
+            maze_2, start_port, end_port,
+            blocked_hexes=_hexes_reached_via_third_port(maze_2, start_port, end_port),
+            **corridor_args,
+        )
+    else:
+        # The divergence point of the reversed pair is the convergence point of this one
+        convergence_point = get_path_divergence_point(maze_1, maze_2, end_port, start_port)
+        old_path_hexes, new_path_hexes = get_optimal_path_hexes_after_divergence(maze_1, maze_2, start_port, end_port)
+
+        # The route the classification is built around: the stretch both paths share up to the
+        # divergence point, the two stretches that differ, and the stretch they share again from
+        # the convergence point. These four are disjoint, and cover the whole route
+        best_old_path, _ = get_most_similar_paths(maze_1, maze_2, start_port, end_port)
+        route = {
+            "before_divergence": set(best_old_path[: best_old_path.index(divergence_point) + 1]),
+            "old_path": old_path_hexes,
+            "new_path": new_path_hexes,
+            "after_convergence": set(best_old_path[best_old_path.index(convergence_point) :]),
+        }
+
+        # Cut the maze at the route and sort what falls off it
+        component_graph = new_graph.copy()
+        component_graph.remove_nodes_from(set().union(*route.values()))
+        components = list(nx.connected_components(component_graph))
+
+        # The third port's arm falls off the route like any other component, but is its own
+        # destination rather than part of the corridor between these two ports, so it is left out
+        third_port = ({1, 2, 3} - {start_port, end_port}).pop()
+        third_arm = next((component for component in components if third_port in component), set())
+
+        # Everything the rat can reach between the two ports, narrowed by dead_end_ok and
+        # non_optimal_ok. This is the only thing those two flags do here: a component is taken
+        # into its class only as far as this reaches, so at the default settings, where it is
+        # just the route, nothing hanging off the route comes along at all. The third port's arm
+        # has to be cut out of it, or the corridor between two reward ports is the whole maze
+        corridor = get_hexes_between(maze_2, start_port, end_port, blocked_hexes=third_arm, **corridor_args)
+
+        # A component reachable from exactly one stretch of the route belongs to that stretch.
+        # Everything else goes to 'other' (i.e. a component reachable from two or more stretches 
+        # is a bypass the rat can run without passing the choice point, so it doesn't really
+        # belong in any category)
+        for component in components:
+            # Every hex just outside this component, which is what it hangs off of
+            neighbors = {n for hex in component for n in new_graph.neighbors(hex)}
+            # The stretches of the route the component can be reached from
+            touches = [hex_class for hex_class, hexes in route.items() if neighbors & hexes]
+            # Claim it only if a single stretch reaches it (and it is not the third port's arm)
+            if len(touches) == 1 and third_port not in component:
+                # Take in as much of it as dead_end_ok and non_optimal_ok allow
+                hex_classes[touches[0]] |= component & corridor
+
+        # The optimal route itself is always classified
+        for hex_class, hexes in route.items():
+            hex_classes[hex_class] |= hexes
+
+    # Everything else that a rat in maze_2 can actually reach. Barriers are left out, except
+    # for the hex on the old path that the barrier change closed off
+    classified = set().union(*hex_classes.values())
+    hex_classes["other"] = set(new_graph.nodes()) - classified
+    return hex_classes
 
 
 def get_barrier_change(maze_1, maze_2) -> tuple[int, int]:
