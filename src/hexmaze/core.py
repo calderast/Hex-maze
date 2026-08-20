@@ -109,6 +109,7 @@ __all__ = [
     "get_path_length_difference",
     "get_path_independent_hexes_to_port",
     "get_unreachable_hexes",
+    "get_open_hexes",
     "get_closest_port",
     "get_hexes_from_port",
     "get_hexes_from_closest_port",
@@ -376,6 +377,23 @@ def get_unreachable_hexes(maze) -> set[int]:
 
     # All hexes not in the main component are unreachable
     return set(graph.nodes) - main_component
+
+
+def get_open_hexes(maze) -> set[int]:
+    """
+    All reachable open hexes in the maze (1-49 minus barriers and unreachable hexes).
+
+    Unreachable hexes are excluded as well as barriers, so a hex walled off into an
+    island does not count as open.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        set[int]: The hexes the rat can actually occupy in this maze
+    """
+    return set(range(1, 50)) - maze_to_barrier_set(maze) - get_unreachable_hexes(maze)
 
 
 def get_closest_port(maze, start_hex) -> list[int]:
