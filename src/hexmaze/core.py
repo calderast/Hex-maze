@@ -133,6 +133,7 @@ __all__ = [
     "divide_into_thirds_from_port",
     "tag_hexes",
     "get_hex_exit_direction",
+    "get_relative_hex_direction",
     "get_junction_left_right_map",
     "get_port_choice_direction",
     "get_choice_direction",  # deprecated alias for get_port_choice_direction
@@ -1287,6 +1288,9 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
     Returns:
         str: 'left' if exit is counterclockwise of the heading, 'right' if
             clockwise, 'back' if the rat is turning around (exit == entry)
+
+    See also: get_relative_hex_direction, the same function named for the general
+        case, where the 3 hexes need not be a junction and its neighbors.
     """
     if exit_hex == entry_hex:
         return "back"
@@ -1306,6 +1310,31 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
     # 2D cross product: positive means exit is counterclockwise (left) of heading
     cross = heading_vec_x * exit_vec_y - heading_vec_y * exit_vec_x
     return "left" if cross > 0 else "right"
+
+
+def get_relative_hex_direction(from_hex: int, at_hex: int, to_hex: int) -> str:
+    """
+    Classify one hex as 'left', 'right', or 'back' of another, relative to the
+    direction of travel.
+
+    Left and right only mean something once we know which way the rat is facing,
+    so this takes 3 hexes rather than 2: the hex the rat came from, the hex it is
+    at now (which sets the heading), and the hex we are asking about.
+
+    The same function as get_hex_exit_direction, named for the general case. None
+    of the 3 hexes have to be adjacent or at a junction, so this also answers
+    questions like "is the reward port to the rat's left right now".
+
+    Parameters:
+        from_hex (int): The hex the rat came from
+        at_hex (int): The hex the rat is at now
+        to_hex (int): The hex we want the direction of
+
+    Returns:
+        str: 'left' if to_hex is counterclockwise of the heading, 'right' if
+            clockwise, 'back' if to_hex is the hex the rat came from
+    """
+    return get_hex_exit_direction(from_hex, at_hex, to_hex)
 
 
 def get_junction_left_right_map(maze) -> dict[tuple[int, int], dict[str, int]]:
