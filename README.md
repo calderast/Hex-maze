@@ -174,9 +174,9 @@ If you use **Hex-maze-neuro** in your research, please cite it as:
 @software{crater_hexmazeneuro_2026,
   author       = {Crater, Stephanie},
   title        = {Hex-maze-neuro: A Python toolkit for hex maze generation, visualization, and analysis},
-  version      = {1.1.6},
+  version      = {1.1.7},
   year         = {2026},
-  month        = july,
+  month        = august,
   publisher    = {Zenodo},
   doi          = {10.5281/zenodo.17635391},
   url          = {https://doi.org/10.5281/zenodo.17635391}
