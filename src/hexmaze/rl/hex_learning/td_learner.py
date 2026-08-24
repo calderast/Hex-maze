@@ -44,7 +44,9 @@ Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
 """
 
 import random
+import warnings
 import numpy as np
+from scipy.optimize import minimize
 from ...utils import create_empty_hex_maze, maze_to_graph
 from ...core import get_safe_hex_distance
 from ...utils import REWARD_PORTS, resolve_port
@@ -121,6 +123,8 @@ class HexMazeTDLearner:
         """Clear all value tables and rebuild priors. States are created lazily."""
         self.V = {context: {} for context in self.contexts}
         self.build_prior_table(self.priors)
+        # Only the session's very first trial may lack a real start port.
+        self._is_first_trial = True
 
     def build_prior_table(self, priors):
         """Precompute {context: {hex: prior value}} (or None for all-zeros)."""
@@ -201,13 +205,9 @@ class HexMazeTDLearner:
         return state[1] if self.directional else state
 
     def state_value(self, context, state):
-        """Read a state's value, lazily initializing it to its prior."""
-        table = self.V[context]
-        value = table.get(state)
-        if value is None:
-            value = self.prior_for_hex(context, self.hex_of_state(state))
-            table[state] = value
-        return value
+        """Read a state's value, falling back to its prior if never written."""
+        value = self.V[context].get(state)
+        return value if value is not None else self.prior_for_hex(context, self.hex_of_state(state))
 
     #  TD(lambda) core
 
@@ -236,7 +236,7 @@ class HexMazeTDLearner:
         """
         history = []
         if record:
-            history.append(self.snapshot(path[0]))
+            history.append(self.snapshot(path, 0))
 
         eligibility = {}
         last_step = len(path) - 2  # index of the final transition
@@ -266,66 +266,228 @@ class HexMazeTDLearner:
                 )
 
             if record:
-                history.append(self.snapshot(next_hex))
+                history.append(self.snapshot(path, step + 1))
 
         return history if record else None
 
     #  Learn from supplied trajectories
 
-    def resolve_start_port(self, path, start_port):
-        """Resolve start_port from the argument or path[0] (which must be a port)."""
-        if start_port is not None:
-            return resolve_port(start_port)
+    def resolve_context(self, path):
+        """
+        The value-table context for a trip, derived from path[0].
+
+        With goal_conditioned=False there is a single shared table, so
+        path[0] never needs to be a real port. With goal_conditioned=True,
+        the context is path[0] if it's a reward port. If not, a placeholder
+        is only allowed on the session's very first trial (which starts
+        wherever the rat happened to be, before ever reaching a port): one
+        of the other two ports, excluding the trip's end port (path[-1]).
+        Any later trial without a real start port raises, since every trial
+        after the first should start where the previous one ended.
+        """
+        is_first_trial = self._is_first_trial
+        self._is_first_trial = False
+
+        if not self.goal_conditioned:
+            return None
         if path[0] in REWARD_PORTS:
             return path[0]
-        raise ValueError(
-            f"start_port not provided and path[0]={path[0]} is not a reward port. "
-            f"Provide start_port explicitly when the trajectory doesn't start at a port."
+        if not is_first_trial:
+            raise ValueError(
+                f"path[0]={path[0]} is not a reward port, and this isn't the "
+                f"session's first trial (a placeholder start port is only "
+                f"allowed once). Check that trajectories are passed in "
+                f"session order and that each trial's path starts where the "
+                f"previous one ended."
+            )
+        placeholder = next(port for port in REWARD_PORTS if port != path[-1])
+        warnings.warn(
+            f"path[0]={path[0]} is not a reward port on the session's first "
+            f"trial; using placeholder start port {placeholder}."
         )
+        return placeholder
 
-    def process_trajectory(self, path, reward, start_port=None):
+    def process_trajectory(self, path, reward):
         """
         Run a TD(lambda) update along a single path.
 
         Parameters
         ----------
         path : list of int
-            Sequence of hexes visited.
+            Sequence of hexes visited. With goal_conditioned=True, the start
+            port is taken from path[0] if it's a reward port, else a
+            placeholder (see resolve_context); ignored (and not required)
+            when goal_conditioned=False.
         reward : float
             Reward obtained at the terminal state (path[-1]).
-        start_port : int or str, optional
-            Port the trip started from (1/2/3 or A/B/C). Defaults to path[0]
-            if it is a reward port.
         """
-        start_port = self.resolve_start_port(path, start_port)
-        self.learn_path(path, reward, self.context_for_port(start_port))
+        self.learn_path(path, reward, self.resolve_context(path))
 
-    def process_trajectory_with_history(self, path, reward, start_port=None):
+    def process_trajectory_with_history(self, path, reward):
         """
         Same as process_trajectory, but returns a per-step snapshot of the
-        collapsed per-hex value tables (one entry per visited hex).
+        per-hex value tables (one entry per visited hex; see snapshot()).
         """
-        start_port = self.resolve_start_port(path, start_port)
-        return self.learn_path(path, reward, self.context_for_port(start_port), record=True)
+        return self.learn_path(path, reward, self.resolve_context(path), record=True)
 
-    def learn(self, trajectories, rewards, start_ports=None):
+    def learn(self, trajectories, rewards, record=None):
         """
         Run TD updates over a batch of externally-provided trajectories.
 
         Parameters
         ----------
         trajectories : list of list of int
-            Each path [s0, s1, ..., s_terminal].
+            Each path [s0, s1, ..., s_terminal]. See resolve_context for how
+            the start port is determined when path[0] isn't one.
         rewards : list of float
             Reward for each trajectory.
-        start_ports : list of int or str, optional
-            Start port for each trajectory; defaults to each path[0].
+        record : {None, "trial", "step"}, optional
+            Snapshot granularity to return (each snapshot is the same shape
+            as snapshot(); collapse one with snapshot_values()):
+                - None (default): no return value, just runs the updates.
+                - "trial": one snapshot per trial, taken after that trial's
+                  update.
+                - "step": one snapshot per hex-step, across every trial (the
+                  full within-trial history, concatenated over the session).
+
+        Returns
+        -------
+        None, or a list of snapshots, depending on `record`.
         """
-        if start_ports is None:
-            start_ports = [None] * len(trajectories)
-        for path, reward, start_port in zip(trajectories, rewards, start_ports):
-            if len(path) >= 2:
-                self.process_trajectory(path, reward, start_port)
+        if record not in (None, "trial", "step"):
+            raise ValueError(f"record must be None, 'trial', or 'step', got {record!r}")
+
+        history = []
+        for path, reward in zip(trajectories, rewards):
+            if len(path) < 2:
+                continue
+            trial_history = self.learn_path(path, reward, self.resolve_context(path), record=bool(record))
+            if record == "step":
+                history.extend(trial_history)
+            elif record == "trial":
+                history.append(trial_history[-1])
+
+        return history if record else None
+
+    #  Fitting to observed choices
+
+    def choice_nll(self, trajectories, rewards, record=False):
+        """
+        Negative log-likelihood of the rat's hex-to-hex choices under this
+        model's current parameters.
+
+        Replays each trajectory, scoring the softmax probability of the hex
+        the rat actually stepped to (before that step's TD update), then runs
+        the ordinary TD(lambda) update so values evolve as the replay
+        proceeds. This is different from scoring reward outcomes: it measures
+        how well the model predicts *which way the rat turned*, not whether
+        it got rewarded.
+
+        Parameters
+        ----------
+        trajectories : list of list of int
+            Each path [s0, s1, ..., s_terminal]. See resolve_context for how
+            the start port is determined when path[0] isn't one.
+        rewards : list of float
+            Reward for each trajectory.
+        record : bool, optional
+            If True, also return a list of per-choice records, one per
+            hex-to-hex move across the whole session, in trajectory order:
+            {"entry": prev_hex (None at a trial's first step), "hex": cur_hex,
+            "choice": next_hex, "probability": p_choice, "probabilities":
+            {neighbor: prob, ...}}. Combine "entry"/"hex"/"choice" with
+            core.get_hex_exit_direction() to label each choice "left"/
+            "right"/"back".
+
+        Returns
+        -------
+        float, or (float, list of dict) if record=True
+            Total negative log-likelihood of the observed hex choices, and
+            (if record=True) the per-choice records.
+        """
+        total = 0.0
+        choices = [] if record else None
+        for path, reward in zip(trajectories, rewards):
+            if len(path) < 2:
+                continue
+            context = self.resolve_context(path)
+            visited = {path[0]}
+
+            for step in range(len(path) - 1):
+                cur_hex, next_hex = path[step], path[step + 1]
+                entry_hex = path[step - 1] if step > 0 else None
+                neighbors = self.get_neighbors(cur_hex, visited)
+                if next_hex not in neighbors:
+                    # The rat took a step the no_backtrack heuristic would have
+                    # excluded; fall back to the full neighbor set so scoring
+                    # never crashes on real (possibly backtracking) data.
+                    neighbors = list(self.graph.neighbors(cur_hex))
+                probabilities = self.softmax_probabilities(cur_hex, neighbors, context)
+                probability_by_neighbor = dict(zip(neighbors, probabilities.tolist()))
+                p_choice = probability_by_neighbor[next_hex]
+                total -= np.log(max(p_choice, 1e-10))
+                if record:
+                    choices.append({
+                        "entry": entry_hex,
+                        "hex": cur_hex,
+                        "choice": next_hex,
+                        "probability": p_choice,
+                        "probabilities": probability_by_neighbor,
+                    })
+                visited.add(next_hex)
+
+            self.learn_path(path, reward, context)
+        return (total, choices) if record else total
+
+    @classmethod
+    def fit_choices(cls, maze, reward_probs, trajectories, rewards, **kwargs):
+        """
+        Fit alpha, gamma, lam, and temperature to maximize the likelihood of
+        the rat's hex-to-hex choices (not just reward outcomes).
+
+        Uses L-BFGS-B to minimize choice_nll(). Any other constructor flags
+        (directional, goal_conditioned, priors, no_backtrack, ...) are held
+        fixed at the values passed via **kwargs.
+
+        Parameters
+        ----------
+        maze, reward_probs : see __init__.
+        trajectories : list of list of int
+            Each path [s0, s1, ..., s_terminal]. See resolve_context for how
+            the start port is determined when path[0] isn't one.
+        rewards : list of float
+            Reward for each trajectory.
+        **kwargs
+            Extra constructor flags held fixed during fitting (e.g.
+            directional, goal_conditioned, priors, no_backtrack).
+
+        Returns
+        -------
+        HexMazeTDLearner
+            Fresh instance built with the best-fit alpha/gamma/lam/temperature
+            (and the fixed **kwargs), carrying:
+                - choice_nll_    : choice NLL at optimum
+                - choice_bic_    : BIC (4 params: alpha, gamma, lam, temperature)
+                - choice_result_ : raw scipy OptimizeResult
+        """
+        def _obj(params):
+            alpha, gamma, lam, temperature = params
+            model = cls(maze, reward_probs, alpha=alpha, gamma=gamma, lam=lam,
+                        temperature=temperature, **kwargs)
+            return model.choice_nll(trajectories, rewards)
+
+        result = minimize(_obj, x0=[0.3, 0.9, 0.3, 1.0],
+                          bounds=[(1e-3, 1.0), (0.0, 0.999), (0.0, 1.0), (0.01, 10.0)],
+                          method='L-BFGS-B')
+
+        alpha, gamma, lam, temperature = result.x
+        fitted = cls(maze, reward_probs, alpha=alpha, gamma=gamma, lam=lam,
+                    temperature=temperature, **kwargs)
+        fitted.choice_nll_ = result.fun
+        n_choices = sum(len(path) - 1 for path in trajectories)
+        fitted.choice_bic_ = len(result.x) * np.log(n_choices) + 2 * result.fun
+        fitted.choice_result_ = result
+        return fitted
 
     #  Self-generated simulation
 
@@ -435,40 +597,94 @@ class HexMazeTDLearner:
         probabilities = self.softmax_probabilities(hex, neighbors, context)
         return dict(zip(neighbors, probabilities.tolist()))
 
-    def get_state_values(self, start_port, reduce="max"):
+    def get_state_values(self, start_port):
         """
-        Collapsed per-hex values {hex: value} for a context.
-
-        With directional states, each hex is aggregated over its incoming
-        directed-edge states via `reduce` ("max" or "mean"). Hexes with no
-        learned state fall back to their prior.
+        Per-hex values {hex: value} for a context, viewed as if walking
+        straight out from start_port (see bfs_entry_directions). Hexes with
+        no learned state fall back to their prior.
         """
-        context = self.context_for_port(resolve_port(start_port))
-        return self.collapse_to_hex_values(context, reduce)
+        port = resolve_port(start_port)
+        context = self.context_for_port(port) if self.goal_conditioned else None
+        entry_directions = self.bfs_entry_directions(port) if self.directional else None
+        return self.forward_hex_values(context, entry_directions)
 
-    def get_max_state_values(self, reduce="max"):
-        """{hex: max collapsed value across all contexts}."""
-        per_context = [self.collapse_to_hex_values(context, reduce) for context in self.contexts]
-        return {hex: max(table[hex] for table in per_context) for hex in self.graph.nodes()}
+    def get_max_state_values(self):
+        """{hex: max value across the 3 ports' outbound views}."""
+        per_port = [self.get_state_values(port) for port in REWARD_PORTS]
+        return {hex: max(table[hex] for table in per_port) for hex in self.graph.nodes()}
 
-    def collapse_to_hex_values(self, context, reduce="max"):
-        """Aggregate a context's value table down to {hex: value}."""
-        aggregated = {hex: [] for hex in self.graph.nodes()}
-        for state, value in self.V[context].items():
-            hex = self.hex_of_state(state)
-            if hex in aggregated:
-                aggregated[hex].append(value)
-        reducer = np.max if reduce == "max" else np.mean
+    def bfs_entry_directions(self, origin, prev_hex=None):
+        """
+        BFS outward from `origin`, having just arrived from `prev_hex` (or
+        None if `origin` has no real predecessor, e.g. a trip's starting
+        port). Returns {hex: predecessor} -- the direction you'd enter each
+        reachable hex from if you kept walking straight out from `origin`
+        without doubling back through `prev_hex`. Hexes only reachable by
+        turning back through `prev_hex` aren't included.
+        """
+        entry_from = {origin: prev_hex}
+        visited = {origin} | ({prev_hex} if prev_hex is not None else set())
+        frontier = [origin]
+        while frontier:
+            next_frontier = []
+            for hex in frontier:
+                for neighbor in self.graph.neighbors(hex):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        entry_from[neighbor] = hex
+                        next_frontier.append(neighbor)
+            frontier = next_frontier
+        return entry_from
+
+    def resolve_snapshot_entry_directions(self, path, step_index):
+        """
+        {hex: prev_hex} entry directions for a snapshot taken after
+        step_index steps into path (path[step_index] is the rat's current
+        hex), combining three tiers in priority order (lowest first, so
+        later entries overwrite earlier ones):
+            1. every hex, via a BFS rooted at the trip's start (path[0]);
+            2. hexes already entered earlier in this same trial, using the
+               real direction they were entered with, taken from path;
+            3. hexes ahead of the rat, via a BFS from its current position
+               (path[step_index]) that excludes backtracking into where it
+               just came from.
+        """
+        start_directions = self.bfs_entry_directions(path[0])
+        experienced = {path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)}
+        cur_hex = path[step_index]
+        prev_hex = path[step_index - 1] if step_index > 0 else None
+        ahead = self.bfs_entry_directions(cur_hex, prev_hex)
+        return {**start_directions, **experienced, **ahead}
+
+    def forward_hex_values(self, context, entry_directions):
+        """
+        {hex: value} for a context, given a precomputed {hex: prev_hex}
+        entry-direction map (see resolve_snapshot_entry_directions). With
+        directional=False there's only one state per hex, so entry
+        directions don't matter and this just reads V[context] directly.
+        """
+        if not self.directional:
+            return {
+                hex: self.V[context].get(hex, self.prior_for_hex(context, hex)) for hex in self.graph.nodes()
+            }
         return {
-            hex: (float(reducer(values)) if values else self.prior_for_hex(context, hex))
-            for hex, values in aggregated.items()
+            hex: (
+                self.state_value(context, (entry_directions[hex], hex))
+                if hex in entry_directions
+                else self.prior_for_hex(context, hex)
+            )
+            for hex in self.graph.nodes()
         }
 
-    def snapshot(self, current_hex):
-        """One history entry: current hex plus collapsed per-context value maps."""
+    def snapshot(self, path, step_index):
+        """
+        One history entry: the rat's current hex (path[step_index]) plus
+        per-context value maps (see resolve_snapshot_entry_directions).
+        """
+        entry_directions = self.resolve_snapshot_entry_directions(path, step_index)
         return {
-            "state": current_hex,
-            "values": {context: self.collapse_to_hex_values(context) for context in self.contexts},
+            "state": path[step_index],
+            "values": {context: self.forward_hex_values(context, entry_directions) for context in self.contexts},
         }
 
     def snapshot_values(self, snapshot, start_port=None):

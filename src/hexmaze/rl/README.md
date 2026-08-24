@@ -125,24 +125,33 @@ At terminal hexes (reward ports), `max Q(next_hex, a') = 0`.
 
 ### Hex value learning common interface
 
-Both hex learners share the same interface:
+Both hex learners share most of the interface:
 
 | Method | Description |
 | --- | --- |
-| `learn(trajectories, rewards, start_ports)` | Run updates on provided trajectories (rat hex paths) |
 | `simulate(start_hex, n_trials, max_steps)` | Self-generated trajectories with online updates |
-| `process_trajectory(path, reward, start_port)` | Update on a single trajectory |
-| `process_trajectory_with_history(...)` | Same as above, but returns hex value snapshots at each step |
+| `process_trajectory_with_history(...)` | Same as `process_trajectory`, but returns hex value snapshots at each step |
 | `action_probabilities(hex, start_port)` | Softmax choice probabilities at a hex |
 | `get_state_values(start_port)` | Per-hex values under one start port |
 | `get_max_state_values()` | Max value across all 3 tables per hex |
 | `reset()` | Re-initialize tables and re-apply hex value priors |
 | `set_graph(new_graph)` | Swap the maze graph (e.g. after barrier changes) |
 
+**TD learner:**
+
+| Method | Description |
+| --- | --- |
+| `learn(trajectories, rewards)` | Run updates on provided trajectories (rat hex paths) |
+| `process_trajectory(path, reward)` | Update on a single trajectory |
+| `choice_nll(trajectories, rewards)` | Negative log-likelihood of the rat's hex-to-hex choices under current params |
+| `fit_choices(maze, reward_probs, trajectories, rewards, **kwargs)` | (classmethod) Fit `alpha`/`gamma`/`lam`/`temperature` by minimizing `choice_nll` via L-BFGS-B |
+
 **Q-learner only:**
 
 | Method | Description |
 | --- | --- |
+| `learn(trajectories, rewards, start_ports)` | Run updates on provided trajectories (rat hex paths) |
+| `process_trajectory(path, reward, start_port)` | Update on a single trajectory |
 | `get_q_values(start_port)` | Full Q-table: `{hex: {neighbor: q_value}}` |
 
 **Shared parameters:**
@@ -169,7 +178,9 @@ is intentionally left to a future model-based component.
 
 **`start_port` defaults:**
 
-In both learners, `start_port` is optional for `process_trajectory` and `process_trajectory_with_history`. It defaults to `path[0]` if that hex is a reward port; otherwise an error is raised.
+The **TD learner** always derives its context from `path[0]` (see `resolve_context`) — there is no separate `start_port` argument to `learn`/`process_trajectory`. With `goal_conditioned=False` (a single shared table) `path[0]` never needs to be a real port. With `goal_conditioned=True`, the context is `path[0]` if it's a reward port, else a placeholder: one of the other two ports (excluding the trip's end port, `path[-1]`) — this covers trajectories with no real start, e.g. a session's first trial.
+
+The **Q-learner** still takes an explicit, optional `start_port` for `process_trajectory`/`process_trajectory_with_history`, defaulting to `path[0]` if that hex is a reward port.
 
 ## Quick start
 
@@ -192,7 +203,7 @@ ql_results = ql.simulate(start_hex=1, n_trials=100)
 
 # Or learn from rat trajectories
 td.reset()
-td.learn(trajectories, rewards, start_ports)
+td.learn(trajectories, rewards)
 
 # Inspect learned values
 td_values = td.get_state_values(start_port=1)       # {hex: V(hex)}
