@@ -44,12 +44,16 @@ Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
 """
 
 import random
+import textwrap
 import warnings
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import animation
 from scipy.optimize import minimize
 from ...utils import create_empty_hex_maze, maze_to_graph
 from ...core import get_safe_hex_distance
 from ...utils import REWARD_PORTS, resolve_port
+from ...plotting import plot_hex_maze
 
 
 class HexMazeTDLearner:
@@ -204,6 +208,13 @@ class HexMazeTDLearner:
         """The maze hex underlying a state key."""
         return state[1] if self.directional else state
 
+    def format_state(self, state):
+        """Human-readable label for a state key, e.g. 'V(48→43)' or 'V(43)'."""
+        if self.directional:
+            prev, cur = state
+            return f"{prev if prev is not None else 'start'}→{cur}"
+        return str(state)
+
     def state_value(self, context, state):
         """Read a state's value, falling back to its prior if never written."""
         value = self.V[context].get(state)
@@ -211,18 +222,29 @@ class HexMazeTDLearner:
 
     #  TD(lambda) core
 
-    def apply_td_error(self, context, state, delta, eligibility):
+    def apply_td_error(self, context, state, delta, eligibility, log=None):
         """
         Apply one TD error through the eligibility trace: bump the current
         state's trace, update every traced state, then decay all traces.
+
+        With lambda > 0 this one delta can update many states at once (every
+        state still in the trace), each scaled by its own eligibility. 
+        
+        If `log` (a list) is given, appends one dict per
+        updated state: {"state", "eligibility", "old_value", "new_value"}.
         """
         eligibility[state] = eligibility.get(state, 0.0) + 1.0
         decay = self.gamma * self.lam
         for traced_state in list(eligibility):
-            self.V[context][traced_state] = (
-                self.state_value(context, traced_state)
-                + self.alpha * delta * eligibility[traced_state]
-            )
+            e = eligibility[traced_state]
+            old_value = self.state_value(context, traced_state)
+            new_value = old_value + self.alpha * delta * e
+            self.V[context][traced_state] = new_value
+            if log is not None:
+                log.append({
+                    "state": traced_state, "eligibility": e,
+                    "old_value": old_value, "new_value": new_value,
+                })
             eligibility[traced_state] *= decay
             if eligibility[traced_state] < 1e-6:
                 del eligibility[traced_state]
@@ -232,11 +254,16 @@ class HexMazeTDLearner:
         Run a single TD(lambda) pass over a known path within one context.
 
         Reward is delivered at the terminal state (path[-1]). Returns a list of
-        per-step snapshots when record=True, else None.
+        per-step snapshots when record=True, else None. Each snapshot (other
+        than the initial one) carries an "update" dict describing exactly the
+        TD update that produced it -- see apply_td_error's callers below for
+        the two possible "kind"s ("bootstrap" and "reward").
         """
         history = []
         if record:
-            history.append(self.snapshot(path, 0))
+            init_snap = self.snapshot(path, 0)
+            init_snap["update"] = None
+            history.append(init_snap)
 
         eligibility = {}
         last_step = len(path) - 2  # index of the final transition
@@ -247,26 +274,58 @@ class HexMazeTDLearner:
             state = self.state_key(prev_hex, cur_hex)
             next_state = self.state_key(cur_hex, next_hex)
 
-            if step == last_step:
-                # Terminal transition: reward is delivered here and the terminal
-                # state is bootstrapped at 0 (ports are terminal, as in the paper;
-                # a mid-maze trajectory end is treated the same way).
-                self.apply_td_error(context, state, reward - self.state_value(context, state), eligibility)
-                # Record the terminal state's reward expectation without bootstrapping from it.
-                self.V[context][next_state] = self.state_value(context, next_state) + self.alpha * (
-                    reward - self.state_value(context, next_state)
-                )
-            else:
-                # Ordinary rewardless transition: bootstrap from the next state.
-                self.apply_td_error(
-                    context,
-                    state,
-                    self.gamma * self.state_value(context, next_state) - self.state_value(context, state),
-                    eligibility,
-                )
+            # Every hex bootstraps from the next hex's value
+            # so we update the value of a hex once we leave it
+            # (we need to leave to know what the "next hex" is)
+            old_value = self.state_value(context, state)
+            next_value = self.state_value(context, next_state)
+            delta = self.gamma * next_value - old_value
+            log = [] if record else None
+            self.apply_td_error(context, state, delta, eligibility, log=log)
 
             if record:
-                history.append(self.snapshot(path, step + 1))
+                snap = self.snapshot(path, step + 1)
+                snap["update"] = {
+                    "kind": "bootstrap",
+                    "state": state,
+                    "next_state": next_state,
+                    "alpha": self.alpha,
+                    "gamma": self.gamma,
+                    "lam": self.lam,
+                    "old_value": old_value,
+                    "next_value": next_value,
+                    "delta": delta,
+                    "new_value": self.state_value(context, state),
+                    "log": log,
+                }
+                history.append(snap)
+
+            if step == last_step:
+                # Reward is delivered on arrival at the port: run one more TD
+                # update treating that arrival as its own event, so the port's
+                # own value tracks the reward directly. This goes through the
+                # same eligibility trace as the update above, so under
+                # lambda > 0 the reward also propagates back to recently
+                # visited hexes, same as any other TD error.
+                old_port_value = self.state_value(context, next_state)
+                reward_delta = reward - old_port_value
+                reward_log = [] if record else None
+                self.apply_td_error(context, next_state, reward_delta, eligibility, log=reward_log)
+
+                if record:
+                    snap = self.snapshot(path, step + 1)
+                    snap["update"] = {
+                        "kind": "reward",
+                        "state": next_state,
+                        "alpha": self.alpha,
+                        "lam": self.lam,
+                        "reward": reward,
+                        "old_value": old_port_value,
+                        "delta": reward_delta,
+                        "new_value": self.state_value(context, next_state),
+                        "log": reward_log,
+                    }
+                    history.append(snap)
 
         return history if record else None
 
@@ -371,7 +430,7 @@ class HexMazeTDLearner:
 
     #  Fitting to observed choices
 
-    def choice_nll(self, trajectories, rewards, record=False):
+    def choice_nll(self, trajectories, rewards, record=False, junctions_only=False):
         """
         Negative log-likelihood of the rat's hex-to-hex choices under this
         model's current parameters.
@@ -379,9 +438,7 @@ class HexMazeTDLearner:
         Replays each trajectory, scoring the softmax probability of the hex
         the rat actually stepped to (before that step's TD update), then runs
         the ordinary TD(lambda) update so values evolve as the replay
-        proceeds. This is different from scoring reward outcomes: it measures
-        how well the model predicts *which way the rat turned*, not whether
-        it got rewarded.
+        proceeds.
 
         Parameters
         ----------
@@ -392,17 +449,28 @@ class HexMazeTDLearner:
             Reward for each trajectory.
         record : bool, optional
             If True, also return a list of per-choice records, one per
-            hex-to-hex move across the whole session, in trajectory order:
-            {"entry": prev_hex (None at a trial's first step), "hex": cur_hex,
-            "choice": next_hex, "probability": p_choice, "probabilities":
+            scored hex-to-hex move, in trajectory order: {"entry": prev_hex
+            (None at a trial's first step), "hex": cur_hex, "choice":
+            next_hex, "probability": p_choice, "probabilities":
             {neighbor: prob, ...}}. Combine "entry"/"hex"/"choice" with
             core.get_hex_exit_direction() to label each choice "left"/
             "right"/"back".
+        junctions_only : bool, optional
+            If True, restrict scoring to genuine binary choices: steps where
+            the rat is at a real 3-way intersection (cur_hex has exactly 3
+            graph-neighbors) and exits through one of the two non-backward
+            neighbors (left/right) -- a Krausz 2023-style choice-point
+            analysis. A junction where the rat instead backtracked, and
+            every non-junction step, is skipped silently: not scored, no
+            entry in `choices`, no warning (backtracking is a real,
+            unremarkable option -- it's just outside this binary-choice
+            definition). If False (default), every step is scored against
+            ALL of cur_hex's graph-neighbors, backward included.
 
         Returns
         -------
         float, or (float, list of dict) if record=True
-            Total negative log-likelihood of the observed hex choices, and
+            Total negative log-likelihood of the scored hex choices, and
             (if record=True) the per-choice records.
         """
         total = 0.0
@@ -411,19 +479,37 @@ class HexMazeTDLearner:
             if len(path) < 2:
                 continue
             context = self.resolve_context(path)
-            visited = {path[0]}
 
             for step in range(len(path) - 1):
                 cur_hex, next_hex = path[step], path[step + 1]
                 entry_hex = path[step - 1] if step > 0 else None
-                neighbors = self.get_neighbors(cur_hex, visited)
-                if next_hex not in neighbors:
-                    # The rat took a step the no_backtrack heuristic would have
-                    # excluded; fall back to the full neighbor set so scoring
-                    # never crashes on real (possibly backtracking) data.
-                    neighbors = list(self.graph.neighbors(cur_hex))
-                probabilities = self.softmax_probabilities(cur_hex, neighbors, context)
-                probability_by_neighbor = dict(zip(neighbors, probabilities.tolist()))
+                all_neighbors = list(self.graph.neighbors(cur_hex))
+
+                if junctions_only:
+                    if len(all_neighbors) != 3:
+                        continue  # not a junction -- outside this analysis
+                    candidates = [n for n in all_neighbors if n != entry_hex]
+                    if next_hex == entry_hex:
+                        continue  # backtracked at the junction -- valid, just not a binary L/R choice
+                    if next_hex not in candidates:
+                        warnings.warn(
+                            f"choice_nll: at junction hex {cur_hex} (entry={entry_hex}), "
+                            f"next_hex={next_hex} is not a graph-neighbor -- likely a "
+                            f"tracking error. Skipping this step."
+                        )
+                        continue
+                else:
+                    candidates = all_neighbors
+                    if next_hex not in candidates:
+                        warnings.warn(
+                            f"choice_nll: at hex {cur_hex}, next_hex={next_hex} is not a "
+                            f"graph-neighbor ({candidates}) -- likely a tracking error. "
+                            f"Skipping this step."
+                        )
+                        continue
+
+                probabilities = self.softmax_probabilities(cur_hex, candidates, context)
+                probability_by_neighbor = dict(zip(candidates, probabilities.tolist()))
                 p_choice = probability_by_neighbor[next_hex]
                 total -= np.log(max(p_choice, 1e-10))
                 if record:
@@ -434,13 +520,17 @@ class HexMazeTDLearner:
                         "probability": p_choice,
                         "probabilities": probability_by_neighbor,
                     })
-                visited.add(next_hex)
 
             self.learn_path(path, reward, context)
         return (total, choices) if record else total
 
+    _FIT_PARAM_DEFAULTS = {"alpha": (0.3, (1e-3, 1.0)), "gamma": (0.9, (0.0, 0.999)),
+                           "lam": (0.3, (0.0, 1.0)), "temperature": (1.0, (0.01, 10.0))}
+
     @classmethod
-    def fit_choices(cls, maze, reward_probs, trajectories, rewards, **kwargs):
+    def fit_choices(cls, maze, reward_probs, trajectories, rewards,
+                     alpha=None, gamma=None, lam=None, temperature=None,
+                     junctions_only=False, **kwargs):
         """
         Fit alpha, gamma, lam, and temperature to maximize the likelihood of
         the rat's hex-to-hex choices (not just reward outcomes).
@@ -457,6 +547,15 @@ class HexMazeTDLearner:
             the start port is determined when path[0] isn't one.
         rewards : list of float
             Reward for each trajectory.
+        alpha, gamma, lam, temperature : float or None
+            Fix this parameter at the given value instead of fitting it (it's
+            excluded from the optimization entirely). None (default) fits it.
+            E.g. `fit_choices(..., lam=0.0)` fits alpha/gamma/temperature
+            with lam held fixed at 0 (pure TD(0)).
+        junctions_only : bool, optional
+            Passed to choice_nll -- see its docstring. Restricts fitting to
+            genuine binary (left/right) junction choices rather than every
+            hex-to-hex step.
         **kwargs
             Extra constructor flags held fixed during fitting (e.g.
             directional, goal_conditioned, priors, no_backtrack).
@@ -464,28 +563,51 @@ class HexMazeTDLearner:
         Returns
         -------
         HexMazeTDLearner
-            Fresh instance built with the best-fit alpha/gamma/lam/temperature
-            (and the fixed **kwargs), carrying:
+            Fresh instance built with the best-fit (and any fixed) alpha/
+            gamma/lam/temperature (and the fixed **kwargs), carrying:
                 - choice_nll_    : choice NLL at optimum
-                - choice_bic_    : BIC (4 params: alpha, gamma, lam, temperature)
-                - choice_result_ : raw scipy OptimizeResult
+                - choice_bic_    : BIC, counting only the *fitted* params and
+                  the choices actually scored (fewer than the number of
+                  hex-to-hex steps if junctions_only=True)
+                - choice_result_ : raw scipy OptimizeResult, or None if
+                  every parameter was fixed (nothing to optimize)
         """
-        def _obj(params):
-            alpha, gamma, lam, temperature = params
-            model = cls(maze, reward_probs, alpha=alpha, gamma=gamma, lam=lam,
-                        temperature=temperature, **kwargs)
-            return model.choice_nll(trajectories, rewards)
+        fixed = {"alpha": alpha, "gamma": gamma, "lam": lam, "temperature": temperature}
+        free_names = [name for name, value in fixed.items() if value is None]
 
-        result = minimize(_obj, x0=[0.3, 0.9, 0.3, 1.0],
-                          bounds=[(1e-3, 1.0), (0.0, 0.999), (0.0, 1.0), (0.01, 10.0)],
-                          method='L-BFGS-B')
+        def _build(free_values):
+            params = dict(fixed)
+            params.update(zip(free_names, free_values))
+            return cls(maze, reward_probs, **params, **kwargs)
 
-        alpha, gamma, lam, temperature = result.x
-        fitted = cls(maze, reward_probs, alpha=alpha, gamma=gamma, lam=lam,
-                    temperature=temperature, **kwargs)
-        fitted.choice_nll_ = result.fun
-        n_choices = sum(len(path) - 1 for path in trajectories)
-        fitted.choice_bic_ = len(result.x) * np.log(n_choices) + 2 * result.fun
+        if free_names:
+            x0 = [cls._FIT_PARAM_DEFAULTS[name][0] for name in free_names]
+            bounds = [cls._FIT_PARAM_DEFAULTS[name][1] for name in free_names]
+            result = minimize(
+                lambda x: _build(x).choice_nll(trajectories, rewards, junctions_only=junctions_only),
+                x0=x0, bounds=bounds, method='L-BFGS-B',
+            )
+            final_values = result.x
+        else:
+            # Nothing to fit -- every parameter was pinned.
+            result = None
+            final_values = []
+
+        # One evaluation with record=True gives both the NLL and the actual
+        # number of scored choices (needed for BIC -- under junctions_only
+        # that's far fewer than the number of hex-to-hex steps). This model
+        # is discarded; the returned `fitted` is a fresh, untrained instance
+        # at the same parameters, consistent regardless of whether anything
+        # was optimized.
+        nll, choices = _build(final_values).choice_nll(
+            trajectories, rewards, record=True, junctions_only=junctions_only,
+        )
+        fitted = _build(final_values)
+        fitted.choice_nll_ = nll
+        n_choices = len(choices)
+        fitted.choice_bic_ = (
+            len(free_names) * np.log(n_choices) + 2 * nll if n_choices > 0 else float("nan")
+        )
         fitted.choice_result_ = result
         return fitted
 
@@ -656,6 +778,36 @@ class HexMazeTDLearner:
         ahead = self.bfs_entry_directions(cur_hex, prev_hex)
         return {**start_directions, **experienced, **ahead}
 
+    def plot_entry_directions(self, path, step_index, ax=None, **plot_kwargs):
+        """
+        Visualize the entry-direction heuristic (resolve_snapshot_entry_directions)
+        used for directional-state display: draws a gray arrow from each hex's
+        assigned predecessor to that hex, for the snapshot taken after
+        step_index steps into path. The rat is drawn at its current position
+        (path[step_index]) and the real path walked so far is overlaid as
+        black arrows (hex_path), so any hex already visited this trial should
+        show a black arrow exactly on top of its gray one -- only hexes not
+        yet visited (guessed via BFS) should show gray-only arrows.
+
+        Only meaningful with directional=True; with directional=False every
+        hex has a single state regardless of entry direction.
+        """
+        entry_directions = self.resolve_snapshot_entry_directions(path, step_index)
+        arrows = {}
+        for hex, prev_hex in entry_directions.items():
+            if prev_hex is not None:
+                arrows.setdefault(prev_hex, []).append(hex)
+
+        return plot_hex_maze(
+            self.graph,
+            arrows=arrows,
+            hex_path=path[: step_index + 1],
+            rat=path[step_index],
+            rat_from=path[step_index - 1] if step_index > 0 else None,
+            ax=ax,
+            **plot_kwargs,
+        )
+
     def forward_hex_values(self, context, entry_directions):
         """
         {hex: value} for a context, given a precomputed {hex: prev_hex}
@@ -701,3 +853,366 @@ class HexMazeTDLearner:
             hex: max(table.get(hex, 0.0) for table in per_context.values())
             for hex in self.graph.nodes()
         }
+
+    def filtered_update_log(self, update):
+        """
+        Log entries from an update dict with a real, displayable change
+        (>= 0.00005, i.e. not just "0.0000" after rounding -- covers both
+        negligible eligibility and negligible delta), sorted by eligibility
+        descending. Shared by format_update_text and animate_learning's
+        outline so the two always agree on which hexes actually changed.
+        """
+        if update is None:
+            return []
+        log = [row for row in update["log"] if abs(row["new_value"] - row["old_value"]) >= 0.00005]
+        log.sort(key=lambda row: -row["eligibility"])
+        return log
+
+    def format_update_text(self, cur_hex, update, path_so_far=None, max_rows=6):
+        """
+        Multi-line diagnostic text for one animate_learning frame: the hex
+        path walked so far this trial, current hyperparameters, which hex
+        the rat is in, and (if an update just happened) the shared TD error
+        (delta) for this step plus every state it updated through the
+        eligibility trace (see apply_td_error's `log`) -- with lambda > 0 a
+        single delta updates many states at once, each scaled by its own
+        eligibility, not just the one that triggered it. Rows with no real
+        eligibility or no delta (so no actual change) are dropped; the rest
+        are sorted by eligibility (most-affected first) and capped at
+        `max_rows`, with a summary line for the rest.
+        """
+        header = (
+            f"rat at hex {cur_hex}    "
+            f"α={self.alpha:.3g}  γ={self.gamma:.3g}  λ={self.lam:.3g}  τ={self.temperature:.3g}"
+        )
+        if path_so_far:
+            header = f"path: {path_so_far}\n{header}"
+        if update is None:
+            return header + "\n(no update yet this trial)"
+
+        label = self.format_state(update["state"])
+        delta, old = update["delta"], update["old_value"]
+        decay = self.gamma * self.lam
+        formula_line = f"V(s) ← V(s) + α·δ·e(s)   (e decays ×γλ={decay:.3g} per step back)"
+
+        if update["kind"] == "bootstrap":
+            next_label = self.format_state(update["next_state"])
+            gamma, next_value = update["gamma"], update["next_value"]
+            delta_eq = (
+                f"δ = γ·V({next_label}) − V({label})\n"
+                f"δ = {gamma:.3g}·{next_value:.4f} − {old:.4f} = {delta:.4f}"
+            )
+        else:  # "reward"
+            reward = update["reward"]
+            delta_eq = (
+                f"δ = reward − V({label})\n"
+                f"δ = {reward:.3g} − {old:.4f} = {delta:.4f}"
+            )
+
+        log = self.filtered_update_log(update)
+        rows = [
+            f"  V({self.format_state(row['state'])})  e={row['eligibility']:.3f}  "
+            f"{row['old_value']:.4f} → {row['new_value']:.4f}"
+            for row in log[:max_rows]
+        ]
+        if not rows:
+            rows = ["  (no visible change)"]
+        elif len(log) > max_rows:
+            rows.append(f"  ... +{len(log) - max_rows} more (smaller eligibility)")
+
+        body = f"{formula_line}\n{delta_eq}\n" + "\n".join(rows)
+        return header + "\n" + body
+
+    def animate_learning(
+        self,
+        trajectories,
+        rewards,
+        start_port=None,
+        panels=False,
+        show_updates=True,
+        update_color="red",
+        show_trial_info=True,
+        show_path=True,
+        show_equation=True,
+        colormap="viridis",
+        vmin=0,
+        vmax=1,
+        interval=150,
+        show_hex_labels=False,
+        show_barriers=False,
+        ax=None,
+        **plot_kwargs,
+    ):
+        """
+        Animate TD(lambda) learning, one frame per hex transition.
+
+        Runs learn_path over each (path, reward) trial in order -- exactly as
+        learn() would -- capturing a value snapshot after every hex
+        transition. Each frame colors the maze by hex value (see
+        snapshot_values), places the rat at its current hex facing the
+        direction it came from, and (on a trial's last frame, when it ends at
+        a real reward port) shows a reward droplet or no-reward X there.
+
+        This runs real TD updates on self as it builds frames, so call
+        reset() first for a from-scratch replay.
+
+        Note: this bumps the ``animation.embed_limit`` rcParam (used by
+        ``to_jshtml()``) up to at least 512 MB. The matplotlib default is
+        20 MB, which most real sessions blow through -- and when it's hit,
+        frames are silently dropped (only a warning is logged), so an
+        embedded animation can quietly end after just the first few trials.
+
+        Parameters
+        ----------
+        trajectories, rewards : see learn().
+        start_port : None, a port (1/2/3 or "A"/"B"/"C"), or "trial"
+            Which context's value table to color by (see snapshot_values).
+            None (default): max value across all contexts -- can mask a real
+            decrease in one context if another context's value is higher.
+            A port: always that one fixed context's table.
+            "trial": whichever context the currently-animated trial actually
+            belongs to, so the coloring follows the rat's own trip instead of
+            a fixed table (drops from an omission are visible when they
+            happen). Ignored when panels=True.
+        panels : bool
+            If True, draw one subplot per context (self.contexts) side by
+            side, each always showing that context's own values -- so all
+            goal-conditioned tables are visible at once instead of collapsed
+            into one view. The rat and reward marker are only drawn on the
+            panel for the trial's own context. `start_port` and `ax` are
+            ignored in this mode (a fresh figure is created).
+        show_updates : bool
+            If True (default), outline whichever hex(es) actually had their
+            value change on this step -- i.e. a real TD update happened
+            there, in the trial's own active context (this is independent of
+            what's being displayed: with start_port=None/a fixed port, an
+            outlined hex's *displayed* color may not visibly move if a
+            different context dominates the max, but the outline still shows
+            where the real update occurred). In panels mode, only the active
+            context's panel gets outlines, since it's the only table
+            actually changing that step.
+        update_color : str
+            Outline color for updated hexes (see outline_hexes/outline_colors
+            in plot_hex_maze). Defaults to 'red'.
+        show_trial_info : bool
+            If True (default), title each frame with the trial number, start
+            port, step within the trial, and (once known) the reward outcome.
+        show_path : bool
+            If True (default), add a line above the trial info showing the
+            hex-by-hex path walked so far this trial (e.g. "path: 1 → 4 → 6").
+        show_equation : bool
+            If True (default), draw a text box each frame with the current
+            hyperparameters (alpha, gamma, lambda, temperature), which hex
+            the rat is in, and the TD update equation for that step in both
+            symbolic and substituted-numbers form (see format_update_text).
+        colormap, vmin, vmax, show_hex_labels, show_barriers, ax, **plot_kwargs :
+            Forwarded to plot_hex_maze.
+        interval : int
+            Milliseconds between frames.
+
+        Returns
+        -------
+        matplotlib.animation.FuncAnimation
+        """
+        fixed_port = None if start_port in (None, "trial") else start_port
+        port_labels = {1: "A", 2: "B", 3: "C", None: "shared"}
+
+        # The equation box's figure width is known before the figure itself
+        # is built (see the figsize math below), so precompute a wrap width
+        # for the path line now rather than fighting matplotlib's wrap=True
+        # against pre-formatted multi-line monospace text.
+        fig_width_inches = 6 * len(self.contexts) if panels else 6
+        path_wrap_width = max(20, int(fig_width_inches * 9))
+
+        valid_trials = [(path, reward) for path, reward in zip(trajectories, rewards) if len(path) >= 2]
+
+        frames = []
+        for trial_index, (path, reward) in enumerate(valid_trials):
+            context = self.resolve_context(path)
+            history = self.learn_path(path, reward, context, record=True)
+            last_step = len(history) - 1
+            show_reward = path[-1] in REWARD_PORTS
+            n_steps = len(path) - 1  # real hex-to-hex transitions (the terminal
+            # step's reward event is split into an extra same-position frame,
+            # not an extra transition, so this is capped rather than counted)
+            last_hex, last_rat_from = None, None
+            for step_index, snap in enumerate(history):
+                if panels:
+                    values = {c: dict(snap["values"][c]) for c in self.contexts}
+                elif start_port == "trial":
+                    values = dict(snap["values"][context])
+                else:
+                    values = self.snapshot_values(snap, start_port=fixed_port)
+
+                changed_hexes = set()
+                if show_updates:
+                    # Derived from the same filtered log used in the equation
+                    # text, so the outline always matches what's printed.
+                    changed_hexes = {
+                        self.hex_of_state(row["state"])
+                        for row in self.filtered_update_log(snap.get("update"))
+                    }
+
+                cur_hex = snap["state"]
+                if step_index == 0:
+                    rat_from = None
+                elif cur_hex == last_hex:
+                    # Same physical hex as the previous snapshot (the reward
+                    # event's extra frame at the terminal step) -- the rat
+                    # hasn't moved, so keep its previous facing.
+                    rat_from = last_rat_from
+                else:
+                    rat_from = last_hex
+                last_hex, last_rat_from = cur_hex, rat_from
+
+                is_reward_step = step_index == last_step and show_reward
+                step_label = min(step_index, n_steps)
+
+                title = None
+                if show_trial_info:
+                    title = (
+                        f"Trial {trial_index + 1}/{len(valid_trials)}  "
+                        f"start {port_labels.get(context, context)}  "
+                        f"step {step_label}/{n_steps}"
+                    )
+                    if is_reward_step:
+                        title += "  →  " + ("rewarded" if reward else "omission")
+
+                path_so_far = None
+                if show_path:
+                    raw_path = " → ".join(str(h) for h in path[: step_label + 1])
+                    path_so_far = "\n".join(
+                        textwrap.wrap(raw_path, width=path_wrap_width, break_long_words=False)
+                    )
+                equation_text = (
+                    self.format_update_text(cur_hex, snap.get("update"), path_so_far=path_so_far)
+                    if show_equation else None
+                )
+
+                frames.append({
+                    "hex": cur_hex,
+                    "rat_from": rat_from,
+                    "context": context,
+                    "values": values,
+                    "changed_hexes": changed_hexes,
+                    "title": title,
+                    "equation_text": equation_text,
+                    "reward": (path[-1], bool(reward)) if is_reward_step else None,
+                })
+
+        if not frames:
+            raise ValueError("No frames to animate -- check trajectories/rewards.")
+
+        if plt.rcParams["animation.embed_limit"] < 512:
+            plt.rcParams["animation.embed_limit"] = 512
+
+        owns_fig = panels or ax is None
+        # Reserve dedicated space below the maze for the equation box when we
+        # own the figure, so it doesn't overlap the plotted hexes (it can get
+        # to ~10 lines with lambda > 0's multi-hex log). If the caller passed
+        # their own `ax`, we can't safely resize their figure/layout, so the
+        # text falls back to drawing inside the axes bounds in that case.
+        extra_height = 2.6 if (show_equation and owns_fig) else 0
+        if panels:
+            fig, axes = plt.subplots(1, len(self.contexts), figsize=(6 * len(self.contexts), 6 + extra_height))
+            axes = list(np.atleast_1d(axes))
+        else:
+            fig = plt.figure(figsize=(6, 6 + extra_height)) if owns_fig else ax.figure
+            axes = [ax if ax is not None else fig.add_subplot(111)]
+        if extra_height:
+            fig.subplots_adjust(bottom=0.30)
+
+        # Fix the axes to a single extent up front: plot_hex_maze widens
+        # xlim/ylim to make room whenever `reward` is set, so if left alone
+        # the maze visibly shrinks and grows between reward and non-reward
+        # frames. Probing with a reward marker captures the wider extent,
+        # which every panel/frame is then pinned to (same physical maze).
+        plot_hex_maze(
+            self.graph, reward=(REWARD_PORTS[0], True),
+            show_hex_labels=show_hex_labels, show_barriers=show_barriers,
+            ax=axes[0], **plot_kwargs,
+        )
+        fixed_xlim, fixed_ylim = axes[0].get_xlim(), axes[0].get_ylim()
+
+        # fig.text() adds a new artist every call rather than replacing the
+        # previous one, unlike ax.text() after ax.clear() or fig.suptitle()
+        # -- so create it once (whenever we own the figure and reserved
+        # space for it below the maze) and update its contents in place each
+        # frame. With a caller-supplied `ax` we can't reserve that space, so
+        # the per-frame draw() falls back to ax.text() inside the axes.
+        equation_artist = None
+        if show_equation and owns_fig:
+            equation_artist = fig.text(
+                0.5, 0.02, "", ha="center", va="bottom", fontsize=8, family="monospace",
+                bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", boxstyle="round,pad=0.4"),
+            )
+
+        def draw(frame_index):
+            frame = frames[frame_index]
+            if panels:
+                for context, panel_ax in zip(self.contexts, axes):
+                    panel_ax.clear()
+                    is_active = context == frame["context"]
+                    outline = frame["changed_hexes"] if (is_active and frame["changed_hexes"]) else None
+                    plot_hex_maze(
+                        self.graph,
+                        color_by=frame["values"][context],
+                        colormap=colormap,
+                        vmin=vmin,
+                        vmax=vmax,
+                        rat=frame["hex"] if is_active else None,
+                        rat_from=frame["rat_from"] if is_active else None,
+                        reward=frame["reward"] if is_active else None,
+                        outline_hexes=outline,
+                        outline_colors=update_color if outline else None,
+                        show_hex_labels=show_hex_labels,
+                        show_barriers=show_barriers,
+                        ax=panel_ax,
+                        **plot_kwargs,
+                    )
+                    panel_ax.set_xlim(fixed_xlim)
+                    panel_ax.set_ylim(fixed_ylim)
+                    label = f"Start port {port_labels.get(context, context)}"
+                    panel_ax.set_title(label + ("  (active)" if is_active else ""),
+                                        fontweight="bold" if is_active else "normal")
+                if frame["title"]:
+                    fig.suptitle(frame["title"], wrap=True, fontsize=10)
+                if equation_artist is not None:
+                    equation_artist.set_text(frame["equation_text"] or "")
+            else:
+                panel_ax = axes[0]
+                panel_ax.clear()
+                outline = frame["changed_hexes"] or None
+                plot_hex_maze(
+                    self.graph,
+                    color_by=frame["values"],
+                    colormap=colormap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    rat=frame["hex"],
+                    rat_from=frame["rat_from"],
+                    reward=frame["reward"],
+                    outline_hexes=outline,
+                    outline_colors=update_color if outline else None,
+                    show_hex_labels=show_hex_labels,
+                    show_barriers=show_barriers,
+                    ax=panel_ax,
+                    **plot_kwargs,
+                )
+                panel_ax.set_xlim(fixed_xlim)
+                panel_ax.set_ylim(fixed_ylim)
+                if frame["title"]:
+                    panel_ax.set_title(frame["title"], wrap=True, fontsize=10)
+                if equation_artist is not None:
+                    equation_artist.set_text(frame["equation_text"] or "")
+                elif frame["equation_text"]:
+                    # Caller-supplied ax: no reserved margin available, so
+                    # draw inside the axes bounds (may overlap the maze).
+                    panel_ax.text(0.02, 0.02, frame["equation_text"], transform=panel_ax.transAxes,
+                                   ha="left", va="bottom", fontsize=8, family="monospace",
+                                   bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", boxstyle="round,pad=0.4"))
+
+        anim = animation.FuncAnimation(fig, draw, frames=len(frames), interval=interval)
+        if owns_fig:
+            plt.close(fig)
+        return anim
