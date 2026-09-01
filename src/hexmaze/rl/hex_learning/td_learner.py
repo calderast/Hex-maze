@@ -489,12 +489,12 @@ class HexMazeTDLearner:
             Reward for each trajectory.
         record : bool, optional
             If True, also return a list of per-choice records, one per
-            scored hex-to-hex move, in trajectory order: {"entry": prev_hex
-            (None at a trial's first step), "hex": cur_hex, "choice":
-            next_hex, "probability": p_choice, "probabilities":
-            {neighbor: prob, ...}}. Combine "entry"/"hex"/"choice" with
-            core.get_hex_exit_direction() to label each choice "left"/
-            "right"/"back".
+            scored hex-to-hex move, in trajectory order: {"trial": index
+            into trajectories/rewards, "entry": prev_hex (None at a trial's
+            first step), "hex": cur_hex, "choice": next_hex, "probability":
+            p_choice, "probabilities": {neighbor: prob, ...}}. Combine
+            "entry"/"hex"/"choice" with core.get_hex_exit_direction() to
+            label each choice "left"/"right"/"back".
         junctions_only : bool, optional
             If True, restrict scoring to genuine binary choices: steps where
             the rat is at a real 3-way intersection (cur_hex has exactly 3
@@ -515,7 +515,7 @@ class HexMazeTDLearner:
         """
         total = 0.0
         choices = [] if record else None
-        for path, reward in zip(trajectories, rewards):
+        for trial_index, (path, reward) in enumerate(zip(trajectories, rewards)):
             if len(path) < 2:
                 continue
             context = self.resolve_context(path)
@@ -553,6 +553,7 @@ class HexMazeTDLearner:
                 total -= np.log(max(p_choice, 1e-10))
                 if record:
                     choices.append({
+                        "trial": trial_index,
                         "entry": entry_hex,
                         "hex": cur_hex,
                         "choice": next_hex,
@@ -607,6 +608,9 @@ class HexMazeTDLearner:
                   hex-to-hex steps if junctions_only=True)
                 - choice_result_ : raw scipy OptimizeResult, or None if
                   every parameter was fixed (nothing to optimize)
+                - junctions_only_ : the junctions_only value used to fit,
+                  so a later choice_nll(..., record=True) call to inspect
+                  individual choices can reuse it without repeating it
         """
         fixed = {"alpha": alpha, "gamma": gamma, "lam": lam, "temperature": temperature}
         free_names = [name for name, value in fixed.items() if value is None]
@@ -645,6 +649,7 @@ class HexMazeTDLearner:
             len(free_names) * np.log(n_choices) + 2 * nll if n_choices > 0 else float("nan")
         )
         fitted.choice_result_ = result
+        fitted.junctions_only_ = junctions_only
         return fitted
 
     #  Self-generated simulation
