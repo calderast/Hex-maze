@@ -59,6 +59,9 @@ from ...plotting import plot_hex_maze
 class HexMazeTDLearner:
     """TD(lambda) hex-value learner. See module docstring for the flags."""
 
+    _FIT_PARAM_DEFAULTS = {"alpha": (0.3, (1e-3, 1.0)), "gamma": (0.9, (0.0, 0.999)),
+                           "lam": (0.3, (0.0, 1.0)), "temperature": (1.0, (0.01, 10.0))}
+
     def __init__(
         self,
         maze,
@@ -430,6 +433,43 @@ class HexMazeTDLearner:
 
     #  Fitting to observed choices
 
+    def junction_candidates(self, cur_hex, entry_hex):
+        """
+        The two non-backward neighbors at cur_hex if it's a real 3-way
+        junction (exactly 3 graph-neighbors), else None. entry_hex (the hex
+        arrived from, or None at a trial's first hex) is always excluded,
+        regardless of no_backtrack -- see choice_nll.
+        """
+        all_neighbors = list(self.graph.neighbors(cur_hex))
+        if len(all_neighbors) != 3:
+            return None
+        return [n for n in all_neighbors if n != entry_hex]
+
+    def junction_choice_info(self, cur_hex, entry_hex, next_hex, context):
+        """
+        Binary junction-choice info for one step, matching choice_nll's
+        junctions_only=True scoring: None if cur_hex isn't a real 3-way
+        junction, or next_hex is entry_hex (backtracked -- valid, just not a
+        binary left/right choice), or next_hex isn't one of the two
+        candidates at all (a tracking-error case; callers that need to warn
+        about that, like choice_nll, check it themselves). Otherwise:
+        {"candidates": [hexA, hexB], "values": {hex: V(hex)}, "probabilities":
+        {hex: p}, "choice": next_hex, "probability": p_choice}.
+        """
+        candidates = self.junction_candidates(cur_hex, entry_hex)
+        if candidates is None or next_hex == entry_hex or next_hex not in candidates:
+            return None
+        probabilities = self.softmax_probabilities(cur_hex, candidates, context)
+        probability_by_neighbor = dict(zip(candidates, probabilities.tolist()))
+        values = {c: self.state_value(context, self.state_key(cur_hex, c)) for c in candidates}
+        return {
+            "candidates": candidates,
+            "values": values,
+            "probabilities": probability_by_neighbor,
+            "choice": next_hex,
+            "probability": probability_by_neighbor[next_hex],
+        }
+
     def choice_nll(self, trajectories, rewards, record=False, junctions_only=False):
         """
         Negative log-likelihood of the rat's hex-to-hex choices under this
@@ -483,12 +523,11 @@ class HexMazeTDLearner:
             for step in range(len(path) - 1):
                 cur_hex, next_hex = path[step], path[step + 1]
                 entry_hex = path[step - 1] if step > 0 else None
-                all_neighbors = list(self.graph.neighbors(cur_hex))
 
                 if junctions_only:
-                    if len(all_neighbors) != 3:
+                    candidates = self.junction_candidates(cur_hex, entry_hex)
+                    if candidates is None:
                         continue  # not a junction -- outside this analysis
-                    candidates = [n for n in all_neighbors if n != entry_hex]
                     if next_hex == entry_hex:
                         continue  # backtracked at the junction -- valid, just not a binary L/R choice
                     if next_hex not in candidates:
@@ -499,7 +538,7 @@ class HexMazeTDLearner:
                         )
                         continue
                 else:
-                    candidates = all_neighbors
+                    candidates = list(self.graph.neighbors(cur_hex))
                     if next_hex not in candidates:
                         warnings.warn(
                             f"choice_nll: at hex {cur_hex}, next_hex={next_hex} is not a "
@@ -523,9 +562,6 @@ class HexMazeTDLearner:
 
             self.learn_path(path, reward, context)
         return (total, choices) if record else total
-
-    _FIT_PARAM_DEFAULTS = {"alpha": (0.3, (1e-3, 1.0)), "gamma": (0.9, (0.0, 0.999)),
-                           "lam": (0.3, (0.0, 1.0)), "temperature": (1.0, (0.01, 10.0))}
 
     @classmethod
     def fit_choices(cls, maze, reward_probs, trajectories, rewards,
@@ -868,6 +904,18 @@ class HexMazeTDLearner:
         log.sort(key=lambda row: -row["eligibility"])
         return log
 
+    def format_header_text(self, cur_hex, path_so_far=None):
+        """Shared header line(s) for animate_learning's text box: the path
+        so far (optional) and current hyperparameters + which hex the rat
+        is in."""
+        header = (
+            f"rat at hex {cur_hex}    "
+            f"α={self.alpha:.3g}  γ={self.gamma:.3g}  λ={self.lam:.3g}  τ={self.temperature:.3g}"
+        )
+        if path_so_far:
+            header = f"path: {path_so_far}\n{header}"
+        return header
+
     def format_update_text(self, cur_hex, update, path_so_far=None, max_rows=6):
         """
         Multi-line diagnostic text for one animate_learning frame: the hex
@@ -881,12 +929,7 @@ class HexMazeTDLearner:
         are sorted by eligibility (most-affected first) and capped at
         `max_rows`, with a summary line for the rest.
         """
-        header = (
-            f"rat at hex {cur_hex}    "
-            f"α={self.alpha:.3g}  γ={self.gamma:.3g}  λ={self.lam:.3g}  τ={self.temperature:.3g}"
-        )
-        if path_so_far:
-            header = f"path: {path_so_far}\n{header}"
+        header = self.format_header_text(cur_hex, path_so_far)
         if update is None:
             return header + "\n(no update yet this trial)"
 
@@ -923,6 +966,23 @@ class HexMazeTDLearner:
         body = f"{formula_line}\n{delta_eq}\n" + "\n".join(rows)
         return header + "\n" + body
 
+    def format_junction_text(self, junction_hex, info):
+        """
+        Text block describing one binary junction choice (see
+        junction_choice_info): the two candidate hexes with their retrieved
+        values and choice probabilities, and which one was actually taken.
+        Returns None if `info` is None (not a scored junction choice there).
+        """
+        if info is None:
+            return None
+        lines = [f"junction at hex {junction_hex}  (choosing between {info['candidates'][0]} and {info['candidates'][1]}):"]
+        for hex in info["candidates"]:
+            marker = "  ← chosen" if hex == info["choice"] else ""
+            lines.append(
+                f"  hex {hex}  V={info['values'][hex]:.4f}  p={info['probabilities'][hex]:.3f}{marker}"
+            )
+        return "\n".join(lines)
+
     def animate_learning(
         self,
         trajectories,
@@ -931,6 +991,8 @@ class HexMazeTDLearner:
         panels=False,
         show_updates=True,
         update_color="red",
+        show_choices=True,
+        choice_color="yellow",
         show_trial_info=True,
         show_path=True,
         show_equation=True,
@@ -994,6 +1056,17 @@ class HexMazeTDLearner:
         update_color : str
             Outline color for updated hexes (see outline_hexes/outline_colors
             in plot_hex_maze). Defaults to 'red'.
+        show_choices : bool
+            If True (default), whenever the *previous* step was a real
+            3-way junction choice (see junction_choice_info -- same
+            definition as choice_nll(junctions_only=True), "back" always
+            excluded regardless of no_backtrack), outline the two candidate
+            hexes and print their retrieved values and choice probabilities,
+            with the one actually taken marked. Silent (no info) on
+            non-junction steps.
+        choice_color : str
+            Outline color for the two junction-candidate hexes. Defaults to
+            'yellow'.
         show_trial_info : bool
             If True (default), title each frame with the trial number, start
             port, step within the trial, and (once known) the reward outcome.
@@ -1026,6 +1099,29 @@ class HexMazeTDLearner:
 
         valid_trials = [(path, reward) for path, reward in zip(trajectories, rewards) if len(path) >= 2]
 
+        def values_for(snap):
+            if panels:
+                return {c: dict(snap["values"][c]) for c in self.contexts}
+            elif start_port == "trial":
+                return dict(snap["values"][context])
+            else:
+                return self.snapshot_values(snap, start_port=fixed_port)
+
+        def path_line(up_to_index):
+            if not show_path:
+                return None
+            raw_path = " → ".join(str(h) for h in path[: up_to_index + 1])
+            return "\n".join(textwrap.wrap(raw_path, width=path_wrap_width, break_long_words=False))
+
+        def trial_title(step_label, suffix=""):
+            if not show_trial_info:
+                return None
+            return (
+                f"Trial {trial_index + 1}/{len(valid_trials)}  "
+                f"start {port_labels.get(context, context)}  "
+                f"step {step_label}/{n_steps}{suffix}"
+            )
+
         frames = []
         for trial_index, (path, reward) in enumerate(valid_trials):
             context = self.resolve_context(path)
@@ -1037,23 +1133,40 @@ class HexMazeTDLearner:
             # not an extra transition, so this is capped rather than counted)
             last_hex, last_rat_from = None, None
             for step_index, snap in enumerate(history):
-                if panels:
-                    values = {c: dict(snap["values"][c]) for c in self.contexts}
-                elif start_port == "trial":
-                    values = dict(snap["values"][context])
-                else:
-                    values = self.snapshot_values(snap, start_port=fixed_port)
-
-                changed_hexes = set()
-                if show_updates:
-                    # Derived from the same filtered log used in the equation
-                    # text, so the outline always matches what's printed.
-                    changed_hexes = {
-                        self.hex_of_state(row["state"])
-                        for row in self.filtered_update_log(snap.get("update"))
-                    }
-
                 cur_hex = snap["state"]
+                moved = not (step_index > 0 and cur_hex == last_hex)
+                step_label = min(step_index, n_steps)
+
+                # Decision frame: inserted BEFORE a real move out of a
+                # genuine 3-way junction, so the choice_color highlight
+                # appears while the rat is still AT the junction deciding,
+                # not retroactively once it's already at the chosen hex. Uses
+                # the *pre*-move snapshot's values (history[step_index-1]),
+                # matching the state the choice was actually made from.
+                if show_choices and moved and step_label >= 1:
+                    junction_hex = path[step_label - 1]
+                    junction_entry = path[step_label - 2] if step_label >= 2 else None
+                    junction_info = self.junction_choice_info(junction_hex, junction_entry, cur_hex, context)
+                    if junction_info is not None:
+                        junction_text = self.format_junction_text(junction_hex, junction_info)
+                        decision_text = self.format_header_text(
+                            junction_hex, path_so_far=path_line(step_label - 1)
+                        ) + "\n" + junction_text
+                        frames.append({
+                            "hex": junction_hex,
+                            "rat_from": junction_entry,
+                            "context": context,
+                            "values": values_for(history[step_index - 1]),
+                            "changed_hexes": set(),
+                            "junction_candidates": set(junction_info["candidates"]),
+                            "title": trial_title(step_label - 1, "  (deciding)"),
+                            "equation_text": decision_text,
+                            "reward": None,
+                        })
+
+                # Arrival frame: the rat has now moved to cur_hex. No
+                # junction highlight here -- that belonged to the decision
+                # frame above, since the choice has already been made.
                 if step_index == 0:
                     rat_from = None
                 elif cur_hex == last_hex:
@@ -1065,27 +1178,19 @@ class HexMazeTDLearner:
                     rat_from = last_hex
                 last_hex, last_rat_from = cur_hex, rat_from
 
+                changed_hexes = set()
+                if show_updates:
+                    # Derived from the same filtered log used in the equation
+                    # text, so the outline always matches what's printed.
+                    changed_hexes = {
+                        self.hex_of_state(row["state"])
+                        for row in self.filtered_update_log(snap.get("update"))
+                    }
+
                 is_reward_step = step_index == last_step and show_reward
-                step_label = min(step_index, n_steps)
-
-                title = None
-                if show_trial_info:
-                    title = (
-                        f"Trial {trial_index + 1}/{len(valid_trials)}  "
-                        f"start {port_labels.get(context, context)}  "
-                        f"step {step_label}/{n_steps}"
-                    )
-                    if is_reward_step:
-                        title += "  →  " + ("rewarded" if reward else "omission")
-
-                path_so_far = None
-                if show_path:
-                    raw_path = " → ".join(str(h) for h in path[: step_label + 1])
-                    path_so_far = "\n".join(
-                        textwrap.wrap(raw_path, width=path_wrap_width, break_long_words=False)
-                    )
+                title = trial_title(step_label, "  →  " + ("rewarded" if reward else "omission") if is_reward_step else "")
                 equation_text = (
-                    self.format_update_text(cur_hex, snap.get("update"), path_so_far=path_so_far)
+                    self.format_update_text(cur_hex, snap.get("update"), path_so_far=path_line(step_label))
                     if show_equation else None
                 )
 
@@ -1093,8 +1198,9 @@ class HexMazeTDLearner:
                     "hex": cur_hex,
                     "rat_from": rat_from,
                     "context": context,
-                    "values": values,
+                    "values": values_for(snap),
                     "changed_hexes": changed_hexes,
+                    "junction_candidates": set(),
                     "title": title,
                     "equation_text": equation_text,
                     "reward": (path[-1], bool(reward)) if is_reward_step else None,
@@ -1112,7 +1218,7 @@ class HexMazeTDLearner:
         # to ~10 lines with lambda > 0's multi-hex log). If the caller passed
         # their own `ax`, we can't safely resize their figure/layout, so the
         # text falls back to drawing inside the axes bounds in that case.
-        extra_height = 2.6 if (show_equation and owns_fig) else 0
+        extra_height = 2.6 if ((show_equation or show_choices) and owns_fig) else 0
         if panels:
             fig, axes = plt.subplots(1, len(self.contexts), figsize=(6 * len(self.contexts), 6 + extra_height))
             axes = list(np.atleast_1d(axes))
@@ -1134,83 +1240,87 @@ class HexMazeTDLearner:
         )
         fixed_xlim, fixed_ylim = axes[0].get_xlim(), axes[0].get_ylim()
 
+        equation_bbox = dict(facecolor="white", alpha=0.85, edgecolor="none", boxstyle="round,pad=0.4")
+
         # fig.text() adds a new artist every call rather than replacing the
         # previous one, unlike ax.text() after ax.clear() or fig.suptitle()
         # -- so create it once (whenever we own the figure and reserved
         # space for it below the maze) and update its contents in place each
-        # frame. With a caller-supplied `ax` we can't reserve that space, so
-        # the per-frame draw() falls back to ax.text() inside the axes.
+        # frame. With a caller-supplied `ax` we can't reserve that space
+        # (single-axis mode only -- panels always owns its figure), so
+        # set_equation_text() falls back to ax.text() inside the axes.
         equation_artist = None
         if show_equation and owns_fig:
             equation_artist = fig.text(
                 0.5, 0.02, "", ha="center", va="bottom", fontsize=8, family="monospace",
-                bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", boxstyle="round,pad=0.4"),
+                bbox=equation_bbox,
             )
+
+        def build_outlines(frame):
+            """(outline_hexes, outline_colors) lists combining the TD-update
+            group (update_color) and the junction-candidate group
+            (choice_color), or (None, None) if neither applies."""
+            groups, colors = [], []
+            if frame["changed_hexes"]:
+                groups.append(frame["changed_hexes"])
+                colors.append(update_color)
+            if frame["junction_candidates"]:
+                groups.append(frame["junction_candidates"])
+                colors.append(choice_color)
+            return (groups, colors) if groups else (None, None)
+
+        def draw_panel(panel_ax, frame, values, is_active):
+            """Draw one axes' worth of the maze for a frame. is_active gates
+            the rat/reward marker/outline -- in panels mode only the trial's
+            own context should show them; in single-axis mode it's always True."""
+            panel_ax.clear()
+            outline, outline_colors = build_outlines(frame) if is_active else (None, None)
+            plot_hex_maze(
+                self.graph,
+                color_by=values,
+                colormap=colormap,
+                vmin=vmin,
+                vmax=vmax,
+                rat=frame["hex"] if is_active else None,
+                rat_from=frame["rat_from"] if is_active else None,
+                reward=frame["reward"] if is_active else None,
+                outline_hexes=outline,
+                outline_colors=outline_colors,
+                show_hex_labels=show_hex_labels,
+                show_barriers=show_barriers,
+                ax=panel_ax,
+                **plot_kwargs,
+            )
+            panel_ax.set_xlim(fixed_xlim)
+            panel_ax.set_ylim(fixed_ylim)
+
+        def set_equation_text(fallback_ax, text):
+            if equation_artist is not None:
+                equation_artist.set_text(text or "")
+            elif text:
+                # Caller-supplied ax: no reserved margin available, so draw
+                # inside the axes bounds (may overlap the maze).
+                fallback_ax.text(0.02, 0.02, text, transform=fallback_ax.transAxes,
+                                  ha="left", va="bottom", fontsize=8, family="monospace",
+                                  bbox=equation_bbox)
 
         def draw(frame_index):
             frame = frames[frame_index]
             if panels:
                 for context, panel_ax in zip(self.contexts, axes):
-                    panel_ax.clear()
                     is_active = context == frame["context"]
-                    outline = frame["changed_hexes"] if (is_active and frame["changed_hexes"]) else None
-                    plot_hex_maze(
-                        self.graph,
-                        color_by=frame["values"][context],
-                        colormap=colormap,
-                        vmin=vmin,
-                        vmax=vmax,
-                        rat=frame["hex"] if is_active else None,
-                        rat_from=frame["rat_from"] if is_active else None,
-                        reward=frame["reward"] if is_active else None,
-                        outline_hexes=outline,
-                        outline_colors=update_color if outline else None,
-                        show_hex_labels=show_hex_labels,
-                        show_barriers=show_barriers,
-                        ax=panel_ax,
-                        **plot_kwargs,
-                    )
-                    panel_ax.set_xlim(fixed_xlim)
-                    panel_ax.set_ylim(fixed_ylim)
+                    draw_panel(panel_ax, frame, frame["values"][context], is_active)
                     label = f"Start port {port_labels.get(context, context)}"
                     panel_ax.set_title(label + ("  (active)" if is_active else ""),
                                         fontweight="bold" if is_active else "normal")
                 if frame["title"]:
                     fig.suptitle(frame["title"], wrap=True, fontsize=10)
-                if equation_artist is not None:
-                    equation_artist.set_text(frame["equation_text"] or "")
+                set_equation_text(None, frame["equation_text"])
             else:
-                panel_ax = axes[0]
-                panel_ax.clear()
-                outline = frame["changed_hexes"] or None
-                plot_hex_maze(
-                    self.graph,
-                    color_by=frame["values"],
-                    colormap=colormap,
-                    vmin=vmin,
-                    vmax=vmax,
-                    rat=frame["hex"],
-                    rat_from=frame["rat_from"],
-                    reward=frame["reward"],
-                    outline_hexes=outline,
-                    outline_colors=update_color if outline else None,
-                    show_hex_labels=show_hex_labels,
-                    show_barriers=show_barriers,
-                    ax=panel_ax,
-                    **plot_kwargs,
-                )
-                panel_ax.set_xlim(fixed_xlim)
-                panel_ax.set_ylim(fixed_ylim)
+                draw_panel(axes[0], frame, frame["values"], True)
                 if frame["title"]:
-                    panel_ax.set_title(frame["title"], wrap=True, fontsize=10)
-                if equation_artist is not None:
-                    equation_artist.set_text(frame["equation_text"] or "")
-                elif frame["equation_text"]:
-                    # Caller-supplied ax: no reserved margin available, so
-                    # draw inside the axes bounds (may overlap the maze).
-                    panel_ax.text(0.02, 0.02, frame["equation_text"], transform=panel_ax.transAxes,
-                                   ha="left", va="bottom", fontsize=8, family="monospace",
-                                   bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", boxstyle="round,pad=0.4"))
+                    axes[0].set_title(frame["title"], wrap=True, fontsize=10)
+                set_equation_text(axes[0], frame["equation_text"])
 
         anim = animation.FuncAnimation(fig, draw, frames=len(frames), interval=interval)
         if owns_fig:
