@@ -20,6 +20,7 @@ from .utils import (
 )
 from .core import (
     get_critical_choice_points,
+    get_pairwise_distance_matrix,
     get_optimal_paths,
     get_reward_path_lengths,
     get_hexes_between,
@@ -48,6 +49,8 @@ __all__ = [
     "get_optimal_path_hexes_after_divergence",
     "get_hexes_after_divergence",
     "classify_hexes_by_barrier_change",
+    "get_pairwise_distance_change",
+    "get_distance_change_blocks",
     "get_barrier_change",
     "get_barrier_changes",
     "get_next_barrier_sets",
@@ -988,6 +991,140 @@ def classify_hexes_by_barrier_change(
     classified = set().union(*hex_classes.values())
     hex_classes["other"] = set(new_graph.nodes()) - classified
     return hex_classes
+
+
+def _group_hexes_into_blocks(distance_change: pd.DataFrame) -> list[list[int]]:
+    """
+    Group hexes that have identical rows in a distance change matrix.
+
+    Parameters:
+        distance_change (pd.DataFrame): A distance change matrix
+
+    Returns:
+        list[list[int]]: Blocks of hexes, largest block first
+    """
+    blocks = {}
+    for hex in distance_change.index:
+        blocks.setdefault(tuple(distance_change.loc[hex]), []).append(hex)
+
+    # Largest block first, then by hex so the order is stable
+    return sorted(blocks.values(), key=lambda block: (-len(block), block))
+
+
+def _order_blocks_by_similarity(blocks: list[list[int]], distance_change: pd.DataFrame) -> list[list[int]]:
+    """
+    Order blocks so that blocks which changed in similar ways sit next to each other.
+
+    Each block is represented by its row of the distance change matrix. Starting from
+    the block that changed the most, we repeatedly append whichever remaining block is
+    closest to the one just placed.
+
+    Parameters:
+        blocks (list[list[int]]): Blocks of hexes that moved together
+        distance_change (pd.DataFrame): The distance change matrix the blocks came from
+
+    Returns:
+        list[list[int]]: The same blocks, reordered by similarity
+    """
+    block_changes = np.array(
+        [distance_change.loc[block[0]].to_numpy(dtype=float) for block in blocks]
+    )
+
+    # Start from the block that changed the most so the ordering is deterministic
+    current = int(np.argmax(np.abs(block_changes).sum(axis=1)))
+    order = [current]
+    remaining = set(range(len(blocks))) - {current}
+
+    # Repeatedly add whichever remaining block is most similar to the last one placed
+    while remaining:
+        candidates = sorted(remaining)
+        differences = [
+            float(np.linalg.norm(block_changes[candidate] - block_changes[current]))
+            for candidate in candidates
+        ]
+        current = candidates[int(np.argmin(differences))]
+        order.append(current)
+        remaining.remove(current)
+
+    return [blocks[index] for index in order]
+
+
+def get_distance_change_blocks(maze_1, maze_2, sort_by="size") -> list[list[int]]:
+    """
+    Group hexes by how the barrier change moved them relative to the rest of the maze.
+
+    Hexes are in the same block if their distance changed by the same amount to every
+    other hex, meaning the block moved rigidly: distances within a block are unchanged,
+    and every hex in the block changed distance identically to everything outside it.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second hex maze represented in any valid format
+        sort_by (str): How to order the blocks. "size" (default) puts the largest block
+            first. "similarity" puts blocks that changed in similar ways next to each other
+
+    Returns:
+        list[list[int]]: Blocks of hexes that moved together, in the requested order.
+            Hexes open in only one of the mazes are not included
+
+    Raises:
+        ValueError: If sort_by is not "size" or "similarity"
+    """
+    if sort_by not in ("size", "similarity"):
+        raise ValueError(f'sort_by must be "size" or "similarity", got {sort_by!r}')
+
+    distance_change = get_pairwise_distance_change(maze_1, maze_2)
+    blocks = _group_hexes_into_blocks(distance_change)
+
+    if sort_by == "similarity":
+        blocks = _order_blocks_by_similarity(blocks, distance_change)
+    return blocks
+
+
+def get_pairwise_distance_change(maze_1, maze_2, sort_by_block=False) -> pd.DataFrame:
+    """
+    Find how much the distance between every pair of hexes changes from one maze to another.
+
+    Only hexes open in both mazes are included, as a hex that is a barrier in one of the
+    mazes has no distance to compare across mazes.
+
+    Parameters:
+        maze_1 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The first hex maze represented in any valid format
+        maze_2 (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The second hex maze represented in any valid format
+        sort_by_block (bool or str): Order hexes so that hexes that moved together are
+            adjacent in the matrix (see `get_distance_change_blocks`), which makes the
+            block structure of the change visible. False (default) leaves hexes in sorted
+            order. True or "size" orders blocks largest first, "similarity" orders blocks
+            so that blocks which changed in similar ways are next to each other
+
+    Returns:
+        pd.DataFrame: Distance change matrix indexed by hex, where entry [i, j] is how
+            much the distance between hex i and hex j changed from maze_1 to maze_2.
+            Positive values mean the hexes are farther apart in maze_2
+    """
+    distances_1 = get_pairwise_distance_matrix(maze_1)
+    distances_2 = get_pairwise_distance_matrix(maze_2)
+
+    # Only hexes open in both mazes have a distance we can compare across mazes
+    shared_hexes = sorted(set(distances_1.index) & set(distances_2.index))
+
+    distance_change = (
+        distances_2.loc[shared_hexes, shared_hexes] - distances_1.loc[shared_hexes, shared_hexes]
+    )
+
+    # Optionally reorder so that hexes that moved together sit next to each other
+    if sort_by_block:
+        blocks = _group_hexes_into_blocks(distance_change)
+        if sort_by_block == "similarity":
+            blocks = _order_blocks_by_similarity(blocks, distance_change)
+        hex_order = [hex for block in blocks for hex in block]
+        distance_change = distance_change.loc[hex_order, hex_order]
+
+    return distance_change
 
 
 def get_barrier_change(maze_1, maze_2) -> tuple[int, int]:

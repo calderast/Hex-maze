@@ -7,6 +7,7 @@ including generating hex maze configurations and calculating various hex maze at
 
 import networkx as nx
 import numpy as np
+import pandas as pd
 import math
 import warnings
 from collections import Counter
@@ -114,6 +115,7 @@ __all__ = [
     "get_hexes_from_port",
     "get_hexes_from_closest_port",
     "get_hex_distance",
+    "get_pairwise_distance_matrix",
     "get_hexes_between",
     "get_safe_hex_distance",
     "get_hexes_within_distance",
@@ -496,6 +498,35 @@ def get_hex_distance(maze, start_hex, target_hex) -> int:
 
     # Get the shortest path length between start_hex and target_hex
     return nx.shortest_path_length(graph, source=start_hex, target=target_hex)
+
+
+def get_pairwise_distance_matrix(maze) -> pd.DataFrame:
+    """
+    Find the minimum hex distance between every pair of open hexes in a maze.
+    Adjacent hexes have a distance of 1.
+
+    Parameters:
+        maze (list, set, frozenset, np.ndarray, str, nx.Graph):
+            The hex maze represented in any valid format
+
+    Returns:
+        pd.DataFrame: Distance matrix indexed by hex (in sorted order), where entry
+            [i, j] is the number of hexes from hex i to hex j. Barrier hexes are not
+            included. Pairs of hexes with no path between them have a distance of inf
+    """
+    # Convert all valid maze representations to a nx.Graph object
+    graph = maze_to_graph(maze)
+
+    # Get the shortest path length between all pairs of hexes
+    hexes = sorted(graph.nodes)
+    distances = dict(nx.all_pairs_shortest_path_length(graph))
+
+    # Unreachable hexes are missing from the shortest path lengths, so they get inf
+    return pd.DataFrame(
+        [[distances[hex].get(other_hex, math.inf) for other_hex in hexes] for hex in hexes],
+        index=hexes,
+        columns=hexes,
+    )
 
 
 def get_hexes_between(
