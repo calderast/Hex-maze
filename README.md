@@ -147,9 +147,8 @@ All port learners support maximum-likelihood fitting (`.fit_rewards()` and `.fit
 Learns values over individual hexes from maze trajectories.
 
 - **`HexMazeTDLearner`** — TD(0) + TD(1) value learning, maintains V(hex) per starting port
-- **`HexMazeQLearner`** — Q-learning, learns Q(hex, action) to capture directional preferences
 
-Both support learning from rat trajectories, self-generated simulation, configurable priors, and mid-session barrier changes. Learned values can be visualized as heatmaps on the maze with `plot_hex_maze(color_by=...)`.
+Supports learning from rat trajectories, self-generated simulation, configurable priors, and mid-session barrier changes. Learned values can be visualized as heatmaps on the maze with `plot_hex_maze(color_by=...)`.
 
 ## Other info
 

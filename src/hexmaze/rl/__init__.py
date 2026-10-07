@@ -1,9 +1,22 @@
-from .hex_learning import HexMazeTDLearner, HexMazeQLearner
+from .hex_learning import (
+    HexMazeTDLearner,
+    BaseHexLearner,
+    HexMazeAgent,
+    UpdateRule,
+    UpdateEvent,
+    TDLambdaRule,
+    ModelBasedRule,
+)
 from .port_learning import RescorlaWagner, BayesianPortLearner
 
 __all__ = [
     "HexMazeTDLearner",
-    "HexMazeQLearner",
+    "BaseHexLearner",
+    "HexMazeAgent",
+    "UpdateRule",
+    "UpdateEvent",
+    "TDLambdaRule",
+    "ModelBasedRule",
     "RescorlaWagner",
     "BayesianPortLearner",
 ]

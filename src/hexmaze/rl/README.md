@@ -7,8 +7,7 @@ Reinforcement learning agents for the hex maze.
 ```text
 hexmaze/rl/
 ├── hex_learning/        # trajectory-based, learns values over hexes
-│   ├── td_learner.py    # HexMazeTDLearner
-│   └── q_learner.py     # HexMazeQLearner
+│   └── td_learner.py    # HexMazeTDLearner
 └── port_learning/       # outcome-based, learns values over ports
     ├── rescorla_wagner.py       # RescorlaWagner
     ├── bayesian.py              # BayesianPortLearner
@@ -103,26 +102,6 @@ HexMazeTDLearner(
 > Note: the model-based / path-independent inference component of the paper's
 > dual-process model is **not** implemented here — this is the model-free half only.
 
-### `HexMazeQLearner` — Q-learning
-
-Q-learning agent that maintains 3 Q-tables (one per starting port).
-
-- Learns **Q(hex, action)** — the value of moving to a specific neighbor from a given hex
-- Captures directional preferences (e.g. "from hex 25, moving toward hex 26 is better than hex 24")
-- Off-policy: updates use `max Q(next_hex, a')` regardless of the action actually taken
-
-**Q-learning update** (at each step along the trajectory):
-
-```text
-Q(hex, a) ← Q(hex, a) + α · [r + γ · max_a' Q(next_hex, a') - Q(hex, a)]
-```
-
-At terminal hexes (reward ports), `max Q(next_hex, a') = 0`.
-
-**Parameters:**
-
-- **`alpha`**: learning rate (default 0.3)
-
 ### Hex value learning common interface
 
 Both hex learners share most of the interface:
@@ -186,7 +165,7 @@ The **Q-learner** still takes an explicit, optional `start_port` for `process_tr
 
 ```python
 from hexmaze import maze_to_graph, plot_hex_maze
-from hexmaze.rl import HexMazeTDLearner, HexMazeQLearner
+from hexmaze.rl import HexMazeTDLearner
 from hexmaze.rl import RescorlaWagner, BayesianPortLearner, HiddenStatePortLearner
 
 ### Hex learning (trajectory-based)
@@ -195,11 +174,9 @@ barriers = {37, 7, 39, 41, 14, 46, 20, 23, 30}
 graph = maze_to_graph(barriers)
 
 td = HexMazeTDLearner(graph, reward_probs=[0.9, 0.5, 0.1], priors=[0.9, 0.5, 0.1])
-ql = HexMazeQLearner(graph, reward_probs=[0.9, 0.5, 0.1], priors=[0.9, 0.5, 0.1])
 
 # Simulate self-generated exploration
 td_results = td.simulate(start_state=1, n_trials=100)
-ql_results = ql.simulate(start_hex=1, n_trials=100)
 
 # Or learn from rat trajectories
 td.reset()
