@@ -582,32 +582,37 @@ def get_maze_bounding_box(
 
 def get_pixels_per_cm(
     hex_centroids: Mapping[int, tuple[float, float]],
-    length_cm: float,
-    reference: Literal["maze_side", "hex_flat_to_flat", "hex_corner_to_corner"] = "maze_side",
-    snap: bool = False,
+    maze: Optional[Literal["old_maze", "new_maze"]] = None,
+    length_cm: Optional[float] = None,
+    reference: Literal["maze_side", "hex_flat_to_flat", "hex_corner_to_corner", "hex_side"] = None,
+    snap_centroids: bool = False,
 ) -> float:
     """
     Get the pixels per cm conversion factor for a maze, given hex centroids in pixels
-    and one real-world measurement of the maze in cm.
+    and a known maze (old_maze or new_maze). Optionally provide your own real-world measurement
+    of the maze in cm if you are using a different maze or don't trust my measured values.
 
     Use this to convert tracked position data from pixels to cm.
 
     Note that a single conversion factor assumes pixel scale is constant across the image.
-    If the camera introduces any lens distortion, scale varies with image position and no
-    single factor is exact everywhere, so this returns one average scale for the maze.
-    Measuring against a long reference (the default "maze_side") averages over more of the
-    image than measuring a single hex, which is local to wherever that hex sits in frame.
+    If the camera introduces any distortion, scale varies with image position and no single 
+    factor is exact everywhere. This returns one "good enough" average scale for the maze.
 
     Parameters:
         hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex, in pixels.
-        length_cm (float): The real-world length of `reference`, measured in cm
-        reference (str): What `length_cm` measures. Defaults to "maze_side"
+        maze (str): Use the known measurements of one of our mazes
+            "old_maze": hex side length of 7 cm
+            "new_maze": maze side of 121.92 cm (measured as 48 inches)
+        length_cm (float): The real-world length of `reference`, measured in cm.
+            Not needed if `maze` is specified
+        reference (str): What `length_cm` measures. Not needed if `maze` is specified
             "maze_side": the outer edge of the maze (one long side of the maze bounding box)
             "hex_flat_to_flat": the width of a single hex between opposite flat sides.
                 This is also the distance between the centers of 2 adjacent hexes
             "hex_corner_to_corner": the width of a single hex between opposite corners,
                 which is 2/sqrt(3) (about 1.155) times the flat to flat width
-        snap (bool): If True, snap the centroids to the best-fit ideal hex grid before
+            "hex_side": the side length of a single hex, half the corner to corner width
+        snap_centroids (bool): If True, snap the centroids to the best-fit ideal hex grid before
             measuring, which fits one uniform scale across all 49 hexes. Defaults to False,
             which measures the centroids as given. Real centroids never match an ideal grid
             exactly, both because centroid positions are imperfectly identified and because
@@ -619,11 +624,25 @@ def get_pixels_per_cm(
         float: Pixels per cm. Divide a distance in pixels by this to get cm
 
     Raises:
-        ValueError: If reference is not one of the 3 valid options
+        ValueError: If reference or maze is not one of the valid options
     """
 
+    # The known measurements we have for each of our mazes, in cm
+    maze_measurements = {
+        "old_maze": ("maze_side", 48 * 2.54), # measured as 48 inches
+        "new_maze": ("hex_side", 7.0), # hex side/radius of 7cm, aka corner to corner distance of 14cm
+    }
+
+    # Use known reference lengths based on the maze
+    if maze is not None:
+        if maze not in maze_measurements:
+            raise ValueError(
+                f'maze must be one of {sorted(maze_measurements)}, got {maze!r}'
+            )
+        reference, length_cm = maze_measurements[maze]
+
     # Optionally snap hex centroids to the ideal grid (good if centroids were clicked poorly)
-    if snap:
+    if snap_centroids:
         hex_centroids = snap_centroids_to_grid(hex_centroids)
 
     if reference == "maze_side":
@@ -642,10 +661,13 @@ def get_pixels_per_cm(
     elif reference == "hex_corner_to_corner":
         # Corner to corner is twice the hex radius (the distance from center to corner)
         length_pixels = 2 * get_hex_sizes_from_centroids(hex_centroids)["avg_hex_radius"]
+    elif reference == "hex_side":
+        # The hex radius (center to corner) is the same as the hex side length
+        length_pixels = get_hex_sizes_from_centroids(hex_centroids)["avg_hex_radius"]
     else:
         raise ValueError(
-            'reference must be "maze_side", "hex_flat_to_flat" or "hex_corner_to_corner", '
-            f"got {reference!r}"
+            'reference must be "maze_side", "hex_flat_to_flat", "hex_corner_to_corner" '
+            f'or "hex_side", got {reference!r}'
         )
 
     return length_pixels / length_cm
