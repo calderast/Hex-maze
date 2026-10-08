@@ -126,6 +126,8 @@ class BaseHexLearner:
         "lam": (0.3, (0.0, 1.0)), "temperature": (0.5, (0.01, 10.0)),
         # ModelBasedRule
         "gamma_mb": (0.9, (0.0, 0.999)), "a_T": (0.1, (1e-3, 1.0)), "a_mb": (0.1, (1e-3, 1.0)),
+        # SWRRule
+        "a_swr": (0.1, (1e-3, 1.0)),
     }
 
     def __init__(
@@ -560,7 +562,7 @@ class BaseHexLearner:
     @classmethod
     def fit_choices(cls, maze, reward_probs, trajectories, rewards,
                      alpha=None, gamma=None, lam=None, temperature=None,
-                     gamma_mb=None, a_T=None, a_mb=None,
+                     gamma_mb=None, a_T=None, a_mb=None, a_swr=None,
                      rules=None, junctions_only=False, **kwargs):
         """
         Fit hyperparameters to maximize the likelihood of the rat's
@@ -614,13 +616,14 @@ class BaseHexLearner:
                   every parameter was fixed
                 - junctions_only_ : the junctions_only value used to fit
         """
-        from .update_rules import TDLambdaRule, ModelBasedRule  # local import: avoids a cycle
+        from .update_rules import TDLambdaRule, ModelBasedRule, SWRRule  # local import: avoids a cycle
 
         # A subclass like HexMazeTDLearner sets its own rules, so ask an instance
         # rather than assuming. BaseHexLearner itself requires `rules` to be passed.
         resolved_rules = rules if rules is not None else cls(maze, reward_probs, **kwargs).rules
         has_td = any(isinstance(rule, TDLambdaRule) for rule in resolved_rules)
         has_mb = any(isinstance(rule, ModelBasedRule) for rule in resolved_rules)
+        has_swr = any(isinstance(rule, SWRRule) for rule in resolved_rules)
 
         candidates = {"gamma": gamma, "temperature": temperature}
         if has_td:
@@ -630,6 +633,8 @@ class BaseHexLearner:
             candidates["gamma_mb"] = gamma_mb
             candidates["a_T"] = a_T
             candidates["a_mb"] = a_mb
+        if has_swr:
+            candidates["a_swr"] = a_swr
 
         fixed = {name: value for name, value in candidates.items() if value is not None}
         free_names = [name for name, value in candidates.items() if value is None]

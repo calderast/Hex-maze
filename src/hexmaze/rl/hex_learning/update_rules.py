@@ -258,3 +258,100 @@ class ModelBasedRule(UpdateRule):
             return header + "\n" + "\n".join(lines)
 
         return [UpdateEvent(changed=changed, describe=describe, color="green")]
+
+
+class SWRRule(UpdateRule):
+    """
+    Sharp-wave-ripple replay update -- an alternative to ModelBasedRule that
+    sweeps an explicit list of hexes instead of a learned memory trace.
+
+    On arrival at a reward port, every hex in that trial's replay list is
+    swept toward the reward received. Reads `learner.a_swr` (default 0.1),
+    falling back to that default if not passed to the learner's constructor.
+
+        V(state) <- V(state) + a_swr * (R - V(state))   [for each replayed hex]
+
+    Where ModelBasedRule weights each state by a learned T(port, state), this
+    rule treats membership in the replay list as the weight: replayed hexes
+    get a full update, everything else gets none.
+
+    Parameters:
+        swr_hexes: Where each trial's replayed hexes come from. Either a
+            sequence of hex lists, one per trial in the order trials are
+            learned, or a callable (learner, path, reward, context) -> hexes.
+            A trial with no entry (or an empty list) updates nothing
+    """
+
+    DEFAULT_A_SWR = 0.1
+
+    def __init__(self, swr_hexes=None):
+        self.swr_hexes = swr_hexes
+        self.trial_index = -1
+
+    def _a_swr(self, learner):
+        return getattr(learner, "a_swr", self.DEFAULT_A_SWR)
+
+    def _hexes_for_trial(self, learner, path, reward, context):
+        """This trial's replayed hexes, from a callable or a per-trial sequence."""
+        if self.swr_hexes is None:
+            return []
+        if callable(self.swr_hexes):
+            return self.swr_hexes(learner, path, reward, context) or []
+        if self.trial_index < len(self.swr_hexes):
+            return self.swr_hexes[self.trial_index] or []
+        return []
+
+    def _states_for_hex(self, learner, hex):
+        """The states a hex corresponds to -- itself, or every directed edge
+        arriving at it when the learner is directional."""
+        if not learner.directional:
+            return [hex] if hex in learner.graph else []
+        if hex not in learner.graph:
+            return []
+        return [(prev, hex) for prev in learner.graph.neighbors(hex)]
+
+    def on_trial_start(self, learner, path, context):
+        self.trial_index += 1
+
+    def on_step(self, learner, context, state, next_state, reward, is_terminal):
+        return []  # silent -- the whole update happens once, on_trial_end
+
+    def on_trial_end(self, learner, path, reward, context):
+        a_swr = self._a_swr(learner)
+        port = path[-1]
+
+        # Dedupe so a hex replayed twice in one ripple still updates once
+        states = []
+        for hex in self._hexes_for_trial(learner, path, reward, context):
+            for state in self._states_for_hex(learner, hex):
+                if state not in states:
+                    states.append(state)
+
+        changed = {}
+        rows = []
+        for state in states:
+            old_value = learner.state_value(context, state)
+            new_value = old_value + a_swr * (reward - old_value)
+            learner.V[context][state] = new_value
+            if abs(new_value - old_value) >= 0.00005:
+                changed[state] = (old_value, new_value, 1.0)
+                rows.append((state, old_value, new_value))
+
+        def describe(port=port, reward=reward, rows=rows, n=len(states)):
+            header = (
+                f"SWR replay update at port {port}  (reward={reward:.3g}, {n} hexes replayed)\n"
+                f"V(s) ← V(s) + a_swr·(R − V(s))"
+            )
+            max_rows = 6
+            lines = [
+                f"  V({learner.format_state(state)})  {old:.4f} → {new:.4f}"
+                for state, old, new in rows[:max_rows]
+            ]
+            if not lines:
+                lines = ["  (no visible change)"]
+            elif len(rows) > max_rows:
+                lines.append(f"  ... +{len(rows) - max_rows} more")
+            return header + "\n" + "\n".join(lines)
+
+        return [UpdateEvent(changed=changed, describe=describe, color="purple")]
+

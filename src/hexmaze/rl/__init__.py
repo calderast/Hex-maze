@@ -8,6 +8,7 @@ from .hex_learning import (
     UpdateEvent,
     TDLambdaRule,
     ModelBasedRule,
+    SWRRule,
 )
 from .port_learning import RescorlaWagner, BayesianPortLearner
 
@@ -21,6 +22,7 @@ __all__ = [
     "UpdateEvent",
     "TDLambdaRule",
     "ModelBasedRule",
+    "SWRRule",
     "RescorlaWagner",
     "BayesianPortLearner",
 ]
