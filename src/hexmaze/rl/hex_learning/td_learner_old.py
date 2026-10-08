@@ -1,191 +1,121 @@
 """
-base_learner.py
+td_learner_old.py
 
-Extensible hex-maze value-learning agent: a single learner class whose
-value-update behavior is supplied by a list of independent, combinable
-`UpdateRule` objects (see update_rules.py for concrete rules, e.g.
-TDLambdaRule, ModelBasedRule), rather than being hard-coded into one
-monolithic class. "TD only" vs "TD + model-based" vs "TD + model-based +
-sweeps" is just which rule objects are in `rules` -- not a class hierarchy.
+TD(lambda) hex value agent for the hex maze
 
-This class does not touch or depend on td_learner.py's HexMazeTDLearner in
-any way; the two are independent implementations. HexMazeTDLearner remains
-the simple, single-purpose TD(lambda) class; HexMazeAgent here is for anyone
-who wants more than one value-update mechanism active at once.
+Value is learned over maze locations via TD learning with eligibility traces.
+The single ``lam`` (lambda) controls:
 
-Each UpdateRule implements three hooks called while a trial's path is
-walked: `on_trial_start` (reset per-trial state), `on_step` (called once per
-real hex-to-hex transition, in order), and `on_trial_end` (called once after
-the last step, for end-of-trial-only updates). Each hook returns a list of
-UpdateEvent -- usually 0 or 1 -- describing what changed and how to render
-it, which is what makes animate_learning generic across rules: it never
-branches on which rule produced an event, it just reads `event.changed`
-(for outlining) and calls `event.describe()` (for the text box), with each
-rule owning the specifics of its own story.
+    lam = 0.0  -> pure TD(0): one-step bootstrapping, value propagates
+                 backward one hex per repeated traversal (e.g. Krausz 2023)
+    lam = 1.0  -> Monte-Carlo: full discounted return assigned along the
+                 whole path within a single trial.
+    0 < lam<1  -> eligibility-trace blend of all intermediate horizons.
+
+We can choose to represent hex states in a variety of ways:
+
+    directional : bool
+        False -> value over hexes (49 states), V[hex].
+        True  -> value over directional hex-states, i.e. directed edges
+                 (prev_hex, cur_hex) ~ 126 states. (e.g. Krausz 2023)
+
+    goal_conditioned : bool
+        False -> a single shared value function (e.g. Krausz 2023). Good
+                 for *fitting* observed trajectories, but when used to *generate*
+                 behavior the agent will turn around and run back up the value
+                 gradient to the port it just left.
+        True  -> one value function per start port (3 value tables). This reflects
+                 that the start port cannot give reward on the current trial.
+                 Use this for simulate().
+
+Reward port hexes are always terminal: reward is delivered on the transition into the
+port hex, the port bootstraps value 0, and each trial is an episode with the
+eligibility trace reset between trials.
+
+Paper-exact model-free preset:
+
+    HexMazeTDLearnerOld(
+        maze, reward_probs,
+        lam=0.0, directional=True, goal_conditioned=False,
+        priors=("flat", 0.2),
+    )
+
+Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
 """
 
-import copy
 import random
 import textwrap
 import warnings
-from dataclasses import dataclass
-from typing import Any, Callable, Optional
-
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 from scipy.optimize import minimize
-
 from ...utils import create_empty_hex_maze, maze_to_graph
 from ...core import get_safe_hex_distance
 from ...utils import REWARD_PORTS, resolve_port
 from ...plotting import plot_hex_maze
 
-# Named outline color -> single-hue colormap, used to shade a changed hex's
-# outline by its update's weight (see UpdateEvent.changed and build_outlines
-# inside animate_learning). Falls back to grayscale for an unrecognized name.
-_COLOR_TO_CMAP = {
-    "red": "Reds", "green": "Greens", "blue": "Blues",
-    "yellow": "YlOrBr", "orange": "Oranges", "purple": "Purples",
-}
 
+class HexMazeTDLearnerOld:
+    """TD(lambda) hex-value learner. See module docstring for the flags."""
 
-@dataclass
-class UpdateEvent:
-    """
-    One animate-able thing an UpdateRule did. `changed` is already filtered
-    to states with a real (displayable) change -- {state: (old_value,
-    new_value, weight)} -- so the base class never needs rule-specific
-    filtering logic to decide what to outline. `weight` is whatever this
-    rule's own notion of "how strongly was this state included" is (TD's
-    eligibility trace, model-based's T) -- animate_learning normalizes it
-    per-event and uses it to shade each hex's outline along `color`'s
-    colormap, so eligibility/memory-trace decay is visible directly rather
-    than every touched hex getting an identical flat outline. `describe` is
-    a zero-arg callable returning this event's own text block (no shared
-    header -- the base class prepends "rat at hex X" once per frame).
-    `color` is the outline color family for `changed`'s hexes; None means
-    "use animate_learning's default".
-    """
-    changed: dict
-    describe: Callable[[], str]
-    color: Optional[str] = None
-
-
-class UpdateRule:
-    """
-    Base interface for a pluggable value-update mechanism. Default hooks are
-    no-ops (return no events, touch no state) so a rule only needs to
-    implement whichever hooks are relevant to it.
-    """
-
-    def on_trial_start(self, learner, path, context):
-        """Called once before a trial's steps are walked (e.g. reset a
-        per-trial eligibility/memory trace). No return value."""
-
-    def on_step(self, learner, context, state, next_state, reward, is_terminal):
-        """Called once per real hex-to-hex transition, in path order.
-        `is_terminal` is True on the transition into the trial's final hex
-        (where reward is delivered). Returns a list of UpdateEvent."""
-        return []
-
-    def on_trial_end(self, learner, path, reward, context):
-        """Called once after the last step, for updates that only make
-        sense once the whole trial is known (e.g. a port-entry sweep over
-        the completed path). Returns a list of UpdateEvent."""
-        return []
-
-    def on_graph_changed(self, learner):
-        """Called once after learner.set_graph() swaps the maze (e.g. a
-        barrier moved). A rule with its own persistent, hex-keyed state
-        outside of learner.V (e.g. ModelBasedRule's T map) should prune
-        entries referencing hexes no longer in learner.graph here -- V
-        itself is already cleaned up by set_graph before this runs. No
-        return value."""
-
-
-class BaseHexLearner:
-    """
-    Hex-maze value learner driven by a list of UpdateRule objects (see
-    module docstring). Everything here is update-rule-agnostic: it reads
-    values via `state_value`/`V` and drives rules through their hooks, but
-    never assumes a particular update mechanism.
-
-    Rule-specific hyperparameters (e.g. TDLambdaRule's alpha/lam,
-    ModelBasedRule's gamma_mb/a_T/a_mb) are passed as constructor kwargs and
-    set as plain attributes on the learner (not hidden inside rule objects),
-    so any rule can read whatever it needs off the `learner` argument each
-    hook already receives. `gamma` is the one exception kept as an explicit
-    parameter here, since it's also used for prior-value discounting
-    independent of which rules are active.
-    """
-
-    _FIT_PARAM_DEFAULTS = {
-        # TDLambdaRule
-        "alpha": (0.3, (1e-3, 1.0)), "gamma": (0.9, (0.0, 0.999)),
-        "lam": (0.3, (0.0, 1.0)), "temperature": (0.5, (0.01, 10.0)),
-        # ModelBasedRule
-        "gamma_mb": (0.9, (0.0, 0.999)), "a_T": (0.1, (1e-3, 1.0)), "a_mb": (0.1, (1e-3, 1.0)),
-    }
+    _FIT_PARAM_DEFAULTS = {"alpha": (0.3, (1e-3, 1.0)), "gamma": (0.9, (0.0, 0.999)),
+                           "lam": (0.3, (0.0, 1.0)), "temperature": (1.0, (0.01, 10.0))}
 
     def __init__(
         self,
         maze,
         reward_probs,
-        rules,
+        alpha=0.3,
         gamma=0.95,
+        lam=0.0,
         temperature=1.0,
         directional=False,
         goal_conditioned=True,
         priors=None,
         no_backtrack=False,
-        **rule_kwargs,
     ):
         """
         Parameters
         ----------
         maze : set, frozenset, list, np.ndarray, str, or networkx.Graph
-            The hex maze in any valid format.
+            The hex maze in any valid format (a set of barrier hexes, a
+            comma-separated string, a networkx graph, etc.).
         reward_probs : list of float
             [p1, p2, p3] reward probability at ports 1/A, 2/B, 3/C.
-        rules : list of UpdateRule
-            The active value-update mechanisms, e.g. [TDLambdaRule()] or
-            [TDLambdaRule(), ModelBasedRule()]. Order matters only in that
-            each rule's events become separate, sequential animation frames
-            when two rules fire on the same step.
+        alpha : float
+            TD learning rate.
         gamma : float
-            Discount factor used for prior-value computation, and reused by
-            any rule (like TDLambdaRule) that wants a shared discount rate.
+            Discount factor.
+        lam : float
+            Eligibility-trace decay (TD-lambda). 0 = TD(0), 1 = Monte Carlo.
         temperature : float
-            Softmax temperature for action selection (policy-level, not
-            tied to any one update rule).
+            Softmax temperature for action selection.
         directional : bool
             If True, states are directed edges (prev_hex, cur_hex); else hexes.
         goal_conditioned : bool
             If True, keep one value function per start port (3 value tables);
             else a single shared value function.
         priors : None, "uniform", ("flat", value), or list of 3 floats
-            Value initialization strategy -- see distance_priors/build_prior_table.
+            Value initialization strategy:
+            - None: all zeros
+            - "uniform": 0.5-weighted gamma^distance toward goal ports
+            - ("flat", value): constant value for every state
+            - [p1, p2, p3]: per-port priors with gamma^distance discounting
         no_backtrack : bool
-            If True, self-generated behavior (choose_action/simulate) avoids
-            revisiting states within a trial if possible. Never affects
-            choice_nll scoring or any UpdateRule.
-        **rule_kwargs
-            Rule-specific hyperparameters (e.g. alpha=, lam= for
-            TDLambdaRule; gamma_mb=, a_T=, a_mb= for ModelBasedRule), set as
-            plain attributes on this instance.
+            If True, the agent avoids revisiting states within a trial if possible
+            (can be useful for examples in simulate mode).
         """
         self.graph = maze_to_graph(maze)
         self.reward_probs = {i + 1: reward_probs[i] for i in range(3)}
-        self.rules = rules
+        self.alpha = alpha
         self.gamma = gamma
+        self.lam = lam
         self.temperature = temperature
         self.directional = directional
         self.goal_conditioned = goal_conditioned
         self.no_backtrack = no_backtrack
         self.priors = priors
-        for key, value in rule_kwargs.items():
-            setattr(self, key, value)
 
         # Contexts: one value table per start port, or a single shared one.
         self.contexts = list(REWARD_PORTS) if goal_conditioned else [None]
@@ -258,8 +188,7 @@ class BaseHexLearner:
         Swap the maze (e.g. after a barrier change). Accepts a maze in any valid
         format (barrier set, string, networkx graph, etc.), converted via
         ``maze_to_graph``. States are lazily re-created against the new graph;
-        stale states are dropped from V, and each rule gets a chance to prune
-        its own persistent state too (see UpdateRule.on_graph_changed).
+        stale states are dropped.
         """
         self.graph = maze_to_graph(new_maze)
         valid = set(self.graph.nodes())
@@ -267,8 +196,6 @@ class BaseHexLearner:
             for state in list(self.V[context]):
                 if self.hex_of_state(state) not in valid:
                     del self.V[context][state]
-        for rule in self.rules:
-            rule.on_graph_changed(self)
 
     #  State helpers
 
@@ -296,50 +223,111 @@ class BaseHexLearner:
         value = self.V[context].get(state)
         return value if value is not None else self.prior_for_hex(context, self.hex_of_state(state))
 
-    #  Rule-driven learning
+    #  TD(lambda) core
+
+    def apply_td_error(self, context, state, delta, eligibility, log=None):
+        """
+        Apply one TD error through the eligibility trace: bump the current
+        state's trace, update every traced state, then decay all traces.
+
+        With lambda > 0 this one delta can update many states at once (every
+        state still in the trace), each scaled by its own eligibility. 
+        
+        If `log` (a list) is given, appends one dict per
+        updated state: {"state", "eligibility", "old_value", "new_value"}.
+        """
+        eligibility[state] = eligibility.get(state, 0.0) + 1.0
+        decay = self.gamma * self.lam
+        for traced_state in list(eligibility):
+            e = eligibility[traced_state]
+            old_value = self.state_value(context, traced_state)
+            new_value = old_value + self.alpha * delta * e
+            self.V[context][traced_state] = new_value
+            if log is not None:
+                log.append({
+                    "state": traced_state, "eligibility": e,
+                    "old_value": old_value, "new_value": new_value,
+                })
+            eligibility[traced_state] *= decay
+            if eligibility[traced_state] < 1e-6:
+                del eligibility[traced_state]
 
     def learn_path(self, path, reward, context, record=False):
         """
-        Walk a single path within one context, driving every active rule's
-        hooks in order. Reward is delivered at the terminal state
-        (path[-1]). Returns a list of per-event snapshots when record=True,
-        else None. Each snapshot (other than the initial one) carries an
-        "event" (an UpdateEvent) describing exactly what that snapshot
-        reflects -- one snapshot per event, so two rules firing on the same
-        step become two separate, sequential snapshots (matching how
-        TD(lambda)'s own bootstrap-then-reward split already works when
-        only one rule is active).
-        """
-        for rule in self.rules:
-            rule.on_trial_start(self, path, context)
+        Run a single TD(lambda) pass over a known path within one context.
 
+        Reward is delivered at the terminal state (path[-1]). Returns a list of
+        per-step snapshots when record=True, else None. Each snapshot (other
+        than the initial one) carries an "update" dict describing exactly the
+        TD update that produced it -- see apply_td_error's callers below for
+        the two possible "kind"s ("bootstrap" and "reward").
+        """
         history = []
         if record:
             init_snap = self.snapshot(path, 0)
-            init_snap["event"] = None
+            init_snap["update"] = None
             history.append(init_snap)
+
+        eligibility = {}
+        last_step = len(path) - 2  # index of the final transition
 
         for step in range(len(path) - 1):
             prev_hex = path[step - 1] if step > 0 else None
             cur_hex, next_hex = path[step], path[step + 1]
             state = self.state_key(prev_hex, cur_hex)
             next_state = self.state_key(cur_hex, next_hex)
-            is_terminal = step == len(path) - 2
 
-            for rule in self.rules:
-                events = rule.on_step(self, context, state, next_state, reward, is_terminal)
-                if record:
-                    for event in events:
-                        snap = self.snapshot(path, step + 1)
-                        snap["event"] = event
-                        history.append(snap)
+            # Every hex bootstraps from the next hex's value
+            # so we update the value of a hex once we leave it
+            # (we need to leave to know what the "next hex" is)
+            old_value = self.state_value(context, state)
+            next_value = self.state_value(context, next_state)
+            delta = self.gamma * next_value - old_value
+            log = [] if record else None
+            self.apply_td_error(context, state, delta, eligibility, log=log)
 
-        for rule in self.rules:
-            events = rule.on_trial_end(self, path, reward, context)
             if record:
-                for event in events:
-                    snap = self.snapshot(path, len(path) - 1)
-                    snap["event"] = event
+                snap = self.snapshot(path, step + 1)
+                snap["update"] = {
+                    "kind": "bootstrap",
+                    "state": state,
+                    "next_state": next_state,
+                    "alpha": self.alpha,
+                    "gamma": self.gamma,
+                    "lam": self.lam,
+                    "old_value": old_value,
+                    "next_value": next_value,
+                    "delta": delta,
+                    "new_value": self.state_value(context, state),
+                    "log": log,
+                }
+                history.append(snap)
+
+            if step == last_step:
+                # Reward is delivered on arrival at the port: run one more TD
+                # update treating that arrival as its own event, so the port's
+                # own value tracks the reward directly. This goes through the
+                # same eligibility trace as the update above, so under
+                # lambda > 0 the reward also propagates back to recently
+                # visited hexes, same as any other TD error.
+                old_port_value = self.state_value(context, next_state)
+                reward_delta = reward - old_port_value
+                reward_log = [] if record else None
+                self.apply_td_error(context, next_state, reward_delta, eligibility, log=reward_log)
+
+                if record:
+                    snap = self.snapshot(path, step + 1)
+                    snap["update"] = {
+                        "kind": "reward",
+                        "state": next_state,
+                        "alpha": self.alpha,
+                        "lam": self.lam,
+                        "reward": reward,
+                        "old_value": old_port_value,
+                        "delta": reward_delta,
+                        "new_value": self.state_value(context, next_state),
+                        "log": reward_log,
+                    }
                     history.append(snap)
 
         return history if record else None
@@ -382,17 +370,31 @@ class BaseHexLearner:
         return placeholder
 
     def process_trajectory(self, path, reward):
-        """Run one trial's rule updates along a single path."""
+        """
+        Run a TD(lambda) update along a single path.
+
+        Parameters
+        ----------
+        path : list of int
+            Sequence of hexes visited. With goal_conditioned=True, the start
+            port is taken from path[0] if it's a reward port, else a
+            placeholder (see resolve_context); ignored (and not required)
+            when goal_conditioned=False.
+        reward : float
+            Reward obtained at the terminal state (path[-1]).
+        """
         self.learn_path(path, reward, self.resolve_context(path))
 
     def process_trajectory_with_history(self, path, reward):
-        """Same as process_trajectory, but returns the per-event snapshot
-        history (see learn_path)."""
+        """
+        Same as process_trajectory, but returns a per-step snapshot of the
+        per-hex value tables (one entry per visited hex; see snapshot()).
+        """
         return self.learn_path(path, reward, self.resolve_context(path), record=True)
 
     def learn(self, trajectories, rewards, record=None):
         """
-        Run updates over a batch of externally-provided trajectories.
+        Run TD updates over a batch of externally-provided trajectories.
 
         Parameters
         ----------
@@ -406,8 +408,9 @@ class BaseHexLearner:
             as snapshot(); collapse one with snapshot_values()):
                 - None (default): no return value, just runs the updates.
                 - "trial": one snapshot per trial, taken after that trial's
-                  last event.
-                - "step": every event's snapshot, across every trial.
+                  update.
+                - "step": one snapshot per hex-step, across every trial (the
+                  full within-trial history, concatenated over the session).
 
         Returns
         -------
@@ -473,10 +476,9 @@ class BaseHexLearner:
         model's current parameters.
 
         Replays each trajectory, scoring the softmax probability of the hex
-        the rat actually stepped to (before that step's update), then runs
-        the ordinary rule updates so values evolve as the replay proceeds.
-        no_backtrack is never consulted here regardless of `junctions_only`
-        -- it only affects self-generated behavior in choose_action/simulate.
+        the rat actually stepped to (before that step's TD update), then runs
+        the ordinary TD(lambda) update so values evolve as the replay
+        proceeds.
 
         Parameters
         ----------
@@ -490,15 +492,20 @@ class BaseHexLearner:
             scored hex-to-hex move, in trajectory order: {"trial": index
             into trajectories/rewards, "entry": prev_hex (None at a trial's
             first step), "hex": cur_hex, "choice": next_hex, "probability":
-            p_choice, "probabilities": {neighbor: prob, ...}}.
+            p_choice, "probabilities": {neighbor: prob, ...}}. Combine
+            "entry"/"hex"/"choice" with core.get_hex_exit_direction() to
+            label each choice "left"/"right"/"back".
         junctions_only : bool, optional
             If True, restrict scoring to genuine binary choices: steps where
             the rat is at a real 3-way intersection (cur_hex has exactly 3
             graph-neighbors) and exits through one of the two non-backward
-            neighbors (left/right). A junction where the rat instead
-            backtracked, and every non-junction step, is skipped silently.
-            If False (default), every step is scored against ALL of cur_hex's
-            graph-neighbors, backward included.
+            neighbors (left/right) -- a Krausz 2023-style choice-point
+            analysis. A junction where the rat instead backtracked, and
+            every non-junction step, is skipped silently: not scored, no
+            entry in `choices`, no warning (backtracking is a real,
+            unremarkable option -- it's just outside this binary-choice
+            definition). If False (default), every step is scored against
+            ALL of cur_hex's graph-neighbors, backward included.
 
         Returns
         -------
@@ -560,87 +567,58 @@ class BaseHexLearner:
     @classmethod
     def fit_choices(cls, maze, reward_probs, trajectories, rewards,
                      alpha=None, gamma=None, lam=None, temperature=None,
-                     gamma_mb=None, a_T=None, a_mb=None,
-                     rules=None, junctions_only=False, **kwargs):
+                     junctions_only=False, **kwargs):
         """
-        Fit hyperparameters to maximize the likelihood of the rat's
-        hex-to-hex choices (not just reward outcomes).
+        Fit alpha, gamma, lam, and temperature to maximize the likelihood of
+        the rat's hex-to-hex choices (not just reward outcomes).
 
-        Which parameters are actually fit depends on which rule types are in
-        `rules`: alpha/lam only matter (and are only fit) if a TDLambdaRule
-        is present; gamma_mb/a_T/a_mb only matter (and are only fit) if a
-        ModelBasedRule is present. gamma and temperature are always
-        eligible, since gamma also affects prior-value discounting and
-        temperature always affects action-selection regardless of which
-        value-update rules are active. This avoids wasting the optimizer's
-        effort on a parameter that has literally zero effect on the
-        likelihood (e.g. fitting gamma_mb for a TD-only agent).
+        Uses L-BFGS-B to minimize choice_nll(). Any other constructor flags
+        (directional, goal_conditioned, priors, no_backtrack, ...) are held
+        fixed at the values passed via **kwargs.
 
         Parameters
         ----------
         maze, reward_probs : see __init__.
         trajectories : list of list of int
+            Each path [s0, s1, ..., s_terminal]. See resolve_context for how
+            the start port is determined when path[0] isn't one.
         rewards : list of float
+            Reward for each trajectory.
         alpha, gamma, lam, temperature : float or None
-            TDLambdaRule's parameters (gamma/temperature are general-purpose,
-            see above). Fix at the given value instead of fitting it; None
-            (default) fits it, if a relevant rule is present.
-        gamma_mb, a_T, a_mb : float or None
-            ModelBasedRule's parameters. Same fix-or-fit convention.
-        rules : list of UpdateRule or None
-            The rules to fit with. None (default) uses whichever rules the
-            class itself builds, so HexMazeTDLearner fits TD parameters and
-            KrauszDualLearner fits the model-based ones too; BaseHexLearner
-            requires them to be passed. If given, a fresh deep copy is built
-            for every candidate parameter set evaluated during optimization
-            (and for the final returned instance), so no rule's internal
-            state (e.g. ModelBasedRule's persistent T map) leaks between
-            evaluations.
+            Fix this parameter at the given value instead of fitting it (it's
+            excluded from the optimization entirely). None (default) fits it.
+            E.g. `fit_choices(..., lam=0.0)` fits alpha/gamma/temperature
+            with lam held fixed at 0 (pure TD(0)).
         junctions_only : bool, optional
-            Passed to choice_nll.
+            Passed to choice_nll -- see its docstring. Restricts fitting to
+            genuine binary (left/right) junction choices rather than every
+            hex-to-hex step.
         **kwargs
             Extra constructor flags held fixed during fitting (e.g.
             directional, goal_conditioned, priors, no_backtrack).
 
         Returns
         -------
-        BaseHexLearner subclass instance
-            Fresh instance built with the best-fit (and any fixed)
-            parameters (and the fixed **kwargs), carrying:
+        HexMazeTDLearnerOld
+            Fresh instance built with the best-fit (and any fixed) alpha/
+            gamma/lam/temperature (and the fixed **kwargs), carrying:
                 - choice_nll_    : choice NLL at optimum
                 - choice_bic_    : BIC, counting only the *fitted* params and
-                  the choices actually scored
+                  the choices actually scored (fewer than the number of
+                  hex-to-hex steps if junctions_only=True)
                 - choice_result_ : raw scipy OptimizeResult, or None if
-                  every parameter was fixed
-                - junctions_only_ : the junctions_only value used to fit
+                  every parameter was fixed (nothing to optimize)
+                - junctions_only_ : the junctions_only value used to fit,
+                  so a later choice_nll(..., record=True) call to inspect
+                  individual choices can reuse it without repeating it
         """
-        from .update_rules import TDLambdaRule, ModelBasedRule  # local import: avoids a cycle
-
-        # A subclass like HexMazeTDLearner sets its own rules, so ask an instance
-        # rather than assuming. BaseHexLearner itself requires `rules` to be passed.
-        resolved_rules = rules if rules is not None else cls(maze, reward_probs, **kwargs).rules
-        has_td = any(isinstance(rule, TDLambdaRule) for rule in resolved_rules)
-        has_mb = any(isinstance(rule, ModelBasedRule) for rule in resolved_rules)
-
-        candidates = {"gamma": gamma, "temperature": temperature}
-        if has_td:
-            candidates["alpha"] = alpha
-            candidates["lam"] = lam
-        if has_mb:
-            candidates["gamma_mb"] = gamma_mb
-            candidates["a_T"] = a_T
-            candidates["a_mb"] = a_mb
-
-        fixed = {name: value for name, value in candidates.items() if value is not None}
-        free_names = [name for name, value in candidates.items() if value is None]
+        fixed = {"alpha": alpha, "gamma": gamma, "lam": lam, "temperature": temperature}
+        free_names = [name for name, value in fixed.items() if value is None]
 
         def _build(free_values):
             params = dict(fixed)
             params.update(zip(free_names, free_values))
-            if rules is None:
-                # The class builds its own fresh rules on every call
-                return cls(maze, reward_probs, **params, **kwargs)
-            return cls(maze, reward_probs, rules=copy.deepcopy(rules), **params, **kwargs)
+            return cls(maze, reward_probs, **params, **kwargs)
 
         if free_names:
             x0 = [cls._FIT_PARAM_DEFAULTS[name][0] for name in free_names]
@@ -678,15 +656,14 @@ class BaseHexLearner:
 
     def simulate(self, start_state, n_trials=65, max_steps=200, record_history=False):
         """
-        Run n_trials of self-generated exploration with rule updates. Each
-        trial starts from the previous trial's terminal state. Returns a
-        list of {"path", "reward", "start_port"} dicts.
+        Run n_trials of self-generated exploration with TD updates. Each trial
+        starts from the previous trial's terminal state. Returns a list of
+        {"path", "reward", "start_port"} dicts.
 
-        When record_history=True, each result dict also carries a "history":
-        the per-event list of value snapshots (see snapshot()) captured as
-        the update(s) propagate along that trial's path. Use this to build
-        step-by-step learning animations (snapshot_values() collapses a
-        snapshot to {hex: value}).
+        When record_history=True, each result dict also carries a "history": the
+        per-step list of value snapshots (see snapshot()) captured as the TD
+        update propagates along that trial's path. Use this to build step-by-step
+        learning animations (snapshot_values() collapses a snapshot to {hex: value}).
         """
         results = []
         current_hex = start_state
@@ -710,9 +687,9 @@ class BaseHexLearner:
 
     def run_trial(self, start_hex, start_port, goal_hexes, max_steps, record=False):
         """
-        Roll out one trial under the current policy, then apply the rule updates.
+        Roll out one trial under the current policy, then apply a TD(lambda) update.
 
-        Returns (path, reward, history), where history is the per-event value
+        Returns (path, reward, history), where history is the per-step value
         snapshot list when record=True, else None.
         """
         context = self.context_for_port(start_port)
@@ -918,28 +895,81 @@ class BaseHexLearner:
             for hex in self.graph.nodes()
         }
 
-    #  Animation text
+    def filtered_update_log(self, update):
+        """
+        Log entries from an update dict with a real, displayable change
+        (>= 0.00005, i.e. not just "0.0000" after rounding -- covers both
+        negligible eligibility and negligible delta), sorted by eligibility
+        descending. Shared by format_update_text and animate_learning's
+        outline so the two always agree on which hexes actually changed.
+        """
+        if update is None:
+            return []
+        log = [row for row in update["log"] if abs(row["new_value"] - row["old_value"]) >= 0.00005]
+        log.sort(key=lambda row: -row["eligibility"])
+        return log
 
     def format_header_text(self, cur_hex, path_so_far=None):
         """Shared header line(s) for animate_learning's text box: the path
-        so far (optional) and which hex the rat is in."""
-        header = f"rat at hex {cur_hex}"
+        so far (optional) and current hyperparameters + which hex the rat
+        is in."""
+        header = (
+            f"rat at hex {cur_hex}    "
+            f"α={self.alpha:.3g}  γ={self.gamma:.3g}  λ={self.lam:.3g}  τ={self.temperature:.3g}"
+        )
         if path_so_far:
             header = f"path: {path_so_far}\n{header}"
         return header
 
-    def format_update_text(self, cur_hex, event, path_so_far=None):
+    def format_update_text(self, cur_hex, update, path_so_far=None, max_rows=6):
         """
         Multi-line diagnostic text for one animate_learning frame: the hex
-        path walked so far this trial, which hex the rat is in, and (if an
-        event just happened) that event's own description -- see
-        UpdateEvent.describe. Generic across every UpdateRule: this never
-        branches on which rule produced the event.
+        path walked so far this trial, current hyperparameters, which hex
+        the rat is in, and (if an update just happened) the shared TD error
+        (delta) for this step plus every state it updated through the
+        eligibility trace (see apply_td_error's `log`) -- with lambda > 0 a
+        single delta updates many states at once, each scaled by its own
+        eligibility, not just the one that triggered it. Rows with no real
+        eligibility or no delta (so no actual change) are dropped; the rest
+        are sorted by eligibility (most-affected first) and capped at
+        `max_rows`, with a summary line for the rest.
         """
         header = self.format_header_text(cur_hex, path_so_far)
-        if event is None:
+        if update is None:
             return header + "\n(no update yet this trial)"
-        return header + "\n" + event.describe()
+
+        label = self.format_state(update["state"])
+        delta, old = update["delta"], update["old_value"]
+        decay = self.gamma * self.lam
+        formula_line = f"V(s) ← V(s) + α·δ·e(s)   (e decays ×γλ={decay:.3g} per step back)"
+
+        if update["kind"] == "bootstrap":
+            next_label = self.format_state(update["next_state"])
+            gamma, next_value = update["gamma"], update["next_value"]
+            delta_eq = (
+                f"δ = γ·V({next_label}) − V({label})\n"
+                f"δ = {gamma:.3g}·{next_value:.4f} − {old:.4f} = {delta:.4f}"
+            )
+        else:  # "reward"
+            reward = update["reward"]
+            delta_eq = (
+                f"δ = reward − V({label})\n"
+                f"δ = {reward:.3g} − {old:.4f} = {delta:.4f}"
+            )
+
+        log = self.filtered_update_log(update)
+        rows = [
+            f"  V({self.format_state(row['state'])})  e={row['eligibility']:.3f}  "
+            f"{row['old_value']:.4f} → {row['new_value']:.4f}"
+            for row in log[:max_rows]
+        ]
+        if not rows:
+            rows = ["  (no visible change)"]
+        elif len(log) > max_rows:
+            rows.append(f"  ... +{len(log) - max_rows} more (smaller eligibility)")
+
+        body = f"{formula_line}\n{delta_eq}\n" + "\n".join(rows)
+        return header + "\n" + body
 
     def format_junction_text(self, junction_hex, info):
         """
@@ -957,8 +987,6 @@ class BaseHexLearner:
                 f"  hex {hex}  V={info['values'][hex]:.4f}  p={info['probabilities'][hex]:.3f}{marker}"
             )
         return "\n".join(lines)
-
-    #  Animation
 
     def animate_learning(
         self,
@@ -983,17 +1011,17 @@ class BaseHexLearner:
         **plot_kwargs,
     ):
         """
-        Animate learning, one frame per rule event (see learn_path).
+        Animate TD(lambda) learning, one frame per hex transition.
 
         Runs learn_path over each (path, reward) trial in order -- exactly as
-        learn() would -- capturing a value snapshot after every event any
-        active rule fires. Each frame colors the maze by hex value (see
+        learn() would -- capturing a value snapshot after every hex
+        transition. Each frame colors the maze by hex value (see
         snapshot_values), places the rat at its current hex facing the
         direction it came from, and (on a trial's last frame, when it ends at
         a real reward port) shows a reward droplet or no-reward X there.
 
-        This runs real updates on self as it builds frames, so call reset()
-        first for a from-scratch replay.
+        This runs real TD updates on self as it builds frames, so call
+        reset() first for a from-scratch replay.
 
         Note: this bumps the ``animation.embed_limit`` rcParam (used by
         ``to_jshtml()``) up to at least 512 MB. The matplotlib default is
@@ -1010,25 +1038,37 @@ class BaseHexLearner:
             decrease in one context if another context's value is higher.
             A port: always that one fixed context's table.
             "trial": whichever context the currently-animated trial actually
-            belongs to. Ignored when panels=True.
+            belongs to, so the coloring follows the rat's own trip instead of
+            a fixed table (drops from an omission are visible when they
+            happen). Ignored when panels=True.
         panels : bool
             If True, draw one subplot per context (self.contexts) side by
-            side, each always showing that context's own values. The rat and
-            reward marker are only drawn on the panel for the trial's own
-            context. `start_port` and `ax` are ignored in this mode.
+            side, each always showing that context's own values -- so all
+            goal-conditioned tables are visible at once instead of collapsed
+            into one view. The rat and reward marker are only drawn on the
+            panel for the trial's own context. `start_port` and `ax` are
+            ignored in this mode (a fresh figure is created).
         show_updates : bool
             If True (default), outline whichever hex(es) actually had their
-            value change on this event (see UpdateEvent.changed), in the
-            event's own color if it set one, else `update_color`.
+            value change on this step -- i.e. a real TD update happened
+            there, in the trial's own active context (this is independent of
+            what's being displayed: with start_port=None/a fixed port, an
+            outlined hex's *displayed* color may not visibly move if a
+            different context dominates the max, but the outline still shows
+            where the real update occurred). In panels mode, only the active
+            context's panel gets outlines, since it's the only table
+            actually changing that step.
         update_color : str
-            Default outline color for updated hexes when an event doesn't
-            specify its own. Defaults to 'red'.
+            Outline color for updated hexes (see outline_hexes/outline_colors
+            in plot_hex_maze). Defaults to 'red'.
         show_choices : bool
             If True (default), whenever the *previous* step was a real
-            3-way junction choice (see junction_choice_info, "back" always
+            3-way junction choice (see junction_choice_info -- same
+            definition as choice_nll(junctions_only=True), "back" always
             excluded regardless of no_backtrack), outline the two candidate
             hexes and print their retrieved values and choice probabilities,
-            with the one actually taken marked.
+            with the one actually taken marked. Silent (no info) on
+            non-junction steps.
         choice_color : str
             Outline color for the two junction-candidate hexes. Defaults to
             'yellow'.
@@ -1037,11 +1077,12 @@ class BaseHexLearner:
             port, step within the trial, and (once known) the reward outcome.
         show_path : bool
             If True (default), add a line above the trial info showing the
-            hex-by-hex path walked so far this trial.
+            hex-by-hex path walked so far this trial (e.g. "path: 1 → 4 → 6").
         show_equation : bool
-            If True (default), draw a text box each frame with which hex the
-            rat is in and the firing event's own description (see
-            format_update_text).
+            If True (default), draw a text box each frame with the current
+            hyperparameters (alpha, gamma, lambda, temperature), which hex
+            the rat is in, and the TD update equation for that step in both
+            symbolic and substituted-numbers form (see format_update_text).
         colormap, vmin, vmax, show_hex_labels, show_barriers, ax, **plot_kwargs :
             Forwarded to plot_hex_maze.
         interval : int
@@ -1092,9 +1133,9 @@ class BaseHexLearner:
             history = self.learn_path(path, reward, context, record=True)
             last_step = len(history) - 1
             show_reward = path[-1] in REWARD_PORTS
-            n_steps = len(path) - 1  # real hex-to-hex transitions (extra
-            # end-of-step/end-of-trial events land on the same step index,
-            # so this is capped rather than counted)
+            n_steps = len(path) - 1  # real hex-to-hex transitions (the terminal
+            # step's reward event is split into an extra same-position frame,
+            # not an extra transition, so this is capped rather than counted)
             last_hex, last_rat_from = None, None
             for step_index, snap in enumerate(history):
                 cur_hex = snap["state"]
@@ -1121,7 +1162,7 @@ class BaseHexLearner:
                             "rat_from": junction_entry,
                             "context": context,
                             "values": values_for(history[step_index - 1]),
-                            "changed_hexes": {},
+                            "changed_hexes": set(),
                             "junction_candidates": set(junction_info["candidates"]),
                             "title": trial_title(step_label - 1, "  (deciding)"),
                             "equation_text": decision_text,
@@ -1134,26 +1175,27 @@ class BaseHexLearner:
                 if step_index == 0:
                     rat_from = None
                 elif cur_hex == last_hex:
-                    # Same physical hex as the previous snapshot (an
-                    # end-of-step/end-of-trial event's extra frame) -- the
-                    # rat hasn't moved, so keep its previous facing.
+                    # Same physical hex as the previous snapshot (the reward
+                    # event's extra frame at the terminal step) -- the rat
+                    # hasn't moved, so keep its previous facing.
                     rat_from = last_rat_from
                 else:
                     rat_from = last_hex
                 last_hex, last_rat_from = cur_hex, rat_from
 
-                event = snap.get("event")
-                changed_hexes = {}
-                if show_updates and event is not None:
+                changed_hexes = set()
+                if show_updates:
+                    # Derived from the same filtered log used in the equation
+                    # text, so the outline always matches what's printed.
                     changed_hexes = {
-                        state: (event.color, entry[2] if len(entry) > 2 else 1.0)
-                        for state, entry in event.changed.items()
+                        self.hex_of_state(row["state"])
+                        for row in self.filtered_update_log(snap.get("update"))
                     }
 
                 is_reward_step = step_index == last_step and show_reward
                 title = trial_title(step_label, "  →  " + ("rewarded" if reward else "omission") if is_reward_step else "")
                 equation_text = (
-                    self.format_update_text(cur_hex, event, path_so_far=path_line(step_label))
+                    self.format_update_text(cur_hex, snap.get("update"), path_so_far=path_line(step_label))
                     if show_equation else None
                 )
 
@@ -1177,9 +1219,10 @@ class BaseHexLearner:
 
         owns_fig = panels or ax is None
         # Reserve dedicated space below the maze for the equation box when we
-        # own the figure, so it doesn't overlap the plotted hexes. If the
-        # caller passed their own `ax`, we can't safely resize their
-        # figure/layout, so the text falls back to drawing inside the axes.
+        # own the figure, so it doesn't overlap the plotted hexes (it can get
+        # to ~10 lines with lambda > 0's multi-hex log). If the caller passed
+        # their own `ax`, we can't safely resize their figure/layout, so the
+        # text falls back to drawing inside the axes bounds in that case.
         extra_height = 2.6 if ((show_equation or show_choices) and owns_fig) else 0
         if panels:
             fig, axes = plt.subplots(1, len(self.contexts), figsize=(6 * len(self.contexts), 6 + extra_height))
@@ -1219,27 +1262,13 @@ class BaseHexLearner:
             )
 
         def build_outlines(frame):
-            """(outline_hexes, outline_colors) lists. Each changed hex gets
-            its own single-hex group, shaded along its event's color family
-            (e.g. Reds/Greens) by its weight (TD's eligibility, model-based's
-            T) normalized against the max weight among hexes of that same
-            color in this frame -- so the eligibility/memory-trace decay is
-            visible directly as an outline gradient, not a flat color. The
-            junction-candidate group (`choice_color`) stays a single flat
-            color, since it's always exactly two hexes with no decay to show."""
-            by_color = {}
-            for state, (color, weight) in frame["changed_hexes"].items():
-                by_color.setdefault(color or update_color, []).append((self.hex_of_state(state), weight))
-
+            """(outline_hexes, outline_colors) lists combining the TD-update
+            group (update_color) and the junction-candidate group
+            (choice_color), or (None, None) if neither applies."""
             groups, colors = [], []
-            for color_name, entries in by_color.items():
-                cmap = plt.get_cmap(_COLOR_TO_CMAP.get(color_name, "Greys"))
-                max_weight = max(weight for _, weight in entries) or 1.0
-                for hex, weight in entries:
-                    shade = 0.35 + 0.65 * min(weight / max_weight, 1.0)
-                    groups.append({hex})
-                    colors.append(cmap(shade))
-
+            if frame["changed_hexes"]:
+                groups.append(frame["changed_hexes"])
+                colors.append(update_color)
             if frame["junction_candidates"]:
                 groups.append(frame["junction_candidates"])
                 colors.append(choice_color)
@@ -1302,19 +1331,3 @@ class BaseHexLearner:
         if owns_fig:
             plt.close(fig)
         return anim
-
-
-class HexMazeAgent(BaseHexLearner):
-    """
-    Concrete hex-maze learner with a configurable list of value-update
-    rules (see module docstring and update_rules.py). Construct directly
-    when you want more than plain TD(lambda), e.g.:
-
-        HexMazeAgent(
-            maze, reward_probs,
-            rules=[TDLambdaRule(), ModelBasedRule()],
-            alpha=0.3, gamma=0.95, lam=0.3,      # TDLambdaRule reads these
-            gamma_mb=0.8, a_T=0.1, a_mb=0.05,    # ModelBasedRule reads these
-            goal_conditioned=True,
-        )
-    """
