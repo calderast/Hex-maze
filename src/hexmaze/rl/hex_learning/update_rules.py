@@ -160,6 +160,11 @@ class ModelBasedRule(UpdateRule):
         self.T = {}   # {port: {state: weight}}, persists across trials
         self.m = {}   # {state: trace}, reset every trial
 
+    def on_reset(self, learner):
+        """Clear the learned port-to-state map and the current trial's trace."""
+        self.T = {}
+        self.m = {}
+
     def _gamma_mb(self, learner):
         return getattr(learner, "gamma_mb", self.DEFAULT_GAMMA_MB)
 
@@ -186,7 +191,7 @@ class ModelBasedRule(UpdateRule):
     def on_trial_start(self, learner, path, context):
         self.m = {}
 
-    def on_graph_changed(self, learner):
+    def on_maze_changed(self, learner):
         """Drop T/m entries for states no longer in the graph (e.g. a hex
         that's now a barrier, or -- if directional -- an edge that no
         longer exists). Without this, a barrier change leaves T holding
@@ -286,6 +291,10 @@ class SWRRule(UpdateRule):
 
     def __init__(self, swr_hexes=None):
         self.swr_hexes = swr_hexes
+        self.trial_index = -1
+
+    def on_reset(self, learner):
+        """Rewind to the first trial, so the replay list lines up again."""
         self.trial_index = -1
 
     def _a_swr(self, learner):

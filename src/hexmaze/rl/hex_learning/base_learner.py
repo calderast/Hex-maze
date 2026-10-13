@@ -95,13 +95,22 @@ class UpdateRule:
         the completed path). Returns a list of UpdateEvent."""
         return []
 
-    def on_graph_changed(self, learner):
+    def on_maze_changed(self, learner):
         """Called once after learner.set_graph() swaps the maze (e.g. a
         barrier moved). A rule with its own persistent, hex-keyed state
         outside of learner.V (e.g. ModelBasedRule's T map) should prune
         entries referencing hexes no longer in learner.graph here -- V
         itself is already cleaned up by set_graph before this runs. No
         return value."""
+
+    def on_reset(self, learner):
+        """
+        Called when the learner's value tables are cleared, including once at
+        construction. Rules holding state that is learned alongside V (e.g.
+        ModelBasedRule's T map, SWRRule's trial counter) should clear it here,
+        so a reset learner really does start from scratch.
+        """
+        pass
 
 
 class BaseHexLearner:
@@ -205,6 +214,9 @@ class BaseHexLearner:
         # Only the session's very first trial may lack a real start port.
         self._is_first_trial = True
 
+        for rule in self.rules:
+            rule.on_reset(self)
+
     def build_prior_table(self, priors):
         """Precompute {context: {hex: prior value}} (or None for all-zeros)."""
         if priors is None:
@@ -261,7 +273,7 @@ class BaseHexLearner:
         format (barrier set, string, networkx graph, etc.), converted via
         ``maze_to_graph``. States are lazily re-created against the new graph;
         stale states are dropped from V, and each rule gets a chance to prune
-        its own persistent state too (see UpdateRule.on_graph_changed).
+        its own persistent state too (see UpdateRule.on_maze_changed).
         """
         self.graph = maze_to_graph(new_maze)
         valid = set(self.graph.nodes())
@@ -270,7 +282,7 @@ class BaseHexLearner:
                 if self.hex_of_state(state) not in valid:
                     del self.V[context][state]
         for rule in self.rules:
-            rule.on_graph_changed(self)
+            rule.on_maze_changed(self)
 
     #  State helpers
 
