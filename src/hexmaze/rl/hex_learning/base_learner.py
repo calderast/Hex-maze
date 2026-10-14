@@ -4,24 +4,16 @@ base_learner.py
 Extensible hex-maze value-learning agent: a single learner class whose
 value-update behavior is supplied by a list of independent, combinable
 `UpdateRule` objects (see update_rules.py for concrete rules, e.g.
-TDLambdaRule, ModelBasedRule), rather than being hard-coded into one
-monolithic class. "TD only" vs "TD + model-based" vs "TD + model-based +
-sweeps" is just which rule objects are in `rules` -- not a class hierarchy.
+TDLambdaRule, ModelBasedRule)
 
-This class does not touch or depend on td_learner.py's HexMazeTDLearner in
-any way; the two are independent implementations. HexMazeTDLearner remains
-the simple, single-purpose TD(lambda) class; HexMazeAgent here is for anyone
-who wants more than one value-update mechanism active at once.
-
-Each UpdateRule implements three hooks called while a trial's path is
+Each UpdateRule implements three hooks called while a trial's hex path is
 walked: `on_trial_start` (reset per-trial state), `on_step` (called once per
-real hex-to-hex transition, in order), and `on_trial_end` (called once after
-the last step, for end-of-trial-only updates). Each hook returns a list of
-UpdateEvent -- usually 0 or 1 -- describing what changed and how to render
-it, which is what makes animate_learning generic across rules: it never
-branches on which rule produced an event, it just reads `event.changed`
-(for outlining) and calls `event.describe()` (for the text box), with each
-rule owning the specifics of its own story.
+hex transition), and `on_trial_end` (called once after the last step). 
+Each hook returns a list of UpdateEvent (usually 0 or 1) describing what 
+changed and how to render it, which is what makes animate_learning generic 
+across rules: it never branches on which rule produced an event, 
+it just reads `event.changed` (for outlining) and calls `event.describe()` 
+(for the text box).
 """
 
 import copy
@@ -60,8 +52,7 @@ class UpdateEvent:
     rule's own notion of "how strongly was this state included" is (TD's
     eligibility trace, model-based's T) -- animate_learning normalizes it
     per-event and uses it to shade each hex's outline along `color`'s
-    colormap, so eligibility/memory-trace decay is visible directly rather
-    than every touched hex getting an identical flat outline. `describe` is
+    colormap, so eligibility/memory-trace decay is visible. `describe` is
     a zero-arg callable returning this event's own text block (no shared
     header -- the base class prepends "rat at hex X" once per frame).
     `color` is the outline color family for `changed`'s hexes; None means
@@ -74,41 +65,42 @@ class UpdateEvent:
 
 class UpdateRule:
     """
-    Base interface for a pluggable value-update mechanism. Default hooks are
-    no-ops (return no events, touch no state) so a rule only needs to
+    Base interface for a pluggable value-update mechanism (so we can combine e.g.
+    TD(0) with a SWR update, or a memory trace based update as in Tim's paper). 
+    Default hooks are no-ops (return no events, touch no state) so a rule only needs to
     implement whichever hooks are relevant to it.
     """
 
     def on_trial_start(self, learner, path, context):
-        """Called once before a trial's steps are walked (e.g. reset a
-        per-trial eligibility/memory trace). No return value."""
+        """Called once before a trial's steps are walked 
+        (e.g. to reset a per-trial eligibility/memory trace). 
+        No return value."""
 
     def on_step(self, learner, context, state, next_state, reward, is_terminal):
-        """Called once per real hex-to-hex transition, in path order.
-        `is_terminal` is True on the transition into the trial's final hex
-        (where reward is delivered). Returns a list of UpdateEvent."""
+        """Called once per hex transition, in path order.
+        `is_terminal` is True on the transition into the reward port hex. 
+        Returns a list of UpdateEvent."""
         return []
 
     def on_trial_end(self, learner, path, reward, context):
-        """Called once after the last step, for updates that only make
-        sense once the whole trial is known (e.g. a port-entry sweep over
-        the completed path). Returns a list of UpdateEvent."""
+        """Called once after the last step for updates that happen on
+        trial end (e.g. a SWR or model-based update).
+        Returns a list of UpdateEvent."""
         return []
 
     def on_maze_changed(self, learner):
-        """Called once after learner.set_graph() swaps the maze (e.g. a
-        barrier moved). A rule with its own persistent, hex-keyed state
-        outside of learner.V (e.g. ModelBasedRule's T map) should prune
-        entries referencing hexes no longer in learner.graph here -- V
-        itself is already cleaned up by set_graph before this runs. No
-        return value."""
+        """Called once after learner.set_graph() swaps the maze (aka a
+        barrier change). A rule with its own persistent, hex-keyed state
+        outside of learner.V (e.g. ModelBasedRule's T map) should remove
+        entries referencing hexes no longer in learner.graph here. The value
+        table (V) is already cleaned up by set_graph before this runs.
+        No return value."""
 
     def on_reset(self, learner):
         """
         Called when the learner's value tables are cleared, including once at
         construction. Rules holding state that is learned alongside V (e.g.
-        ModelBasedRule's T map, SWRRule's trial counter) should clear it here,
-        so a reset learner really does start from scratch.
+        ModelBasedRule's T map, SWRRule's trial counter) should clear it here.
         """
         pass
 
@@ -771,9 +763,23 @@ class BaseHexLearner:
         probabilities = self.softmax_probabilities(hex, neighbors, context)
         return int(np.random.choice(neighbors, p=probabilities))
 
+    def action_values(self, hex, neighbors, context):
+        """
+        The value compared for each candidate move: the value of the state the
+        agent would reach by moving to that neighbor.
+
+        This is the single place where "what the agent consults when deciding"
+        is defined, and everything that turns values into choices goes through
+        it -- the policy, the simulated agent, and the choice likelihood -- so
+        they cannot disagree.
+        """
+        return np.array(
+            [self.state_value(context, self.state_key(hex, neighbor)) for neighbor in neighbors]
+        )
+
     def softmax_probabilities(self, hex, neighbors, context):
-        """Softmax over the value of the state reached by moving to each neighbor."""
-        values = np.array([self.state_value(context, self.state_key(hex, neighbor)) for neighbor in neighbors])
+        """Softmax over action_values."""
+        values = self.action_values(hex, neighbors, context)
         scaled = values / self.temperature
         scaled -= scaled.max()
         exponentiated = np.exp(scaled)
@@ -1118,11 +1124,10 @@ class BaseHexLearner:
                 moved = not (step_index > 0 and cur_hex == last_hex)
                 step_label = min(step_index, n_steps)
 
-                # Decision frame: inserted BEFORE a real move out of a
-                # genuine 3-way junction, so the choice_color highlight
-                # appears while the rat is still AT the junction deciding,
-                # not retroactively once it's already at the chosen hex. Uses
-                # the *pre*-move snapshot's values (history[step_index-1]),
+                # Decision frame: inserted before a move out of a
+                # 3-way junction, so the choice_color highlight
+                # appears while the rat is still at the junction hex deciding.
+                # Uses the pre-move snapshot's values (history[step_index-1]),
                 # matching the state the choice was actually made from.
                 if show_choices and moved and step_label >= 1:
                     junction_hex = path[step_label - 1]
@@ -1145,15 +1150,13 @@ class BaseHexLearner:
                             "reward": None,
                         })
 
-                # Arrival frame: the rat has now moved to cur_hex. No
-                # junction highlight here -- that belonged to the decision
-                # frame above, since the choice has already been made.
+                # Arrival frame: the rat has now moved to cur_hex.
                 if step_index == 0:
                     rat_from = None
                 elif cur_hex == last_hex:
                     # Same physical hex as the previous snapshot (an
-                    # end-of-step/end-of-trial event's extra frame) -- the
-                    # rat hasn't moved, so keep its previous facing.
+                    # end-of-step/end-of-trial event's extra frame).
+                    # The rat hasn't moved, so keep its previous facing.
                     rat_from = last_rat_from
                 else:
                     rat_from = last_hex
@@ -1240,10 +1243,10 @@ class BaseHexLearner:
             its own single-hex group, shaded along its event's color family
             (e.g. Reds/Greens) by its weight (TD's eligibility, model-based's
             T) normalized against the max weight among hexes of that same
-            color in this frame -- so the eligibility/memory-trace decay is
-            visible directly as an outline gradient, not a flat color. The
-            junction-candidate group (`choice_color`) stays a single flat
-            color, since it's always exactly two hexes with no decay to show."""
+            color in this frame, so the eligibility/memory-trace decay is
+            visible directly as an outline gradient. The junction-candidate group 
+            (`choice_color`) stays a single flat color, since it's always exactly 
+            two hexes with no decay to show."""
             by_color = {}
             for state, (color, weight) in frame["changed_hexes"].items():
                 by_color.setdefault(color or update_color, []).append((self.hex_of_state(state), weight))

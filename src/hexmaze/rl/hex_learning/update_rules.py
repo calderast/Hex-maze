@@ -14,21 +14,21 @@ from .base_learner import UpdateRule, UpdateEvent
 
 class TDLambdaRule(UpdateRule):
     """
-    TD(lambda) with an eligibility trace -- the same mechanism as
-    td_learner.HexMazeTDLearner, reimplemented against the UpdateRule
-    interface. Reads `learner.alpha` (default 0.3), `learner.gamma`
-    (base-class default 0.95), `learner.lam` (default 0.0) -- alpha/lam
-    fall back to these defaults if not passed to the learner's constructor,
-    matching HexMazeTDLearner's own defaults.
+    TD(lambda) with an eligibility trace.
+
+    Reads params:
+    `learner.alpha` (default 0.3), 
+    `learner.gamma` (base-class default 0.95), 
+    `learner.lam` (default 0.0)
 
     On every transition, bootstraps the pre-transition hex from the next
-    hex's value. On the terminal transition, additionally runs a second,
-    separate update treating the port's own arrival as its own event, so
-    the port's value tracks the reward directly and (on the very first
-    reward there) only the port itself changes -- the pre-terminal hex only
-    catches up once the port already carries value from an earlier visit.
-    Both updates go through the same eligibility trace, so under lambda > 0
-    a single delta can update many recently-visited states at once.
+    hex's value. On the terminal transition (when the rat reaches the port hex), 
+    additionally runs a second, separate update treating reward/omission as its 
+    own event, so the port hex's value tracks the reward directly.
+    
+    Both updates (on hex transition and reward delivery) go through the 
+    same eligibility trace, so under lambda > 0 a single delta can update 
+    many recently-visited states at once.
     """
 
     DEFAULT_ALPHA = 0.3
@@ -69,9 +69,9 @@ class TDLambdaRule(UpdateRule):
         return events
 
     def _apply_td_error(self, learner, context, state, delta, log):
-        """Bump `state`'s trace, update every traced state, then decay all
-        traces. With lambda > 0 one delta can update many states at once,
-        each scaled by its own eligibility -- not just `state`."""
+        """Bump `state`'s trace, update every traced state, then decay all traces. 
+        With lambda > 0 one delta can update many states at once,
+        each scaled by its own eligibility."""
         self._eligibility[state] = self._eligibility.get(state, 0.0) + 1.0
         decay = learner.gamma * self._lam(learner)
         for traced_state in list(self._eligibility):
@@ -136,9 +136,11 @@ class ModelBasedRule(UpdateRule):
     Model-based port-entry update (Krausz et al.): on reaching a reward
     port, sweeps a value update over every state on paths that have led
     into that port, weighted by a persistent, recency-averaged map T
-    learned online. Reads `learner.gamma_mb` (default 0.9), `learner.a_T`
-    (default 0.1), `learner.a_mb` (default 0.1) -- each falls back to its
-    default if not passed to the learner's constructor.
+    learned online. 
+    Reads params:
+    `learner.gamma_mb` (default 0.9)
+    `learner.a_T` (default 0.1)
+    `learner.a_mb` (default 0.1)
 
         m(state) <- gamma_mb * m(state) for all states      [decay, every step]
         m(state_t) <- 1                                     [replacing trace]
@@ -147,9 +149,8 @@ class ModelBasedRule(UpdateRule):
 
         V(state) <- V(state) + a_mb * T(port, state) * (R - V(state))   [on port entry]
 
-    `m` (the current trial's memory trace) resets to empty every trial. `T`
-    (indexed by *destination* port -- the trial's path[-1] -- not by
-    `context`, which is keyed by *start* port) persists across trials.
+    `m` (the current trial's memory trace) resets to empty every trial. 
+    `T` (indexed by destination port, aka the trial's path[-1]) persists across trials.
     """
 
     DEFAULT_GAMMA_MB = 0.9
@@ -192,13 +193,9 @@ class ModelBasedRule(UpdateRule):
         self.m = {}
 
     def on_maze_changed(self, learner):
-        """Drop T/m entries for states no longer in the graph (e.g. a hex
-        that's now a barrier, or -- if directional -- an edge that no
-        longer exists). Without this, a barrier change leaves T holding
-        stale weights for hexes that are gone, which just sit as dead
-        (never read again) entries rather than causing wrong behavior --
-        but they'd resurface with a stale weight if that barrier ever moves
-        back, so prune them properly."""
+        """Drop T/m entries for states no longer in the graph 
+        (e.g. a hex that's now a barrier, or if directional, 
+        an edge that no longer exists)."""
         valid = set(self._all_states(learner))
         for port_map in self.T.values():
             for state in list(port_map):
@@ -267,7 +264,7 @@ class ModelBasedRule(UpdateRule):
 
 class SWRRule(UpdateRule):
     """
-    Sharp-wave-ripple replay update -- an alternative to ModelBasedRule that
+    Sharp-wave-ripple replay update: an alternative to ModelBasedRule that
     sweeps an explicit list of hexes instead of a learned memory trace.
 
     On arrival at a reward port, every hex in that trial's replay list is
