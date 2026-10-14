@@ -53,12 +53,16 @@ class TDLambdaRule(UpdateRule):
     DEFAULT_LAM = 0.0
 
     def _alpha(self, learner):
+        """The learning rate, from the learner if it was given one."""
         return getattr(learner, "alpha", self.DEFAULT_ALPHA)
 
     def _lam(self, learner):
+        """The eligibility trace decay, from the learner if it was given one."""
         return getattr(learner, "lam", self.DEFAULT_LAM)
 
     def on_trial_start(self, learner, path, context):
+        """Start the trial with an empty eligibility trace, so credit for this
+        trial's reward reaches only hexes visited during this trial."""
         self._eligibility = {}
 
     def on_step(self, learner, context, state, next_state, reward, is_terminal):
@@ -94,36 +98,98 @@ class TDLambdaRule(UpdateRule):
     def _apply_td_error(self, learner, context, state, delta, log):
         """Bump `state`'s trace, update every traced state, then decay all traces. 
         With lambda > 0 one delta can update many states at once,
-        each scaled by its own eligibility."""
+        each scaled by its own eligibility.
+
+        Parameters:
+            learner (BaseHexLearner): The learner whose value table is updated
+            context (int or None): Which value table to write into, meaning the
+                port this trial started from, or None when the learner keeps a
+                single shared table
+            state (int or tuple): The state this prediction error belongs to,
+                whose eligibility is bumped before the update
+            delta (float): The prediction error to distribute across traced states
+            log (list): Collects one dict per state updated, for display
+
+        Returns:
+            None. `learner.V` and `log` are updated in place
+        """
+        # Visiting a state makes it eligible for credit. Adding to the existing
+        # eligibility (rather than overwriting) means a state visited twice in
+        # one trial carries more credit than a state visited once.
         self._eligibility[state] = self._eligibility.get(state, 0.0) + 1.0
+
+        # How much eligibility survives one step backward in space. gamma
+        # discounts by space and lam sets how far credit reaches, so at lam = 0
+        # this is 0 and only the state just visited is updated.
         decay = learner.gamma * self._lam(learner)
+
+        # Walking a copy of the keys, since states are dropped from the trace below
         for traced_state in list(self._eligibility):
+            # How eligible this state is for the current prediction error
             e = self._eligibility[traced_state]
+
+            # Every eligible state moves a share of the prediction error,
+            # scaled by its own eligibility:
+            #     V(state) <- V(state) + alpha * delta * e(state)
             old_value = learner.state_value(context, traced_state)
             new_value = old_value + self._alpha(learner) * delta * e
             learner.V[context][traced_state] = new_value
+
+            # Record what moved, so the update can be displayed afterward
             log.append({
                 "state": traced_state, "eligibility": e,
                 "old_value": old_value, "new_value": new_value,
             })
+
+            # Decay this state's eligibility by one step, so the further back it
+            # was visited, the smaller its share of the next prediction error
             self._eligibility[traced_state] *= decay
+
+            # Once a state's eligibility is this small it can no longer change a
+            # value by a visible amount, so it is dropped to keep the trace short
             if self._eligibility[traced_state] < 1e-6:
                 del self._eligibility[traced_state]
 
     def _make_event(self, learner, kind, **info):
+        """
+        Package one prediction error and the states it moved into an
+        UpdateEvent, so it can be outlined on the maze and written out as text.
+
+        Parameters:
+            learner (BaseHexLearner): The learner the update was applied to
+            kind (str): "bootstrap" for a hex-to-hex transition, or "reward" for
+                the update at a reward port, which changes the equation shown
+            **info: The quantities this update was computed from (state,
+                old_value, delta, log, and for each kind the next state and its
+                value, or the reward delivered)
+
+        Returns:
+            UpdateEvent: The states that moved and how to describe the update
+        """
+        # Keep only states whose value moved by at least 0.00005, which is the
+        # smallest change still visible once values are rounded for display
         log = info["log"]
         filtered = sorted(
             (row for row in log if abs(row["new_value"] - row["old_value"]) >= 0.00005),
-            key=lambda row: -row["eligibility"],
+            key=lambda row: -row["eligibility"],   # most eligible states first
         )
+
+        # Eligibility is carried alongside each change so the animation can
+        # shade a hex's outline by how much credit it received
         changed = {row["state"]: (row["old_value"], row["new_value"], row["eligibility"]) for row in filtered}
 
+        # Built as a function so the text is only assembled if it gets displayed.
+        # The quantities are captured as defaults so each event keeps its own.
         def describe(filtered=filtered, kind=kind, info=info):
             label = learner.format_state(info["state"])
             old, delta = info["old_value"], info["delta"]
             decay = learner.gamma * self._lam(learner)
+
+            # The update rule itself, shown once at the top of the text block
             formula_line = f"V(s) ← V(s) + α·δ·e(s)   (e decays ×γλ={decay:.3g} per step back)"
 
+            # Where the prediction error came from: the value of the hex just
+            # entered, or the reward delivered at the port
             if kind == "bootstrap":
                 next_label = learner.format_state(info["next_state"])
                 next_value = info["next_value"]
@@ -138,6 +204,7 @@ class TDLambdaRule(UpdateRule):
                     f"δ = {reward:.3g} − {old:.4f} = {delta:.4f}"
                 )
 
+            # One line per state that moved, with the deepest traces truncated
             max_rows = 6
             rows = [
                 f"  V({learner.format_state(row['state'])})  e={row['eligibility']:.3f}  "
@@ -190,12 +257,15 @@ class ModelBasedRule(UpdateRule):
         self.m = {}
 
     def _gamma_mb(self, learner):
+        """How much of the memory trace survives each step, from the learner."""
         return getattr(learner, "gamma_mb", self.DEFAULT_GAMMA_MB)
 
     def _a_t(self, learner):
+        """The learning rate for the port-to-state map T, from the learner."""
         return getattr(learner, "a_T", self.DEFAULT_A_T)
 
     def _a_mb(self, learner):
+        """The learning rate for the value sweep at a port, from the learner."""
         return getattr(learner, "a_mb", self.DEFAULT_A_MB)
 
     def _all_states(self, learner):
@@ -215,12 +285,17 @@ class ModelBasedRule(UpdateRule):
         ]
 
     def on_trial_start(self, learner, path, context):
+        """Start the trial with an empty memory trace, so the map records only
+        where the rat went on its way to this trial's port."""
         self.m = {}
 
     def on_maze_changed(self, learner):
         """Drop T/m entries for states no longer in the graph 
         (e.g. a hex that's now a barrier, or if directional, 
         an edge that no longer exists)."""
+        # The states the new maze allows. Anything learned about a state the
+        # maze no longer has is dropped, so if that hex reopens later it starts
+        # from scratch.
         valid = set(self._all_states(learner))
         for port_map in self.T.values():
             for state in list(port_map):
@@ -231,14 +306,50 @@ class ModelBasedRule(UpdateRule):
                 del self.m[state]
 
     def on_step(self, learner, context, state, next_state, reward, is_terminal):
+        """
+        Keep the memory trace of where the rat has been this trial.
+
+        Parameters:
+            learner (BaseHexLearner): The learner being updated
+            context (int or None): The value table for this trial
+            state (int or tuple): The state being left
+            next_state (int or tuple): The state being entered
+            reward (float): The reward delivered at the end of this trial
+            is_terminal (bool): True on the transition into the reward port
+
+        Returns:
+            list: Empty, since this rule changes no values until the port
+        """
+        # Every state already in the trace fades, so a state decays proportionally to 
+        # how many hexes ago it was visited:
+        #     m(state) <- gamma_mb * m(state)
         decay = self._gamma_mb(learner)
         for tracked_state in list(self.m):
             self.m[tracked_state] *= decay
+
+        # The state just entered is set to full strength, replacing whatever it
+        # had faded to if the rat has been here before this trial:
+        #     m(state just entered) <- 1
         self.m[next_state] = 1.0
+
         # The value update for this trial happens once, in on_trial_end.
         return []
 
     def on_trial_end(self, learner, path, reward, context):
+        """
+        Average this trial's memory trace into the port's map, then do a
+        value update for every state the map links to that port.
+
+        Parameters:
+            learner (BaseHexLearner): The learner whose value table is updated
+            path (list[int]): The hexes the rat ran this trial, ending at a port
+            reward (float): The reward delivered at that port
+            context (int or None): The value table for this trial, meaning the
+                port the trial started from
+
+        Returns:
+            list[UpdateEvent]: One event holding every state whose value moved
+        """
         # The port the rat arrived at selects which learned map to update.
         # Value is written into `context`, the value table belonging to the
         # port the trial started from, which is where this trial's experience
@@ -272,8 +383,11 @@ class ModelBasedRule(UpdateRule):
                 changed[state] = (old_value, new_value, T_for_state)
                 rows.append((T_for_state, state, old_value, new_value))
 
+        # Most strongly linked states first, so the text shows the states this
+        # port's map has learned most about
         rows.sort(key=lambda row: -row[0])
 
+        # Built as a function so the text is only assembled if it gets displayed
         def describe(port=port, reward=reward, rows=rows):
             header = (
                 f"model-based update at port {port}  (reward={reward:.3g})\n"
@@ -337,14 +451,32 @@ class SWRRule(UpdateRule):
         self.trial_index = -1
 
     def _a_swr(self, learner):
+        """The learning rate for replayed hexes, from the learner."""
         return getattr(learner, "a_swr", self.DEFAULT_A_SWR)
 
     def _hexes_for_trial(self, learner, path, reward, context):
-        """This trial's replayed hexes, from a callable or a per-trial sequence."""
+        """This trial's replayed hexes, from a callable or a per-trial sequence.
+
+        Parameters:
+            learner (BaseHexLearner): The learner being updated
+            path (list[int]): The hexes the rat ran this trial
+            reward (float): The reward delivered at the end of this trial
+            context (int or None): The value table for this trial
+
+        Returns:
+            list[int]: The hexes replayed on this trial, empty if none were
+        """
+        # A rule built without replay data leaves every value as it was
         if self.swr_hexes is None:
             return []
+
+        # Replay can be computed per trial, for replay keyed by something other
+        # than trial order, such as the port the rat arrived at
         if callable(self.swr_hexes):
             return self.swr_hexes(learner, path, reward, context) or []
+
+        # Otherwise replay was given as one list per trial, counted off in the
+        # order trials are learned. Trials past the end of that list replay nothing.
         if self.trial_index < len(self.swr_hexes):
             return self.swr_hexes[self.trial_index] or []
         return []
@@ -362,13 +494,19 @@ class SWRRule(UpdateRule):
         does this value update for all edges, which maybe we don't want. It could
         be useful to have both to compare the two.)
         """
+        # One value per hex: the replayed hex is the state, and a hex that is a
+        # barrier in this maze has no state to update
         if not learner.directional:
             return [hex] if hex in learner.graph else []
         if hex not in learner.graph:
             return []
+
+        # One value per direction of travel: every way of arriving at this hex
         return [(prev, hex) for prev in learner.graph.neighbors(hex)]
 
     def on_trial_start(self, learner, path, context):
+        """Count this trial, so the replay list stays lined up with the
+        trajectories as they are learned."""
         self.trial_index += 1
 
     def on_step(self, learner, context, state, next_state, reward, is_terminal):
@@ -376,6 +514,19 @@ class SWRRule(UpdateRule):
         return []
 
     def on_trial_end(self, learner, path, reward, context):
+        """
+        Move every hex replayed on this trial toward the reward delivered.
+
+        Parameters:
+            learner (BaseHexLearner): The learner whose value table is updated
+            path (list[int]): The hexes the rat ran this trial, ending at a port
+            reward (float): The reward delivered at that port
+            context (int or None): The value table for this trial, meaning the
+                port the trial started from
+
+        Returns:
+            list[UpdateEvent]: One event holding every state whose value moved
+        """
         a_swr = self._a_swr(learner)
         port = path[-1]
 
@@ -394,10 +545,13 @@ class SWRRule(UpdateRule):
             old_value = learner.state_value(context, state)
             new_value = old_value + a_swr * (reward - old_value)
             learner.V[context][state] = new_value
+            # Every replayed hex is included equally, so each carries a weight
+            # of 1 where other rules carry a trace or a learned strength
             if abs(new_value - old_value) >= 0.00005:
                 changed[state] = (old_value, new_value, 1.0)
                 rows.append((state, old_value, new_value))
 
+        # Built as a function so the text is only assembled if it gets displayed
         def describe(port=port, reward=reward, rows=rows, n=len(states)):
             header = (
                 f"SWR replay update at port {port}  (reward={reward:.3g}, {n} hexes replayed)\n"
