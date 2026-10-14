@@ -434,10 +434,9 @@ class SWRRule(UpdateRule):
         to add that in the future.
 
     Parameters:
-        swr_hexes: Where each trial's replayed hexes come from. Either a
-            sequence of hex lists, one per trial in the order trials are
-            learned, or a callable (learner, path, reward, context) -> hexes.
-            A trial with an empty list leaves every value as it was
+        swr_hexes (list[list[int]]): The hexes replayed on each trial, one list
+            per trial, in the order the trials are learned. A trial with an
+            empty list leaves every value as it was
     """
 
     DEFAULT_A_SWR = 0.1
@@ -454,14 +453,8 @@ class SWRRule(UpdateRule):
         """The learning rate for replayed hexes, from the learner."""
         return getattr(learner, "a_swr", self.DEFAULT_A_SWR)
 
-    def _hexes_for_trial(self, learner, path, reward, context):
-        """This trial's replayed hexes, from a callable or a per-trial sequence.
-
-        Parameters:
-            learner (BaseHexLearner): The learner being updated
-            path (list[int]): The hexes the rat ran this trial
-            reward (float): The reward delivered at the end of this trial
-            context (int or None): The value table for this trial
+    def _hexes_for_trial(self):
+        """This trial's replayed hexes.
 
         Returns:
             list[int]: The hexes replayed on this trial, empty if none were
@@ -470,13 +463,7 @@ class SWRRule(UpdateRule):
         if self.swr_hexes is None:
             return []
 
-        # Replay can be computed per trial, for replay keyed by something other
-        # than trial order, such as the port the rat arrived at
-        if callable(self.swr_hexes):
-            return self.swr_hexes(learner, path, reward, context) or []
-
-        # Otherwise replay was given as one list per trial, counted off in the
-        # order trials are learned. Trials past the end of that list replay nothing.
+        # Replayed hexes are given as one list per trial, in trial order
         if self.trial_index < len(self.swr_hexes):
             return self.swr_hexes[self.trial_index] or []
         return []
@@ -532,7 +519,7 @@ class SWRRule(UpdateRule):
 
         # A hex replayed several times in one ripple is updated only once.
         states = []
-        for hex in self._hexes_for_trial(learner, path, reward, context):
+        for hex in self._hexes_for_trial():
             for state in self._states_for_hex(learner, hex):
                 if state not in states:
                     states.append(state)
