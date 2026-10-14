@@ -227,10 +227,40 @@ class BaseHexLearner:
 
     #  Setup / priors
 
+    def all_states(self):
+        """
+        Every state this learner holds a value for.
+
+        For a learner keeping one value per hex, that is each open hex. For a
+        directional learner, whose states are directed edges, it is each way of
+        arriving at a hex, plus arriving at the hex a trip starts from, which is
+        written (None, hex).
+
+        Returns:
+            list: Every state in this learner's representation
+        """
+        if not self.directional:
+            return list(self.graph.nodes())
+
+        # The state a trip is in before the rat has moved anywhere
+        states = [(None, hex) for hex in self.graph.nodes()]
+
+        # Every way of arriving at a hex from one of its neighbors
+        states += [
+            (prev, cur) for cur in self.graph.nodes() for prev in self.graph.neighbors(cur)
+        ]
+        return states
+
     def reset(self):
-        """Clear all value tables and rebuild priors. States are created lazily."""
+        """Clear all value tables and start every state at its prior value."""
         self.V = {context: {} for context in self.contexts}
         self.build_prior_table(self.priors)
+
+        # Every state begins at what the rat is assumed to expect there before
+        # any experience of this maze, which is 0 when no priors were given
+        for context in self.contexts:
+            for state in self.all_states():
+                self.V[context][state] = self.prior_for_hex(context, self.hex_of_state(state))
         # Only the session's very first trial may lack a real start port.
         self._is_first_trial = True
 
@@ -327,17 +357,27 @@ class BaseHexLearner:
         ``maze_to_graph``. States are lazily re-created against the new graph;
         stale states are dropped from V, and each rule gets a chance to prune
         its own persistent state too (see UpdateRule.on_maze_changed).
+        
+        TODO: How do we want to deal with the values of newly open states
+        (on barrier change)? Currently they are set to whatever the prior would
+        have been. 
         """
         self.graph = maze_to_graph(new_maze)
 
-        # Hexes that are open in the new maze. A value learned for a hex that is
-        # now a barrier is dropped, so if that hex reopens later the agent has
-        # to learn about it again.
-        valid = set(self.graph.nodes())
+        # The states the new maze allows. A value learned for a hex that is now
+        # a barrier is dropped, so if that hex reopens later the agent has to
+        # learn about it again, and a hex the new maze opens up starts at its
+        # prior the same way it would at the beginning of a session.
+        valid = set(self.all_states())
         for context in self.contexts:
             for state in list(self.V[context]):
-                if self.hex_of_state(state) not in valid:
+                if state not in valid:
                     del self.V[context][state]
+            for state in valid:
+                if state not in self.V[context]:
+                    self.V[context][state] = self.prior_for_hex(
+                        context, self.hex_of_state(state)
+                    )
 
         # Each rule drops whatever it has learned about those hexes as well
         for rule in self.rules:
@@ -365,11 +405,18 @@ class BaseHexLearner:
         return str(state)
 
     def state_value(self, context, state):
-        """Read a state's value, falling back to its prior if never written."""
-        # A state the agent has never updated is worth its prior, which is what
-        # the rat is assumed to expect there before any experience of it
-        value = self.V[context].get(state)
-        return value if value is not None else self.prior_for_hex(context, self.hex_of_state(state))
+        """
+        Read a state's value.
+
+        Parameters:
+            context (int or None): Which value table to read, meaning the port
+                the trip started from
+            state (int or tuple): The hex, or the directed edge, to read
+
+        Returns:
+            float: That state's current value
+        """
+        return self.V[context][state]
 
     #  Rule-driven learning
 
@@ -425,6 +472,36 @@ class BaseHexLearner:
 
             # True for the step that arrives at the reward port
             is_terminal = step == len(path) - 2
+
+            # A hex that is a barrier in this maze cannot have been run through,
+            # so it is a position tracking error. Warn and skip.
+            if cur_hex not in self.graph or next_hex not in self.graph:
+                missing = [h for h in (cur_hex, next_hex) if h not in self.graph]
+                warnings.warn(
+                    f"learn_path: hex {missing} is a barrier in this maze! "
+                    f"This is likely a position tracking error. Skipping this step."
+                )
+                continue
+
+            # A move between two hexes that do not border each other cannot
+            # have happened, so it is a position tracking error. Warn and skip.
+            if not self.graph.has_edge(cur_hex, next_hex):
+                warnings.warn(
+                    f"learn_path: at hex {cur_hex}, next_hex={next_hex} is not a "
+                    f"graph neighbor ({sorted(self.graph.neighbors(cur_hex))})! "
+                    f"This is likely a position tracking error. Skipping this step."
+                )
+                continue
+
+            # A directional learner's state also records which hex the rat came
+            # from, so a tracking error on the way in leaves no state to update.
+            if self.directional and prev_hex is not None and not self.graph.has_edge(prev_hex, cur_hex):
+                warnings.warn(
+                    f"learn_path: arrived at hex {cur_hex} from hex {prev_hex}, which is not "
+                    f"a graph neighbor. This is likely a position tracking error. "
+                    f"Skipping this step."
+                )
+                continue
 
             # Every rule sees every transition, so several mechanisms can learn
             # from the same step
@@ -1020,9 +1097,7 @@ class BaseHexLearner:
         directions don't matter and this just reads V[context] directly.
         """
         if not self.directional:
-            return {
-                hex: self.V[context].get(hex, self.prior_for_hex(context, hex)) for hex in self.graph.nodes()
-            }
+            return {hex: self.V[context][hex] for hex in self.graph.nodes()}
         return {
             hex: (
                 self.state_value(context, (entry_directions[hex], hex))
