@@ -1,19 +1,34 @@
 """
 base_learner.py
 
-Extensible hex-maze value-learning agent: a single learner class whose
-value-update behavior is supplied by a list of independent, combinable
-`UpdateRule` objects (see update_rules.py for concrete rules, e.g.
-TDLambdaRule, ModelBasedRule)
+A hex maze agent that learns a value for each maze hex from the paths
+a rat runs, and chooses where to go next from those values.
 
-Each UpdateRule implements three hooks called while a trial's hex path is
-walked: `on_trial_start` (reset per-trial state), `on_step` (called once per
-hex transition), and `on_trial_end` (called once after the last step). 
-Each hook returns a list of UpdateEvent (usually 0 or 1) describing what 
-changed and how to render it, which is what makes animate_learning generic 
-across rules: it never branches on which rule produced an event, 
-it just reads `event.changed` (for outlining) and calls `event.describe()` 
-(for the text box).
+What the agent learns is held in V, a value per state. What counts as a
+state depends on how the agent is set up: one value per hex, or one value
+per direction of travel through a hex (previous hex + current hex). 
+When the agent is "goal-conditioned" it keeps a separate value table for 
+each start port (the idea being that if the rat starts from e.g. port A,
+only ports B and C are valid goals, so the hex values should reflect that.
+I only really use this for "simulate" mode so the rat doesn't turn around
+and run back towards the port it just left).
+
+How the state values change is supplied by a list of UpdateRule objects (see
+update_rules.py). A rule is called at three potential moments as a trial is 
+replayed hex by hex: 
+- once before the first step (e.g. to reset a per-trial memory trace vector)
+- once per hex-to-hex transition (e.g. for a TD(lambda) update)
+- once after the rat reaches the port (e.g. for a model-based or SWR update)
+
+Each call returns a list of UpdateEvent describing which states moved and 
+how to display that, which is what lets animate_learning show any rule's 
+updates using only `event.changed` and `event.describe()`. This makes it
+easy for us to implement new rules and animate everything to visualize/debug 
+what's going on each time a value changes.
+
+Several rules can run at once on the same value table, so a dual-process
+agent is a learner holding two rules (e.g. both a model-free TD(0) update
+on each hex transition plus a model-based SWR update at reward).
 """
 
 import copy
@@ -45,18 +60,18 @@ _COLOR_TO_CMAP = {
 @dataclass
 class UpdateEvent:
     """
-    One animate-able thing an UpdateRule did. `changed` is already filtered
-    to states with a real (displayable) change -- {state: (old_value,
-    new_value, weight)} -- so the base class never needs rule-specific
-    filtering logic to decide what to outline. `weight` is whatever this
-    rule's own notion of "how strongly was this state included" is (TD's
-    eligibility trace, model-based's T) -- animate_learning normalizes it
-    per-event and uses it to shade each hex's outline along `color`'s
-    colormap, so eligibility/memory-trace decay is visible. `describe` is
-    a zero-arg callable returning this event's own text block (no shared
-    header -- the base class prepends "rat at hex X" once per frame).
-    `color` is the outline color family for `changed`'s hexes; None means
-    "use animate_learning's default".
+    One value update, recorded so it can be displayed (used for animation).
+
+    Attributes:
+        changed: {state: (old_value, new_value, weight)} for the states whose
+            value moved by a visible amount. `weight` is how strongly the rule
+            included that state in this update (which is the eligibility trace
+            for TD learning and T(port, state) for a model-based update). 
+            animate_learning scales it to shade each hex's outline, so
+            a trace decaying back along the path is visible on the maze.
+        describe: A function of no arguments returning this update's text
+            block: its equation and the states it moved.
+        color: Outline color family for the changed hexes.
     """
     changed: dict
     describe: Callable[[], str]
@@ -65,44 +80,64 @@ class UpdateEvent:
 
 class UpdateRule:
     """
-    Base interface for a pluggable value-update mechanism (so we can combine e.g.
-    TD(0) with a SWR update, or a memory trace based update as in Tim's paper). 
-    Default hooks are no-ops (return no events, touch no state) so a rule only needs to
-    implement whichever hooks are relevant to it.
+    Base interface for a pluggable value-update mechanism (letting us simulate/test
+    different theories of how hex values should be updates based on the rat's experience). 
+    
+    See update_rules.py for the currently implemented rules:
+    - TD(lambda): Classic temporal-difference learning with an eligibility trace.
+        Hex values are updated on each hex transition.
+    - Model-based memory trace (from Krausz et al.): on reaching a reward port, 
+        updates the values of every state on paths that have led into that port, 
+        weighted by a persistent, recency-averaged map T learned online.
+    - SWR update: on reaching a reward port, updates the values of hexes represented
+        in sharp-wave-ripples
+
+    A learner holds a list of these and calls every one of them at each
+    moment below, so combining value update mechanisms (e.g. TD learning plus replay)
+    is a matter of listing two rules. Every hook here does nothing, so a rule
+    implements only the moments it cares about.
     """
 
     def on_trial_start(self, learner, path, context):
-        """Called once before a trial's steps are walked 
-        (e.g. to reset a per-trial eligibility/memory trace). 
-        No return value."""
+        """
+        Called before a trial's steps are walked (e.g. to reset a per-trial 
+        eligibility/memory trace). 
+        No return value.
+        """
 
     def on_step(self, learner, context, state, next_state, reward, is_terminal):
-        """Called once per hex transition, in path order.
-        `is_terminal` is True on the transition into the reward port hex. 
-        Returns a list of UpdateEvent."""
+        """
+        Called once per hex-to-hex transition, in the order the rat ran them.
+        `is_terminal` is True for the transition into the reward port, where
+        `reward` is what was delivered (1 or 0 for reward/omission). 
+        Returns a list of UpdateEvent.
+        """
         return []
 
     def on_trial_end(self, learner, path, reward, context):
-        """Called once after the last step for updates that happen on
-        trial end (e.g. a SWR or model-based update).
-        Returns a list of UpdateEvent."""
+        """
+        Called after the rat reaches the port, for a rule that learns from the
+        trial as a whole (e.g. SWR replay or model-based update). 
+        Returns a list of UpdateEvent.
+        """
         return []
 
     def on_maze_changed(self, learner):
-        """Called once after learner.set_graph() swaps the maze (aka a
-        barrier change). A rule with its own persistent, hex-keyed state
-        outside of learner.V (e.g. ModelBasedRule's T map) should remove
-        entries referencing hexes no longer in learner.graph here. The value
-        table (V) is already cleaned up by set_graph before this runs.
-        No return value."""
+        """
+        Called when learner.set_graph() swaps in a new maze, which is how a
+        barrier change is applied mid-session. A rule keeping its own
+        hex-keyed quantities should drop the entries for hexes that are now
+        barriers, so a hex that later reopens starts fresh. The value table V
+        has already been cleaned up when this runs.
+        """
 
     def on_reset(self, learner):
         """
-        Called when the learner's value tables are cleared, including once at
-        construction. Rules holding state that is learned alongside V (e.g.
-        ModelBasedRule's T map, SWRRule's trial counter) should clear it here.
+        Called when the learner's value tables are cleared, including once
+        when the learner is built. A rule that accumulates something over a
+        session, such as a learned map or a count of trials seen, clears it
+        here, so a reset learner starts the session over from the beginning.
         """
-        pass
 
 
 class BaseHexLearner:
@@ -168,9 +203,9 @@ class BaseHexLearner:
             If True, keep one value function per start port (3 value tables);
             else a single shared value function.
         priors : None, "uniform", ("flat", value), or list of 3 floats
-            Value initialization strategy -- see distance_priors/build_prior_table.
+            Hex value initialization strategy (see distance_priors/build_prior_table).
         no_backtrack : bool
-            If True, self-generated behavior (choose_action/simulate) avoids
+            If True, simulated behavior (choose_action/simulate) avoids
             revisiting states within a trial if possible. Never affects
             choice_nll scoring or any UpdateRule.
         **rule_kwargs
@@ -307,11 +342,13 @@ class BaseHexLearner:
     def learn_path(self, path, reward, context, record=False):
         """
         Walk a single path within one context, driving every active rule's
-        hooks in order. Reward is delivered at the terminal state
-        (path[-1]). Returns a list of per-event snapshots when record=True,
-        else None. Each snapshot (other than the initial one) carries an
+        hooks in order. Reward is delivered at the terminal state (path[-1]). 
+
+        Returns a list of per-event snapshots when record=True, else None. 
+
+        Each snapshot (other than the initial one) carries an
         "event" (an UpdateEvent) describing exactly what that snapshot
-        reflects -- one snapshot per event, so two rules firing on the same
+        reflects: one snapshot per event, so two rules firing on the same
         step become two separate, sequential snapshots (matching how
         TD(lambda)'s own bootstrap-then-reward split already works when
         only one rule is active).
@@ -403,16 +440,16 @@ class BaseHexLearner:
         Parameters
         ----------
         trajectories : list of list of int
-            Each path [s0, s1, ..., s_terminal]. See resolve_context for how
-            the start port is determined when path[0] isn't one.
+            Hex path for each trial [s0, s1, ..., s_terminal]. 
+            The first and last hex of each trial should be a reward port 
+            (except for the very first trial, which is allowed to not start at a port)
         rewards : list of float
             Reward for each trajectory.
         record : {None, "trial", "step"}, optional
             Snapshot granularity to return (each snapshot is the same shape
             as snapshot(); collapse one with snapshot_values()):
                 - None (default): no return value, just runs the updates.
-                - "trial": one snapshot per trial, taken after that trial's
-                  last event.
+                - "trial": one snapshot per trial, taken after that trial's last event.
                 - "step": every event's snapshot, across every trial.
 
         Returns
@@ -438,10 +475,13 @@ class BaseHexLearner:
 
     def junction_candidates(self, cur_hex, entry_hex):
         """
-        The two non-backward neighbors at cur_hex if it's a real 3-way
-        junction (exactly 3 graph-neighbors), else None. entry_hex (the hex
-        arrived from, or None at a trial's first hex) is always excluded,
-        regardless of no_backtrack -- see choice_nll.
+        The two non-backward neighbors at cur_hex if it's a 3-way junction 
+        (aka a hex with 3 neighbors: back, left, and right).
+        If the hex is a hex on a straight path, this returns None. 
+        
+        entry_hex (the hex arrived from, or None at a trial's first hex) is 
+        excluded as a candidate because we assume the rat is making a left/right 
+        choice between the 2 forward options. See choice_nll for details.
         """
         all_neighbors = list(self.graph.neighbors(cur_hex))
         if len(all_neighbors) != 3:
@@ -451,13 +491,20 @@ class BaseHexLearner:
     def junction_choice_info(self, cur_hex, entry_hex, next_hex, context):
         """
         Binary junction-choice info for one step, matching choice_nll's
-        junctions_only=True scoring: None if cur_hex isn't a real 3-way
-        junction, or next_hex is entry_hex (backtracked -- valid, just not a
-        binary left/right choice), or next_hex isn't one of the two
-        candidates at all (a tracking-error case; callers that need to warn
-        about that, like choice_nll, check it themselves). Otherwise:
-        {"candidates": [hexA, hexB], "values": {hex: V(hex)}, "probabilities":
-        {hex: p}, "choice": next_hex, "probability": p_choice}.
+        junctions_only=True scoring: 
+        
+        Returns None if cur_hex isn't a real 3-way junction, or next_hex is 
+        entry_hex, meaning the rat backtracked. (This is valid, just not a binary 
+        left/right choice, so we follow Tim's paper in not scoring it).
+        Also returns None if next_hex isn't one of the junction candidates at all. 
+        (Could happen due to a position tracking error. Callers that need to warn 
+        about that, like choice_nll, check it themselves). 
+        Otherwise returns:
+        {"candidates": [hexA, hexB], 
+        "values": {hex: V(hex)}, 
+        "probabilities": {hex: p}, 
+        "choice": next_hex, 
+        "probability": p_choice}.
         """
         candidates = self.junction_candidates(cur_hex, entry_hex)
         if candidates is None or next_hex == entry_hex or next_hex not in candidates:
@@ -480,15 +527,14 @@ class BaseHexLearner:
 
         Replays each trajectory, scoring the softmax probability of the hex
         the rat actually stepped to (before that step's update), then runs
-        the ordinary rule updates so values evolve as the replay proceeds.
-        no_backtrack is never consulted here regardless of `junctions_only`
-        -- it only affects self-generated behavior in choose_action/simulate.
+        the ordinary rule updates so values evolve as the trajectory proceeds.
 
         Parameters
         ----------
         trajectories : list of list of int
-            Each path [s0, s1, ..., s_terminal]. See resolve_context for how
-            the start port is determined when path[0] isn't one.
+                    Hex path for each trial [s0, s1, ..., s_terminal]. 
+                    The first and last hex of each trial should be a reward port 
+                    (except for the very first trial, which is allowed to not start at a port)
         rewards : list of float
             Reward for each trajectory.
         record : bool, optional
@@ -622,8 +668,9 @@ class BaseHexLearner:
         """
         from .update_rules import TDLambdaRule, ModelBasedRule, SWRRule  # local import: avoids a cycle
 
-        # A subclass like HexMazeTDLearner sets its own rules, so ask an instance
-        # rather than assuming. BaseHexLearner itself requires `rules` to be passed.
+        # A learner class that fixes its own rules (HexMazeTDLearner,
+        # KrauszDualLearner) knows them already, so build one and read them off
+        # it. BaseHexLearner takes its rules as an argument.
         resolved_rules = rules if rules is not None else cls(maze, reward_probs, **kwargs).rules
         has_td = any(isinstance(rule, TDLambdaRule) for rule in resolved_rules)
         has_mb = any(isinstance(rule, ModelBasedRule) for rule in resolved_rules)
