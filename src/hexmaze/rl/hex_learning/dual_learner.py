@@ -4,7 +4,7 @@ dual_learner.py
 Dual-process hex value agent for the hex maze (Krausz et al.).
 
 Runs a model-free and a model-based update side by side on the same value
-table, which is the full dual-process model rather than either half alone:
+table, which together make up the dual-process model:
 
     TDLambdaRule   -- model-free TD, defaulting to TD(0): on every step, the
                       pre-transition state bootstraps from the next state.

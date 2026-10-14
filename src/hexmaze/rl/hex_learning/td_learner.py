@@ -3,9 +3,10 @@ td_learner.py
 
 TD(lambda) hex value agent for the hex maze.
 
-Thin wrapper over BaseHexLearner that plugs in TDLambdaRule, so all of the
-graph, state, policy, fitting and simulation machinery lives in the base class
-and only the TD(lambda) update itself lives in the rule.
+A hex maze agent that learns values by temporal-difference learning.
+It is BaseHexLearner holding a single TDLambdaRule, so the state
+representation, policy, fitting and simulation are all as described there,
+and the value update is the one in TDLambdaRule.
 
 Value is learned over maze locations via TD learning with eligibility traces.
 The single ``lam`` (lambda) controls:
@@ -55,10 +56,10 @@ class HexMazeTDLearner(BaseHexLearner):
     def filtered_update_log(self, update):
         """
         Log entries from an update dict with a real, displayable change
-        (>= 0.00005, i.e. not just "0.0000" after rounding -- covers both
-        negligible eligibility and negligible delta), sorted by eligibility
-        descending. Shared by format_update_text and animate_learning's
-        outline so the two always agree on which hexes actually changed.
+        of at least 0.00005, which is the smallest change that shows up once
+        values are rounded for display. Sorted by eligibility, largest first.
+        format_update_text and animate_learning's outlines both read this, so
+        the text and the maze agree on which hexes moved.
         """
         if update is None:
             return []
