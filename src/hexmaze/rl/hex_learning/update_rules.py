@@ -414,6 +414,10 @@ class SWRRule(UpdateRule):
     Hyperparameters, read from the learner:
         learner.a_swr   learning rate for replayed hexes (default 0.1)
 
+    The hexes replayed on each trial are given to the learner alongside that
+    trial's trajectory and reward (see BaseHexLearner.learn), and read here as
+    `learner.replayed_hexes_this_trial`.
+
     On arrival at a reward port, the hexes replayed during that trial's
     ripples are each moved toward the reward that was delivered:
 
@@ -432,41 +436,13 @@ class SWRRule(UpdateRule):
     - Yang-Sun / Tim's DA ramp data also seems to imply a value decay when not
         bumped up or maintained by SWRs. Currently values do not decay. We might want
         to add that in the future.
-
-    Parameters:
-        swr_hexes (list[list[int]]): The hexes replayed on each trial, one list
-            per trial, in the order the trials are learned. A trial with an
-            empty list leaves every value as it was
     """
 
     DEFAULT_A_SWR = 0.1
 
-    def __init__(self, swr_hexes=None):
-        self.swr_hexes = swr_hexes
-        self.trial_index = -1
-
-    def on_reset(self, learner):
-        """Rewind to the first trial, so the replay list lines up again."""
-        self.trial_index = -1
-
     def _a_swr(self, learner):
         """The learning rate for replayed hexes, from the learner."""
         return getattr(learner, "a_swr", self.DEFAULT_A_SWR)
-
-    def _hexes_for_trial(self):
-        """This trial's replayed hexes.
-
-        Returns:
-            list[int]: The hexes replayed on this trial, empty if none were
-        """
-        # A rule built without replay data leaves every value as it was
-        if self.swr_hexes is None:
-            return []
-
-        # Replayed hexes are given as one list per trial, in trial order
-        if self.trial_index < len(self.swr_hexes):
-            return self.swr_hexes[self.trial_index] or []
-        return []
 
     def _states_for_hex(self, learner, hex):
         """
@@ -491,11 +467,6 @@ class SWRRule(UpdateRule):
         # One value per direction of travel: every way of arriving at this hex
         return [(prev, hex) for prev in learner.graph.neighbors(hex)]
 
-    def on_trial_start(self, learner, path, context):
-        """Count this trial, so the replay list stays lined up with the
-        trajectories as they are learned."""
-        self.trial_index += 1
-
     def on_step(self, learner, context, state, next_state, reward, is_terminal):
         # Replay is learned from once per trial, in on_trial_end.
         return []
@@ -519,7 +490,7 @@ class SWRRule(UpdateRule):
 
         # A hex replayed several times in one ripple is updated only once.
         states = []
-        for hex in self._hexes_for_trial():
+        for hex in learner.replayed_hexes_this_trial:
             for state in self._states_for_hex(learner, hex):
                 if state not in states:
                     states.append(state)

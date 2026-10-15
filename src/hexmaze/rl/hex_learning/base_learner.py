@@ -256,6 +256,9 @@ class BaseHexLearner:
         self.V = {context: {} for context in self.contexts}
         self.build_prior_table(self.priors)
 
+        # No trial has been walked yet, so nothing has been replayed
+        self.replayed_hexes_this_trial = []
+
         # Every state begins at what the rat is assumed to expect there before
         # any experience of this maze, which is 0 when no priors were given
         for context in self.contexts:
@@ -420,7 +423,7 @@ class BaseHexLearner:
 
     #  Rule-driven learning
 
-    def learn_path(self, path, reward, context, record=False):
+    def learn_path(self, path, reward, context, replayed_hexes=None, record=False):
         """
         Walk a single path within one context, driving every active rule's
         hooks in order. Reward is delivered at the terminal state (path[-1]). 
@@ -440,12 +443,18 @@ class BaseHexLearner:
             reward (float): The reward delivered at that port
             context (int or None): The value table to update, meaning the port
                 the trial started from, or None for a single shared table
+            replayed_hexes (list[int]): The hexes replayed during this trial's
+                sharp-wave ripples, for a learner holding an SWRRule
             record (bool): Collect a snapshot of the maze's values after every
                 update, for animating how learning unfolded
 
         Returns:
             list or None: One snapshot per update when record=True
         """
+        # What was replayed this trial, which SWRRule reads when the rat
+        # reaches the port
+        self.replayed_hexes_this_trial = replayed_hexes or []
+
         # Let each rule clear whatever it accumulates within a trial
         for rule in self.rules:
             rule.on_trial_start(self, path, context)
@@ -562,16 +571,18 @@ class BaseHexLearner:
         )
         return placeholder
 
-    def process_trajectory(self, path, reward):
+    def process_trajectory(self, path, reward, replayed_hexes=None):
         """Run one trial's rule updates along a single path."""
-        self.learn_path(path, reward, self.resolve_context(path))
+        self.learn_path(path, reward, self.resolve_context(path), replayed_hexes)
 
-    def process_trajectory_with_history(self, path, reward):
+    def process_trajectory_with_history(self, path, reward, replayed_hexes=None):
         """Same as process_trajectory, but returns the per-event snapshot
         history (see learn_path)."""
-        return self.learn_path(path, reward, self.resolve_context(path), record=True)
+        return self.learn_path(
+            path, reward, self.resolve_context(path), replayed_hexes, record=True
+        )
 
-    def learn(self, trajectories, rewards, record=None):
+    def learn(self, trajectories, rewards, replayed_hexes=None, record=None):
         """
         Run updates over a batch of externally-provided trajectories.
 
@@ -580,6 +591,9 @@ class BaseHexLearner:
                 s_terminal]. The first and last hex of each trial should be a reward port
                 (except for the very first trial, which is allowed to not start at a port)
             rewards (list of float): Reward for each trajectory.
+            replayed_hexes (list[list[int]], optional): The hexes replayed on each
+                trial, one list per trial, in the same order as `trajectories`. Used
+                by a learner holding an SWRRule
             record ({None, "trial", "step"}, optional): Snapshot granularity to return.
                 Each snapshot is the same shape as snapshot(); collapse one with
                 snapshot_values()
@@ -593,11 +607,17 @@ class BaseHexLearner:
         if record not in (None, "trial", "step"):
             raise ValueError(f"record must be None, 'trial', or 'step', got {record!r}")
 
+        # With no replay given, every trial replays nothing
+        if replayed_hexes is None:
+            replayed_hexes = [[] for _ in trajectories]
+
         history = []
-        for path, reward in zip(trajectories, rewards):
+        for path, reward, trial_replay in zip(trajectories, rewards, replayed_hexes):
             if len(path) < 2:
                 continue
-            trial_history = self.learn_path(path, reward, self.resolve_context(path), record=bool(record))
+            trial_history = self.learn_path(
+                path, reward, self.resolve_context(path), trial_replay, record=bool(record)
+            )
             if record == "step":
                 history.extend(trial_history)
             elif record == "trial":
@@ -654,7 +674,7 @@ class BaseHexLearner:
             "probability": probability_by_neighbor[next_hex],
         }
 
-    def choice_nll(self, trajectories, rewards, record=False, junctions_only=False):
+    def choice_nll(self, trajectories, rewards, replayed_hexes=None, record=False, junctions_only=False):
         """
         Negative log-likelihood of the rat's hex-to-hex choices under this
         model's current parameters.
@@ -668,6 +688,9 @@ class BaseHexLearner:
                 s_terminal]. The first and last hex of each trial should be a reward port
                 (except for the very first trial, which is allowed to not start at a port)
             rewards (list of float): Reward for each trajectory.
+            replayed_hexes (list[list[int]], optional): The hexes replayed on each
+                trial, one list per trial, in the same order as `trajectories`. Used
+                by a learner holding an SWRRule
             record (bool, optional): If True, also return a list of per-choice records, one
                 per scored hex-to-hex move, in trajectory order: {"trial": index into
                 trajectories/rewards, "entry": prev_hex (None at a trial's first step),
@@ -684,9 +707,15 @@ class BaseHexLearner:
             float, or (float, list of dict) if record=True: Total negative log-likelihood of
                 the scored hex choices, and (if record=True) the per-choice records.
         """
+        # With no replay given, every trial replays nothing
+        if replayed_hexes is None:
+            replayed_hexes = [[] for _ in trajectories]
+
         total = 0.0
         choices = [] if record else None
-        for trial_index, (path, reward) in enumerate(zip(trajectories, rewards)):
+        for trial_index, (path, reward, trial_replay) in enumerate(
+            zip(trajectories, rewards, replayed_hexes)
+        ):
             if len(path) < 2:
                 continue
             context = self.resolve_context(path)
@@ -732,13 +761,13 @@ class BaseHexLearner:
                         "probabilities": probability_by_neighbor,
                     })
 
-            self.learn_path(path, reward, context)
+            self.learn_path(path, reward, context, trial_replay)
         return (total, choices) if record else total
 
     @classmethod
     def fit_choices(cls, maze, reward_probs, trajectories, rewards,
                      alpha=None, gamma=None, lam=None, temperature=None,
-                     gamma_mb=None, a_T=None, a_mb=None, a_swr=None,
+                     gamma_mb=None, a_T=None, a_mb=None, a_swr=None, replayed_hexes=None,
                      rules=None, junctions_only=False, **kwargs):
         """
         Fit hyperparameters to maximize the likelihood of the rat's
@@ -771,6 +800,8 @@ class BaseHexLearner:
                 built for every candidate parameter set evaluated during optimization (and
                 for the final returned instance), so no rule's internal state (e.g.
                 ModelBasedRule's persistent T map) leaks between evaluations.
+            replayed_hexes (list[list[int]], optional): The hexes replayed on each
+                trial, passed to choice_nll. Used by a learner holding an SWRRule
             junctions_only (bool, optional): Passed to choice_nll.
             **kwargs: Extra constructor flags held fixed during fitting (e.g. directional,
                 goal_conditioned, priors, no_backtrack).
@@ -821,7 +852,9 @@ class BaseHexLearner:
             x0 = [cls._FIT_PARAM_DEFAULTS[name][0] for name in free_names]
             bounds = [cls._FIT_PARAM_DEFAULTS[name][1] for name in free_names]
             result = minimize(
-                lambda x: _build(x).choice_nll(trajectories, rewards, junctions_only=junctions_only),
+                lambda x: _build(x).choice_nll(
+                    trajectories, rewards, replayed_hexes, junctions_only=junctions_only
+                ),
                 x0=x0, bounds=bounds, method='L-BFGS-B',
             )
             final_values = result.x
@@ -837,7 +870,7 @@ class BaseHexLearner:
         # at the same parameters, consistent regardless of whether anything
         # was optimized.
         nll, choices = _build(final_values).choice_nll(
-            trajectories, rewards, record=True, junctions_only=junctions_only,
+            trajectories, rewards, replayed_hexes, record=True, junctions_only=junctions_only,
         )
         fitted = _build(final_values)
         fitted.choice_nll_ = nll

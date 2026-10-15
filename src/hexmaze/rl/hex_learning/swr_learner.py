@@ -31,9 +31,6 @@ class SWRDualLearner(BaseHexLearner):
     Parameters:
         maze: The hex maze represented in any valid format
         reward_probs (list): Reward probabilities [pA, pB, pC] for the 3 ports
-        swr_hexes (list[list[int]]): The hexes replayed on each trial, one list
-            per trial, in the order the trials are learned. A trial with an
-            empty list is learned from by TD alone
         alpha (float): Model-free TD learning rate. Defaults to 0.3
         gamma (float): Discount factor. Defaults to 0.95
         lam (float): Eligibility trace decay for the model-free rule.
@@ -42,13 +39,15 @@ class SWRDualLearner(BaseHexLearner):
             no effect on value, leaving a pure TD learner. Defaults to 0.1
 
     All other arguments are passed through to BaseHexLearner.
+
+    The hexes replayed on each trial are given to `learn` alongside the
+    trajectories and rewards, rather than to this constructor.
     """
 
     def __init__(
         self,
         maze,
         reward_probs,
-        swr_hexes=None,
         alpha=0.3,
         gamma=0.95,
         lam=0.0,
@@ -58,7 +57,7 @@ class SWRDualLearner(BaseHexLearner):
         super().__init__(
             maze,
             reward_probs,
-            rules=[TDLambdaRule(), SWRRule(swr_hexes)],
+            rules=[TDLambdaRule(), SWRRule()],
             gamma=gamma,
             alpha=alpha,
             lam=lam,
