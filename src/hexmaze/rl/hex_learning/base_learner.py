@@ -36,7 +36,7 @@ import random
 import textwrap
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import numpy as np
 import matplotlib.pyplot as plt

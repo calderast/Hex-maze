@@ -2,10 +2,11 @@ from .td_learner import HexMazeTDLearner
 from .td_learner_old import HexMazeTDLearnerOld
 from .base_learner import BaseHexLearner, HexMazeAgent, UpdateRule, UpdateEvent
 from .dual_learner import KrauszDualLearner
+from .swr_learner import SWRDualLearner
 from .update_rules import TDLambdaRule, ModelBasedRule, SWRRule
 
 __all__ = [
-    "HexMazeTDLearner", "HexMazeTDLearnerOld", "KrauszDualLearner",
+    "HexMazeTDLearner", "HexMazeTDLearnerOld", "KrauszDualLearner", "SWRDualLearner",
     "BaseHexLearner", "HexMazeAgent", "UpdateRule", "UpdateEvent",
     "TDLambdaRule", "ModelBasedRule", "SWRRule",
 ]

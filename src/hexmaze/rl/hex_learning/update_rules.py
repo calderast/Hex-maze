@@ -248,7 +248,7 @@ class ModelBasedRule(UpdateRule):
     DEFAULT_A_MB = 0.1
 
     def __init__(self):
-        self.T = {}   # {port: {state: weight}}, persists across trials
+        self.T = {}   # {port: {state: T(port, state)}}, persists across trials
         self.m = {}   # {state: trace}, reset every trial
 
     def on_reset(self, learner):
@@ -395,8 +395,8 @@ class ModelBasedRule(UpdateRule):
             )
             max_rows = 6
             lines = [
-                f"  V({learner.format_state(state)})  T={weight:.3f}  {old:.4f} → {new:.4f}"
-                for weight, state, old, new in rows[:max_rows]
+                f"  V({learner.format_state(state)})  T={T_for_state:.3f}  {old:.4f} → {new:.4f}"
+                for T_for_state, state, old, new in rows[:max_rows]
             ]
             if not lines:
                 lines = ["  (no visible change)"]
