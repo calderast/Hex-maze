@@ -446,7 +446,7 @@ class BaseHexLearner:
         """
         Which maze each trial is run on, as a list with one entry per trial.
 
-        Only the trial where a barrier change happens carries a maze; every other
+        Only the trial where a barrier change happens carries a maze. Every other
         trial is None, meaning the maze the rat is already running.
 
         Parameters:
@@ -455,8 +455,8 @@ class BaseHexLearner:
             trials_per_block (list of int): How many trials are run on each maze
 
         Returns:
-            list: One entry per trial, a maze on the first trial of each block and
-                None elsewhere
+            list: One entry per trial, with a maze on the first trial of each block 
+                and None elsewhere
         """
         schedule = [None] * len(trajectories)
         if mazes is None:
@@ -795,7 +795,7 @@ class BaseHexLearner:
                 entry_hex = path[step - 1] if step > 0 else None
 
                 # A hex that is a barrier in this maze cannot have been run through,
-                # so it is a tracking error, or a trial scored against the wrong maze.
+                # so it is a tracking error (or a trial scored against the wrong maze!)
                 if cur_hex not in self.graph or next_hex not in self.graph:
                     missing = [hex for hex in (cur_hex, next_hex) if hex not in self.graph]
                     warnings.warn(
