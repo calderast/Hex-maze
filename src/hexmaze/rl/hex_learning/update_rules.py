@@ -276,7 +276,7 @@ class ModelBasedRule(UpdateRule):
         so a state the rat has stopped visiting decays out of the map as its
         memory trace stays at zero.
         """
-        if not learner.directional:
+        if not learner.directional_states:
             return list(learner.graph.nodes())
         return [
             (prev, cur)
@@ -459,7 +459,7 @@ class SWRRule(UpdateRule):
         """
         # One value per hex: the replayed hex is the state, and a hex that is a
         # barrier in this maze has no state to update
-        if not learner.directional:
+        if not learner.directional_states:
             return [hex] if hex in learner.graph else []
         if hex not in learner.graph:
             return []

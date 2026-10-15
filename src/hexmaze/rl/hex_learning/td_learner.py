@@ -33,19 +33,18 @@ class HexMazeTDLearner(BaseHexLearner):
 
     Parameters:
         maze: The hex maze represented in any valid format
-        reward_probs (list): Reward probabilities [pA, pB, pC] for the 3 ports
         alpha (float): Learning rate. Defaults to 0.3
         gamma (float): Discount factor. Defaults to 0.95
         lam (float): Eligibility trace decay. 0.0 is TD(0), 1.0 is Monte-Carlo.
             Defaults to 0.0
 
-    All other arguments are passed through to BaseHexLearner.
+    All other arguments are passed through to BaseHexLearner, including the
+    simulation options `reward_probs` and `no_backtrack`.
     """
 
-    def __init__(self, maze, reward_probs, alpha=0.3, gamma=0.95, lam=0.0, **kwargs):
+    def __init__(self, maze, alpha=0.3, gamma=0.95, lam=0.0, **kwargs):
         super().__init__(
             maze,
-            reward_probs,
             rules=[TDLambdaRule()],
             gamma=gamma,
             alpha=alpha,

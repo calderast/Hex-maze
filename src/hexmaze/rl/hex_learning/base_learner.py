@@ -135,8 +135,8 @@ class UpdateRule:
         """
         Called when the learner's value tables are cleared, including once
         when the learner is built. A rule that accumulates something over a
-        session, such as a learned map or a count of trials seen, clears it
-        here, so a reset learner starts the session over from the beginning.
+        session (like a memory trace), clears it here, so a reset learner 
+        starts the session over from the beginning.
         """
 
 
@@ -169,22 +169,20 @@ class BaseHexLearner:
     def __init__(
         self,
         maze,
-        reward_probs,
-        rules,
+        rules=None,
         gamma=0.95,
         temperature=1.0,
-        directional=False,
-        goal_conditioned=True,
+        directional_states=True,
+        goal_conditioned_states=False,
         priors=None,
         no_backtrack=False,
+        reward_probs=None,
         **rule_kwargs,
     ):
         """
         Parameters:
             maze (set, frozenset, list, np.ndarray, str, or networkx.Graph): The hex maze in
                 any valid format.
-            reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A, 2/B,
-                3/C.
             rules (list of UpdateRule): The active value-update mechanisms, e.g.
                 [TDLambdaRule()] or [TDLambdaRule(), ModelBasedRule()]. Order matters only
                 in that each rule's events become separate, sequential animation frames when
@@ -193,33 +191,41 @@ class BaseHexLearner:
                 any rule (like TDLambdaRule) that wants a shared discount rate.
             temperature (float): Softmax temperature for action selection (policy-level, not
                 tied to any one update rule).
-            directional (bool): If True, states are directed edges (prev_hex, cur_hex); else
+            directional_states (bool): If True, states are directed edges (prev_hex, cur_hex); else
                 hexes.
-            goal_conditioned (bool): If True, keep one value function per start port (3
+            goal_conditioned_states (bool): If True, keep one value function per start port (3
                 value tables); else a single shared value function.
             priors (None, "uniform", ("flat", value), or list of 3 floats): Hex value
                 initialization strategy (see distance_priors/build_prior_table).
-            no_backtrack (bool): If True, simulated behavior (choose_action/simulate) avoids
-                revisiting states within a trial if possible. Never affects choice_nll
-                scoring or any UpdateRule.
+            no_backtrack (bool): If True, the simulated agent avoids revisiting states
+                within a trial where it can (see choose_action/simulate). Applies to
+                simulated behavior alone, so scoring and the update rules see every
+                available neighbor.
+            reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A,
+                2/B, 3/C. Read when simulating only, to sample whether a reward is delivered.
             **rule_kwargs: Rule-specific hyperparameters (e.g. alpha=, lam= for
                 TDLambdaRule; gamma_mb=, a_T=, a_mb= for ModelBasedRule), set as plain
                 attributes on this instance.
         """
         self.graph = maze_to_graph(maze)
-        self.reward_probs = {i + 1: reward_probs[i] for i in range(3)}
-        self.rules = rules
+        
+        # A learner with no rules just holds its priors and never updates them
+        self.rules = [] if rules is None else rules
         self.gamma = gamma
         self.temperature = temperature
-        self.directional = directional
-        self.goal_conditioned = goal_conditioned
-        self.no_backtrack = no_backtrack
+        self.directional_states = directional_states
+        self.goal_conditioned_states = goal_conditioned_states
         self.priors = priors
+        
+        # Reward probabilities and no backtrack are used when simulating only
+        self.reward_probs = {} if reward_probs is None else {i + 1: reward_probs[i] for i in range(3)}
+        self.no_backtrack = no_backtrack
+
         for key, value in rule_kwargs.items():
             setattr(self, key, value)
 
         # Contexts: one value table per start port, or a single shared one.
-        self.contexts = list(REWARD_PORTS) if goal_conditioned else [None]
+        self.contexts = list(REWARD_PORTS) if goal_conditioned_states else [None]
 
         self.prior_table = None  # {context: {hex: value}} or None
         self.V = {}
@@ -239,7 +245,7 @@ class BaseHexLearner:
         Returns:
             list: Every state in this learner's representation
         """
-        if not self.directional:
+        if not self.directional_states:
             return list(self.graph.nodes())
 
         # The state a trip is in before the rat has moved anywhere
@@ -390,19 +396,19 @@ class BaseHexLearner:
 
     def context_for_port(self, start_port):
         """The value table key for a trip starting at start_port."""
-        return start_port if self.goal_conditioned else None
+        return start_port if self.goal_conditioned_states else None
 
     def state_key(self, prev_hex, cur_hex):
         """State key for arriving at `cur_hex` from `prev_hex` (None at trip start)."""
-        return (prev_hex, cur_hex) if self.directional else cur_hex
+        return (prev_hex, cur_hex) if self.directional_states else cur_hex
 
     def hex_of_state(self, state):
         """The maze hex underlying a state key."""
-        return state[1] if self.directional else state
+        return state[1] if self.directional_states else state
 
     def format_state(self, state):
         """Human-readable label for a state key, e.g. 'V(48→43)' or 'V(43)'."""
-        if self.directional:
+        if self.directional_states:
             prev, cur = state
             return f"{prev if prev is not None else 'start'}→{cur}"
         return str(state)
@@ -504,7 +510,7 @@ class BaseHexLearner:
 
             # A directional learner's state also records which hex the rat came
             # from, so a tracking error on the way in leaves no state to update.
-            if self.directional and prev_hex is not None and not self.graph.has_edge(prev_hex, cur_hex):
+            if self.directional_states and prev_hex is not None and not self.graph.has_edge(prev_hex, cur_hex):
                 warnings.warn(
                     f"learn_path: arrived at hex {cur_hex} from hex {prev_hex}, which is not "
                     f"a graph neighbor. This is likely a position tracking error. "
@@ -540,8 +546,8 @@ class BaseHexLearner:
         """
         The value-table context for a trip, derived from path[0].
 
-        With goal_conditioned=False there is a single shared table, so
-        path[0] never needs to be a real port. With goal_conditioned=True,
+        With goal_conditioned_states=False there is a single shared table, so
+        path[0] never needs to be a real port. With goal_conditioned_states=True,
         the context is path[0] if it's a reward port. If not, a placeholder
         is only allowed on the session's very first trial (which starts
         wherever the rat happened to be, before ever reaching a port): one
@@ -552,7 +558,7 @@ class BaseHexLearner:
         is_first_trial = self._is_first_trial
         self._is_first_trial = False
 
-        if not self.goal_conditioned:
+        if not self.goal_conditioned_states:
             return None
         if path[0] in REWARD_PORTS:
             return path[0]
@@ -765,7 +771,7 @@ class BaseHexLearner:
         return (total, choices) if record else total
 
     @classmethod
-    def fit_choices(cls, maze, reward_probs, trajectories, rewards,
+    def fit_choices(cls, maze, trajectories, rewards, reward_probs=None,
                      alpha=None, gamma=None, lam=None, temperature=None,
                      gamma_mb=None, a_T=None, a_mb=None, a_swr=None, replayed_hexes=None,
                      rules=None, junctions_only=False, **kwargs):
@@ -784,15 +790,20 @@ class BaseHexLearner:
         likelihood (e.g. fitting gamma_mb for a TD-only agent).
 
         Parameters:
-            maze, reward_probs (see __init__.):
+            maze (see __init__.):
             trajectories (list of list of int):
             rewards (list of float):
+            reward_probs (see __init__.):
             alpha, gamma, lam, temperature (float or None): TDLambdaRule's parameters
                 (gamma/temperature are general-purpose, see above). Fix at the given value
                 instead of fitting it; None (default) fits it, if a relevant rule is
                 present.
             gamma_mb, a_T, a_mb (float or None): ModelBasedRule's parameters. Same
                 fix-or-fit convention.
+            a_swr (float or None): SWRRule's learning rate for replayed hexes. Same
+                fix-or-fit convention.
+            replayed_hexes (list[list[int]], optional): The hexes replayed on each
+                trial, passed to choice_nll. Used by a learner holding an SWRRule
             rules (list of UpdateRule or None): The rules to fit with. None (default) uses
                 whichever rules the class itself builds, so HexMazeTDLearner fits TD
                 parameters and KrauszDualLearner fits the model-based ones too;
@@ -800,11 +811,9 @@ class BaseHexLearner:
                 built for every candidate parameter set evaluated during optimization (and
                 for the final returned instance), so no rule's internal state (e.g.
                 ModelBasedRule's persistent T map) leaks between evaluations.
-            replayed_hexes (list[list[int]], optional): The hexes replayed on each
-                trial, passed to choice_nll. Used by a learner holding an SWRRule
             junctions_only (bool, optional): Passed to choice_nll.
-            **kwargs: Extra constructor flags held fixed during fitting (e.g. directional,
-                goal_conditioned, priors, no_backtrack).
+            **kwargs: Extra constructor flags held fixed during fitting (e.g. directional_states,
+                goal_conditioned_states, priors, no_backtrack).
 
         Returns:
             BaseHexLearner subclass instance: Fresh instance built with the best-fit (and
@@ -821,7 +830,7 @@ class BaseHexLearner:
         # A learner class that fixes its own rules (HexMazeTDLearner,
         # KrauszDualLearner) knows them already, so build one and read them off
         # it. BaseHexLearner takes its rules as an argument.
-        resolved_rules = rules if rules is not None else cls(maze, reward_probs, **kwargs).rules
+        resolved_rules = rules if rules is not None else cls(maze, reward_probs=reward_probs, **kwargs).rules
         has_td = any(isinstance(rule, TDLambdaRule) for rule in resolved_rules)
         has_mb = any(isinstance(rule, ModelBasedRule) for rule in resolved_rules)
         has_swr = any(isinstance(rule, SWRRule) for rule in resolved_rules)
@@ -845,8 +854,10 @@ class BaseHexLearner:
             params.update(zip(free_names, free_values))
             if rules is None:
                 # The class builds its own fresh rules on every call
-                return cls(maze, reward_probs, **params, **kwargs)
-            return cls(maze, reward_probs, rules=copy.deepcopy(rules), **params, **kwargs)
+                return cls(maze, reward_probs=reward_probs, **params, **kwargs)
+            return cls(
+                maze, rules=copy.deepcopy(rules), reward_probs=reward_probs, **params, **kwargs
+            )
 
         if free_names:
             x0 = [cls._FIT_PARAM_DEFAULTS[name][0] for name in free_names]
@@ -1013,9 +1024,18 @@ class BaseHexLearner:
         return exponentiated / exponentiated.sum()
 
     def sample_reward(self, hex):
-        """Sample a binary reward at a reward port."""
+        """
+        Sample a binary reward at a reward port (used when simulating).
+
+        Parameters:
+            hex (int): The hex the agent arrived at (1, 2, or 3)
+
+        Returns:
+            float: 1.0 if reward was delivered, otherwise 0.0
+        """
         if hex in self.reward_probs and random.random() < self.reward_probs[hex]:
             return 1.0
+        # If no reward_probs argument was set, reward is always 0 :(
         return 0.0
 
     #  Inspection
@@ -1036,12 +1056,11 @@ class BaseHexLearner:
     def get_state_values(self, start_port):
         """
         Per-hex values {hex: value} for a context, viewed as if walking
-        straight out from start_port (see bfs_entry_directions). Hexes with
-        no learned state fall back to their prior.
+        straight out from start_port (see bfs_entry_directions).
         """
         port = resolve_port(start_port)
-        context = self.context_for_port(port) if self.goal_conditioned else None
-        entry_directions = self.bfs_entry_directions(port) if self.directional else None
+        context = self.context_for_port(port) if self.goal_conditioned_states else None
+        entry_directions = self.bfs_entry_directions(port) if self.directional_states else None
         return self.forward_hex_values(context, entry_directions)
 
     def get_max_state_values(self):
@@ -1053,7 +1072,7 @@ class BaseHexLearner:
         """
         BFS outward from `origin`, having just arrived from `prev_hex` (or
         None if `origin` has no real predecessor, e.g. a trip's starting
-        port). Returns {hex: predecessor} -- the direction you'd enter each
+        port). Returns {hex: predecessor}: the direction you'd enter each
         reachable hex from if you kept walking straight out from `origin`
         without doubling back through `prev_hex`. Hexes only reachable by
         turning back through `prev_hex` aren't included.
@@ -1103,7 +1122,7 @@ class BaseHexLearner:
         show a black arrow exactly on top of its gray one -- only hexes not
         yet visited (guessed via BFS) should show gray-only arrows.
 
-        Only meaningful with directional=True; with directional=False every
+        Only meaningful with directional_states=True; with directional_states=False every
         hex has a single state regardless of entry direction.
         """
         entry_directions = self.resolve_snapshot_entry_directions(path, step_index)
@@ -1126,10 +1145,10 @@ class BaseHexLearner:
         """
         {hex: value} for a context, given a precomputed {hex: prev_hex}
         entry-direction map (see resolve_snapshot_entry_directions). With
-        directional=False there's only one state per hex, so entry
+        directional_states=False there's only one state per hex, so entry
         directions don't matter and this just reads V[context] directly.
         """
-        if not self.directional:
+        if not self.directional_states:
             return {hex: self.V[context][hex] for hex in self.graph.nodes()}
         return {
             hex: (
@@ -1212,6 +1231,7 @@ class BaseHexLearner:
         self,
         trajectories,
         rewards,
+        replayed_hexes=None,
         start_port=None,
         panels=False,
         show_updates=True,
@@ -1251,6 +1271,8 @@ class BaseHexLearner:
 
         Parameters:
             trajectories, rewards (see learn().):
+            replayed_hexes (list[list[int]], optional): The hexes replayed on each
+                trial, passed to learn_path. Used by a learner holding an SWRRule
             start_port (None, a port (1/2/3 or "A"/"B"/"C"), or "trial"): Which context's
                 value table to color by (see snapshot_values). None (default): max value
                 across all contexts -- can mask a real decrease in one context if another
@@ -1281,9 +1303,14 @@ class BaseHexLearner:
             show_equation (bool): If True (default), draw a text box each frame with which
                 hex the rat is in and the firing event's own description (see
                 format_update_text).
-            colormap, vmin, vmax, show_hex_labels, show_barriers, ax, **plot_kwargs :
-                Forwarded to plot_hex_maze.
+            colormap (str): Matplotlib colormap used to color hexes by value.
+            vmin, vmax (float or None): Range of hex values the colormap spans.
+                Defaults to 0 and 1. None fits that end of the scale to the values
+                this animation actually reaches, measured once across every frame so
+                the scale holds still while it plays.
             interval (int): Milliseconds between frames.
+            show_hex_labels, show_barriers, ax, **plot_kwargs :
+                Forwarded to plot_hex_maze.
 
         Returns:
             matplotlib.animation.FuncAnimation
@@ -1298,7 +1325,15 @@ class BaseHexLearner:
         fig_width_inches = 6 * len(self.contexts) if panels else 6
         path_wrap_width = max(20, int(fig_width_inches * 9))
 
-        valid_trials = [(path, reward) for path, reward in zip(trajectories, rewards) if len(path) >= 2]
+        # With no replay given, every trial replays nothing
+        if replayed_hexes is None:
+            replayed_hexes = [[] for _ in trajectories]
+
+        valid_trials = [
+            (path, reward, trial_replay)
+            for path, reward, trial_replay in zip(trajectories, rewards, replayed_hexes)
+            if len(path) >= 2
+        ]
 
         def values_for(snap):
             if panels:
@@ -1324,9 +1359,9 @@ class BaseHexLearner:
             )
 
         frames = []
-        for trial_index, (path, reward) in enumerate(valid_trials):
+        for trial_index, (path, reward, trial_replay) in enumerate(valid_trials):
             context = self.resolve_context(path)
-            history = self.learn_path(path, reward, context, record=True)
+            history = self.learn_path(path, reward, context, trial_replay, record=True)
             last_step = len(history) - 1
             show_reward = path[-1] in REWARD_PORTS
             n_steps = len(path) - 1  # real hex-to-hex transitions (extra
@@ -1405,6 +1440,22 @@ class BaseHexLearner:
 
         if not frames:
             raise ValueError("No frames to animate -- check trajectories/rewards.")
+
+        # A vmin or vmax of None is fitted to the values this animation actually
+        # reaches. It is measured once over every frame, so the color scale is
+        # the same in all of them and a hex only changes color when its value does.
+        if vmin is None or vmax is None:
+            animated_values = []
+            for frame in frames:
+                if panels:
+                    for context_values in frame["values"].values():
+                        animated_values.extend(context_values.values())
+                else:
+                    animated_values.extend(frame["values"].values())
+            if vmin is None:
+                vmin = min(animated_values)
+            if vmax is None:
+                vmax = max(animated_values)
 
         if plt.rcParams["animation.embed_limit"] < 512:
             plt.rcParams["animation.embed_limit"] = 512
@@ -1545,10 +1596,10 @@ class HexMazeAgent(BaseHexLearner):
     when you want more than plain TD(lambda), e.g.:
 
         HexMazeAgent(
-            maze, reward_probs,
+            maze,
             rules=[TDLambdaRule(), ModelBasedRule()],
             alpha=0.3, gamma=0.95, lam=0.3,      # TDLambdaRule reads these
             gamma_mb=0.8, a_T=0.1, a_mb=0.05,    # ModelBasedRule reads these
-            goal_conditioned=True,
+            goal_conditioned_states=True,
         )
     """

@@ -30,7 +30,6 @@ class KrauszDualLearner(BaseHexLearner):
 
     Parameters:
         maze: The hex maze represented in any valid format
-        reward_probs (list): Reward probabilities [pA, pB, pC] for the 3 ports
         alpha (float): Model-free TD learning rate. Defaults to 0.3
         gamma (float): Discount factor. Defaults to 0.95
         lam (float): Eligibility trace decay for the model-free rule.
@@ -42,13 +41,13 @@ class KrauszDualLearner(BaseHexLearner):
         a_mb (float): Model-based value learning rate. 0.0 disables the
             model-based sweep, leaving a pure TD learner. Defaults to 0.1
 
-    All other arguments are passed through to BaseHexLearner.
+    All other arguments are passed through to BaseHexLearner, including the
+    simulation options `reward_probs` and `no_backtrack`.
     """
 
     def __init__(
         self,
         maze,
-        reward_probs,
         alpha=0.3,
         gamma=0.95,
         lam=0.0,
@@ -59,7 +58,6 @@ class KrauszDualLearner(BaseHexLearner):
     ):
         super().__init__(
             maze,
-            reward_probs,
             rules=[TDLambdaRule(), ModelBasedRule()],
             gamma=gamma,
             alpha=alpha,
