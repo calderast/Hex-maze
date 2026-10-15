@@ -36,6 +36,7 @@ import random
 import textwrap
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -182,8 +183,10 @@ class BaseHexLearner:
     ):
         """
         Parameters:
-            maze (set, frozenset, list, np.ndarray, str, or networkx.Graph): The hex maze in
-                any valid format.
+            maze (set, frozenset, list, np.ndarray, str, networkx.Graph, or list of
+                these): The hex maze in any valid format. A list of mazes describes a
+                session with barrier changes, and the first one is what the agent
+                starts on (see learn).
             rules (list of UpdateRule): The active value-update mechanisms, e.g.
                 [TDLambdaRule()] or [TDLambdaRule(), ModelBasedRule()]. Order matters only
                 in that each rule's events become separate, sequential animation frames when
@@ -208,6 +211,15 @@ class BaseHexLearner:
                 TDLambdaRule; gamma_mb=, a_T=, a_mb= for ModelBasedRule), set as plain
                 attributes on this instance.
         """
+        # A list of mazes describes a session with barrier changes. The agent starts
+        # on the first one, which is what its graph and priors are built from, and
+        # learn swaps in the later ones. A list of plain ints is a single maze,
+        # given as its barrier hexes.
+        if isinstance(maze, (list, tuple)) and not all(
+            isinstance(hex, (int, np.integer)) for hex in maze
+        ):
+            maze = maze[0]
+
         self.graph = maze_to_graph(maze)
         
         # A learner with no rules just holds its priors and never updates them
@@ -430,6 +442,32 @@ class BaseHexLearner:
 
     #  Rule-driven learning
 
+    def maze_schedule(self, trajectories, mazes=None, trials_per_block=None):
+        """
+        Which maze each trial is run on, as a list with one entry per trial.
+
+        Only the trial where a barrier change happens carries a maze; every other
+        trial is None, meaning the maze the rat is already running.
+
+        Parameters:
+            trajectories (list of list of int): The session's trials
+            mazes (list): The maze for each block of trials, in order
+            trials_per_block (list of int): How many trials are run on each maze
+
+        Returns:
+            list: One entry per trial, a maze on the first trial of each block and
+                None elsewhere
+        """
+        schedule = [None] * len(trajectories)
+        if mazes is None:
+            return schedule
+
+        trial = 0
+        for maze, block_length in zip(mazes, trials_per_block):
+            schedule[trial] = maze
+            trial += block_length
+        return schedule
+
     def learn_path(self, path, reward, context, replayed_hexes=None, record=False):
         """
         Walk a single path within one context, driving every active rule's
@@ -589,7 +627,8 @@ class BaseHexLearner:
             path, reward, self.resolve_context(path), replayed_hexes, record=True
         )
 
-    def learn(self, trajectories, rewards, replayed_hexes=None, record=None):
+    def learn(self, trajectories, rewards, replayed_hexes=None, mazes=None,
+              trials_per_block=None, record=None):
         """
         Run updates over a batch of externally-provided trajectories.
 
@@ -601,6 +640,12 @@ class BaseHexLearner:
             replayed_hexes (list[list[int]], optional): The hexes replayed on each
                 trial, one list per trial, in the same order as `trajectories`. Used
                 by a learner holding an SWRRule
+            mazes (list, optional): The maze for each block of trials, for a session
+                with barrier changes. Learned values carry across a change: hexes that
+                become barriers are dropped, and hexes the new maze opens start at
+                their prior
+            trials_per_block (list of int, optional): How many trials are run on each
+                maze in `mazes`
             record ({None, "trial", "step"}, optional): Snapshot granularity to return.
                 Each snapshot is the same shape as snapshot(); collapse one with
                 snapshot_values()
@@ -618,8 +663,16 @@ class BaseHexLearner:
         if replayed_hexes is None:
             replayed_hexes = [[] for _ in trajectories]
 
+        maze_schedule = self.maze_schedule(trajectories, mazes, trials_per_block)
+
         history = []
-        for path, reward, trial_replay in zip(trajectories, rewards, replayed_hexes):
+        for path, reward, trial_replay, trial_maze in zip(
+            trajectories, rewards, replayed_hexes, maze_schedule
+        ):
+            # A barrier change swaps the maze in before this trial is learned
+            if trial_maze is not None:
+                self.set_graph(trial_maze)
+
             if len(path) < 2:
                 continue
             trial_history = self.learn_path(
@@ -681,7 +734,8 @@ class BaseHexLearner:
             "probability": probability_by_neighbor[next_hex],
         }
 
-    def choice_nll(self, trajectories, rewards, replayed_hexes=None, record=False, junctions_only=False):
+    def choice_nll(self, trajectories, rewards, replayed_hexes=None, mazes=None,
+                   trials_per_block=None, record=False, junctions_only=False):
         """
         Negative log-likelihood of the rat's hex-to-hex choices under this
         model's current parameters.
@@ -698,6 +752,9 @@ class BaseHexLearner:
             replayed_hexes (list[list[int]], optional): The hexes replayed on each
                 trial, one list per trial, in the same order as `trajectories`. Used
                 by a learner holding an SWRRule
+            mazes (list, optional): The maze for each block of trials, for a session with
+                barrier changes (see learn)
+            trials_per_block (list of int, optional): How many trials are run on each maze
             record (bool, optional): If True, also return a list of per-choice records, one
                 per scored hex-to-hex move, in trajectory order: {"trial": index into
                 trajectories/rewards, "entry": prev_hex (None at a trial's first step),
@@ -718,11 +775,17 @@ class BaseHexLearner:
         if replayed_hexes is None:
             replayed_hexes = [[] for _ in trajectories]
 
+        maze_schedule = self.maze_schedule(trajectories, mazes, trials_per_block)
+
         total = 0.0
         choices = [] if record else None
-        for trial_index, (path, reward, trial_replay) in enumerate(
-            zip(trajectories, rewards, replayed_hexes)
+        for trial_index, (path, reward, trial_replay, trial_maze) in enumerate(
+            zip(trajectories, rewards, replayed_hexes, maze_schedule)
         ):
+            # A barrier change swaps the maze in before this trial is scored
+            if trial_maze is not None:
+                self.set_graph(trial_maze)
+
             if len(path) < 2:
                 continue
             context = self.resolve_context(path)
@@ -730,6 +793,16 @@ class BaseHexLearner:
             for step in range(len(path) - 1):
                 cur_hex, next_hex = path[step], path[step + 1]
                 entry_hex = path[step - 1] if step > 0 else None
+
+                # A hex that is a barrier in this maze cannot have been run through,
+                # so it is a tracking error, or a trial scored against the wrong maze.
+                if cur_hex not in self.graph or next_hex not in self.graph:
+                    missing = [hex for hex in (cur_hex, next_hex) if hex not in self.graph]
+                    warnings.warn(
+                        f"choice_nll: hex {missing} is a barrier in this maze -- likely a "
+                        f"tracking error. Skipping this step."
+                    )
+                    continue
 
                 if junctions_only:
                     candidates = self.junction_candidates(cur_hex, entry_hex)
@@ -775,6 +848,7 @@ class BaseHexLearner:
     def fit_choices(cls, maze, trajectories, rewards, reward_probs=None,
                      alpha=None, gamma=None, lam=None, temperature=None,
                      gamma_mb=None, a_T=None, a_mb=None, a_swr=None, replayed_hexes=None,
+                     mazes=None, trials_per_block=None,
                      rules=None, junctions_only=False, **kwargs):
         """
         Fit hyperparameters to maximize the likelihood of the rat's
@@ -805,6 +879,9 @@ class BaseHexLearner:
                 fix-or-fit convention.
             replayed_hexes (list[list[int]], optional): The hexes replayed on each
                 trial, passed to choice_nll. Used by a learner holding an SWRRule
+            mazes (list, optional): The maze for each block of trials, for a session with
+                barrier changes (see learn)
+            trials_per_block (list of int, optional): How many trials are run on each maze
             rules (list of UpdateRule or None): The rules to fit with. None (default) uses
                 whichever rules the class itself builds, so HexMazeTDLearner fits TD
                 parameters and KrauszDualLearner fits the model-based ones too;
@@ -865,7 +942,8 @@ class BaseHexLearner:
             bounds = [cls._FIT_PARAM_DEFAULTS[name][1] for name in free_names]
             result = minimize(
                 lambda x: _build(x).choice_nll(
-                    trajectories, rewards, replayed_hexes, junctions_only=junctions_only
+                    trajectories, rewards, replayed_hexes, mazes, trials_per_block,
+                    junctions_only=junctions_only,
                 ),
                 x0=x0, bounds=bounds, method='L-BFGS-B',
             )
@@ -882,7 +960,8 @@ class BaseHexLearner:
         # at the same parameters, consistent regardless of whether anything
         # was optimized.
         nll, choices = _build(final_values).choice_nll(
-            trajectories, rewards, replayed_hexes, record=True, junctions_only=junctions_only,
+            trajectories, rewards, replayed_hexes, mazes, trials_per_block,
+            record=True, junctions_only=junctions_only,
         )
         fitted = _build(final_values)
         fitted.choice_nll_ = nll
@@ -1233,6 +1312,8 @@ class BaseHexLearner:
         trajectories,
         rewards,
         replayed_hexes=None,
+        mazes=None,
+        trials_per_block=None,
         start_port=None,
         panels=False,
         show_updates=True,
@@ -1245,6 +1326,8 @@ class BaseHexLearner:
         vmin=0,
         vmax=1,
         interval=150,
+        save_to=None,
+        fps=3,
         show_hex_labels=False,
         show_barriers=False,
         ax=None,
@@ -1273,6 +1356,9 @@ class BaseHexLearner:
             trajectories, rewards (see learn().):
             replayed_hexes (list[list[int]], optional): The hexes replayed on each
                 trial, passed to learn_path. Used by a learner holding an SWRRule
+            mazes (list, optional): The maze for each block of trials, for a session with
+                barrier changes (see learn)
+            trials_per_block (list of int, optional): How many trials are run on each maze
             start_port (None, a port (1/2/3 or "A"/"B"/"C"), or "trial"): Which context's
                 value table to color by (see snapshot_values). None (default): max value
                 across all contexts -- can mask a real decrease in one context if another
@@ -1306,7 +1392,12 @@ class BaseHexLearner:
                 Defaults to 0 and 1. None fits that end of the scale to the values
                 this animation actually reaches, measured once across every frame so
                 the scale holds still while it plays.
-            interval (int): Milliseconds between frames.
+            interval (int): Milliseconds between frames while playing in a notebook.
+            save_to (str or pathlib.Path): Where to write the animation, so a long one
+                can be built once and watched later. The file extension picks the format,
+                ".mp4" for a video or ".gif" for an animated image. Any folders in the
+                path are created. Left out, the animation is returned without being saved
+            fps (int): Frames per second in the saved file.
             show_hex_labels, show_barriers, ax, **plot_kwargs :
                 Forwarded to plot_hex_maze.
 
@@ -1327,9 +1418,13 @@ class BaseHexLearner:
         if replayed_hexes is None:
             replayed_hexes = [[] for _ in trajectories]
 
+        maze_schedule = self.maze_schedule(trajectories, mazes, trials_per_block)
+
         valid_trials = [
-            (path, reward, trial_replay)
-            for path, reward, trial_replay in zip(trajectories, rewards, replayed_hexes)
+            (path, reward, trial_replay, trial_maze)
+            for path, reward, trial_replay, trial_maze in zip(
+                trajectories, rewards, replayed_hexes, maze_schedule
+            )
             if len(path) >= 2
         ]
 
@@ -1357,7 +1452,11 @@ class BaseHexLearner:
             )
 
         frames = []
-        for trial_index, (path, reward, trial_replay) in enumerate(valid_trials):
+        for trial_index, (path, reward, trial_replay, trial_maze) in enumerate(valid_trials):
+            # A barrier change swaps the maze in before this trial is animated
+            if trial_maze is not None:
+                self.set_graph(trial_maze)
+
             context = self.resolve_context(path)
             history = self.learn_path(path, reward, context, trial_replay, record=True)
             last_step = len(history) - 1
@@ -1582,6 +1681,13 @@ class BaseHexLearner:
                 set_equation_text(axes[0], frame["equation_text"])
 
         anim = animation.FuncAnimation(fig, draw, frames=len(frames), interval=interval)
+
+        # Written before the figure is closed, since saving renders every frame
+        if save_to is not None:
+            save_path = Path(save_to)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            anim.save(save_path, fps=fps)
+
         if owns_fig:
             plt.close(fig)
         return anim
