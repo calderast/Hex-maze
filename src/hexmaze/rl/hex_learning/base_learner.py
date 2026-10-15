@@ -36,7 +36,7 @@ import random
 import textwrap
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -71,11 +71,12 @@ class UpdateEvent:
             a trace decaying back along the path is visible on the maze.
         describe: A function of no arguments returning this update's text
             block: its equation and the states it moved.
-        color: Outline color family for the changed hexes.
+        color: Outline color family for the changed hexes, which is how an
+            animation tells one rule's updates from another's.
     """
     changed: dict
     describe: Callable[[], str]
-    color: Optional[str] = None
+    color: str
 
 
 class UpdateRule:
@@ -1235,7 +1236,6 @@ class BaseHexLearner:
         start_port=None,
         panels=False,
         show_updates=True,
-        update_color="red",
         show_choices=True,
         choice_color="yellow",
         show_trial_info=True,
@@ -1285,9 +1285,7 @@ class BaseHexLearner:
                 and `ax` are ignored in this mode.
             show_updates (bool): If True (default), outline whichever hex(es) actually had
                 their value change on this event (see UpdateEvent.changed), in the event's
-                own color if it set one, else `update_color`.
-            update_color (str): Default outline color for updated hexes when an event
-                doesn't specify its own. Defaults to 'red'.
+                own color (see UpdateEvent.color).
             show_choices (bool): If True (default), whenever the *previous* step was a real
                 3-way junction choice (see junction_choice_info, "back" always excluded
                 regardless of no_backtrack), outline the two candidate hexes and print their
@@ -1514,7 +1512,7 @@ class BaseHexLearner:
             two hexes with no decay to show."""
             by_color = {}
             for state, (color, weight) in frame["changed_hexes"].items():
-                by_color.setdefault(color or update_color, []).append((self.hex_of_state(state), weight))
+                by_color.setdefault(color, []).append((self.hex_of_state(state), weight))
 
             groups, colors = [], []
             for color_name, entries in by_color.items():
