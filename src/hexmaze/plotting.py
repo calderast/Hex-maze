@@ -846,26 +846,7 @@ def plot_reward_image(ax, position, rewarded, scale=1.0):
     ax.imshow(img, extent=extent, zorder=10, interpolation='bilinear')
 
 
-def _add_suffix_to_save_path(save_path, suffix):
-    """
-    Append a suffix to the file name (before the extension) of a save path or list of save paths.
-    Used to give each figure a unique file name when a function creates multiple figures.
-    For example, ("maze.pdf", 2) -> "maze_2.pdf"
-
-    Parameters:
-        save_path (str, Path, or list): Path (or list of paths). If None, returns None
-        suffix (str or int): The suffix to append to the file name
-
-    Returns:
-        list[Path] or None: The save path(s) with the suffix added
-    """
-    if save_path is None:
-        return None
-    paths = [save_path] if isinstance(save_path, (str, Path)) else save_path
-    return [Path(path).with_name(f"{Path(path).stem}_{suffix}{Path(path).suffix}") for path in paths]
-
-
-def _save_figure(fig, save_path):
+def _save_figure(fig, save_path, suffix=None):
     """
     Save a matplotlib figure to one or more files, inferring the file format
     from each file extension (e.g. .pdf, .png, .svg).
@@ -874,11 +855,17 @@ def _save_figure(fig, save_path):
         fig (matplotlib.figure.Figure): The figure to save
         save_path (str, Path, or list): Path (or list of paths) to save the figure to.
             If None, the figure is not saved
+        suffix (str or int): Optional. Appended to the file name before the extension,
+            e.g. ("maze.pdf", suffix=2) -> "maze_2.pdf". Used to give each figure a unique
+            file name when a function creates multiple figures. Defaults to None
     """
     if save_path is None:
         return
     paths = [save_path] if isinstance(save_path, (str, Path)) else save_path
     for path in paths:
+        path = Path(path)
+        if suffix is not None:
+            path = path.with_stem(f"{path.stem}_{suffix}")
         fig.savefig(path, dpi=300, bbox_inches="tight")
 
 
@@ -1575,20 +1562,20 @@ def plot_barrier_change_sequence(
         # First print info for and plot the first maze (no barrier changes for Maze 1)
         if print_barrier_info:
             print(f"Maze 0: {barrier_sequence[0]}")
-        plot_hex_maze(barrier_sequence[0], save_path=_add_suffix_to_save_path(save_path, 1), **kwargs)
+        fig, ax = plt.subplots()
+        plot_hex_maze(barrier_sequence[0], ax=ax, **kwargs)
+        _save_figure(fig, save_path, suffix=1)
+        plt.show()
 
         # Now plot each successive maze (and print barrier change info)
         for i, (barriers, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
             if print_barrier_info:
                 print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
                 print(f"Maze {i+1}: {barriers}")
-            plot_hex_maze(
-                barriers,
-                old_barrier=old_barrier_hex,
-                new_barrier=new_barrier_hex,
-                save_path=_add_suffix_to_save_path(save_path, i + 2),
-                **kwargs,
-            )
+            fig, ax = plt.subplots()
+            plot_hex_maze(barriers, ax=ax, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
+            _save_figure(fig, save_path, suffix=i + 2)
+            plt.show()
 
 
 def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, save_path=None, **kwargs):
@@ -1865,5 +1852,5 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], save_path=None, **k
 
         # Adjust layout to ensure plots don't overlap
         plt.tight_layout()
-        _save_figure(fig, _add_suffix_to_save_path(save_path, ref + 1))
+        _save_figure(fig, save_path, suffix=ref + 1)
         plt.show()
