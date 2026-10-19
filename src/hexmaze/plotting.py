@@ -854,7 +854,7 @@ def _save_figure(fig, save_path, suffix=None):
     Parameters:
         fig (matplotlib.figure.Figure): The figure to save
         save_path (str, Path, or list): Path (or list of paths) to save the figure to.
-            If None, the figure is not saved
+            Folders in the path are created if they don't exist. If None, the figure is not saved
         suffix (str or int): Optional. Appended to the file name before the extension,
             e.g. ("maze.pdf", suffix=2) -> "maze_2.pdf". Used to give each figure a unique
             file name when a function creates multiple figures. Defaults to None
@@ -866,6 +866,7 @@ def _save_figure(fig, save_path, suffix=None):
         path = Path(path)
         if suffix is not None:
             path = path.with_stem(f"{path.stem}_{suffix}")
+        path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=300, bbox_inches="tight")
 
 
@@ -1064,8 +1065,11 @@ def plot_hex_maze(
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
         save_path (str, Path, or list): Optional. File path to save the figure to. The file format
             is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
-            multiple formats, e.g. ["maze.pdf", "maze.png"]. Defaults to None (figure is not saved).
-            If ax is specified, the entire figure containing ax is saved.
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
+            If ax is specified, the entire figure containing ax is saved as it is when this
+            function is called (so other subplots not yet drawn will be empty).
 
     Other function behavior to note:
     - If centroids argument is specified, view_angle will be ignored (centroid coordinates determine both
@@ -1487,9 +1491,11 @@ def plot_barrier_change_sequence(
             Defaults to False
         save_path (str, Path, or list): Optional. File path to save the figure to. The file format
             is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
-            multiple formats, e.g. ["maze.pdf", "maze.png"]. Defaults to None (figure is not saved).
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
             If same_plot=False, each maze is saved to a separate file with the maze number
-            appended to the file name (e.g. "maze_1.pdf", "maze_2.pdf").
+            appended to the file name, starting from 1 (e.g. "maze_1.pdf", "maze_2.pdf").
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to True
@@ -1561,7 +1567,7 @@ def plot_barrier_change_sequence(
     else:
         # First print info for and plot the first maze (no barrier changes for Maze 1)
         if print_barrier_info:
-            print(f"Maze 0: {barrier_sequence[0]}")
+            print(f"Maze 1: {barrier_sequence[0]}")
         fig, ax = plt.subplots()
         plot_hex_maze(barrier_sequence[0], ax=ax, **kwargs)
         _save_figure(fig, save_path, suffix=1)
@@ -1571,7 +1577,7 @@ def plot_barrier_change_sequence(
         for i, (barriers, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
             if print_barrier_info:
                 print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
-                print(f"Maze {i+1}: {barriers}")
+                print(f"Maze {i+2}: {barriers}")
             fig, ax = plt.subplots()
             plot_hex_maze(barriers, ax=ax, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
             _save_figure(fig, save_path, suffix=i + 2)
@@ -1596,7 +1602,9 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, save_path=None, **
             Defaults to True
         save_path (str, Path, or list): Optional. File path to save the figure to. The file format
             is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
-            multiple formats, e.g. ["maze.pdf", "maze.png"]. Defaults to None (figure is not saved).
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
@@ -1672,7 +1680,9 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, save_path=Non
             Defaults to True
         save_path (str, Path, or list): Optional. File path to save the figure to. The file format
             is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
-            multiple formats, e.g. ["maze.pdf", "maze.png"]. Defaults to None (figure is not saved).
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
@@ -1800,9 +1810,12 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], save_path=None, **k
         barrier_sequence (list[set]): List of sequential barrier sets
         save_path (str, Path, or list): Optional. File path to save the figure to. The file format
             is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
-            multiple formats, e.g. ["maze.pdf", "maze.png"]. Defaults to None (figure is not saved).
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
             Each row (reference maze) is a separate figure, so each is saved to a separate file with
-            the reference maze number appended to the file name (e.g. "eval_1.pdf", "eval_2.pdf").
+            the reference maze number appended to the file name, starting from 1
+            (e.g. "eval_1.pdf", "eval_2.pdf").
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
