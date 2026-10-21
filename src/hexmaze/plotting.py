@@ -846,6 +846,30 @@ def plot_reward_image(ax, position, rewarded, scale=1.0):
     ax.imshow(img, extent=extent, zorder=10, interpolation='bilinear')
 
 
+def _save_figure(fig, save_path, suffix=None):
+    """
+    Save a matplotlib figure to one or more files, inferring the file format
+    from each file extension (e.g. .pdf, .png, .svg).
+
+    Parameters:
+        fig (matplotlib.figure.Figure): The figure to save
+        save_path (str, Path, or list): Path (or list of paths) to save the figure to.
+            Folders in the path are created if they don't exist. If None, the figure is not saved
+        suffix (str or int): Optional. Appended to the file name before the extension,
+            e.g. ("maze.pdf", suffix=2) -> "maze_2.pdf". Used to give each figure a unique
+            file name when a function creates multiple figures. Defaults to None
+    """
+    if save_path is None:
+        return
+    paths = [save_path] if isinstance(save_path, (str, Path)) else save_path
+    for path in paths:
+        path = Path(path)
+        if suffix is not None:
+            path = path.with_stem(f"{path.stem}_{suffix}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+
+
 def get_stats_coords(hex_centroids: dict[int, tuple], invert_yaxis: bool = False) -> dict[str, tuple]:
     """
     When plotting a hex maze with additional stats (such as path lengths), get the
@@ -948,6 +972,7 @@ def plot_hex_maze(
         shift: Sequence[float] = (0.0, 0.0),
         ax: Optional[matplotlib.axes.Axes] = None,
         invert_yaxis: bool = False,
+        save_path: Optional[Union[str, Path, Sequence[Union[str, Path]]]] = None,
     ) -> None:
     """
     Given a set of barriers specifying a hex maze, plot the maze
@@ -1038,6 +1063,13 @@ def plot_hex_maze(
         invert_yaxis (bool): Invert the y axis. Often useful when specifying centroids based on
             video pixel coordinates, as video uses top left as (0,0), effectively vertically 
             flipping the hex maze when plotting the centroids on "normal" axes. Defaults to False
+        save_path (str, Path, or list): Optional. File path to save the figure to. The file format
+            is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
+            If ax is specified, the entire figure containing ax is saved as it is when this
+            function is called (so other subplots not yet drawn will be empty).
 
     Other function behavior to note:
     - If centroids argument is specified, view_angle will be ignored (centroid coordinates determine both
@@ -1428,12 +1460,17 @@ def plot_hex_maze(
         )
         plot_reward_image(ax, port_positions[port - 1], rewarded, scale=scale)
 
+    # Save the figure if a save path was provided
+    _save_figure(ax.figure, save_path)
+
     # If no axis was provided as an argument, show the plot now
     if show_plot:
         plt.show()
 
 
-def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info=True, same_plot=False, **kwargs):
+def plot_barrier_change_sequence(
+        barrier_sequence: list[set], print_barrier_info=True, same_plot=False, save_path=None, **kwargs
+    ):
     """
     Given a sequence of barrier sets that each differ by the movement of
     a single barrier, plot each maze in the sequence with the moved barriers
@@ -1452,6 +1489,13 @@ def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info
         same_plot (bool). Optional. Prints all mazes in a single row as
             subplots in the same plot (instead of as separate figures).
             Defaults to False
+        save_path (str, Path, or list): Optional. File path to save the figure to. The file format
+            is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
+            If same_plot=False, each maze is saved to a separate file with the maze number
+            appended to the file name, starting from 1 (e.g. "maze_1.pdf", "maze_2.pdf").
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to True
@@ -1516,24 +1560,31 @@ def plot_barrier_change_sequence(barrier_sequence: list[set], print_barrier_info
 
         # Adjust layout to ensure plots don't overlap
         plt.tight_layout()
+        _save_figure(fig, save_path)
         plt.show()
 
     # Otherwise, plot each maze separately
     else:
         # First print info for and plot the first maze (no barrier changes for Maze 1)
         if print_barrier_info:
-            print(f"Maze 0: {barrier_sequence[0]}")
-        plot_hex_maze(barrier_sequence[0], **kwargs)
+            print(f"Maze 1: {barrier_sequence[0]}")
+        fig, ax = plt.subplots()
+        plot_hex_maze(barrier_sequence[0], ax=ax, **kwargs)
+        _save_figure(fig, save_path, suffix=1)
+        plt.show()
 
         # Now plot each successive maze (and print barrier change info)
         for i, (barriers, (old_barrier_hex, new_barrier_hex)) in enumerate(zip(barrier_sequence[1:], barrier_changes)):
             if print_barrier_info:
                 print(f"Barrier change: {old_barrier_hex} -> {new_barrier_hex}")
-                print(f"Maze {i+1}: {barriers}")
-            plot_hex_maze(barriers, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
+                print(f"Maze {i+2}: {barriers}")
+            fig, ax = plt.subplots()
+            plot_hex_maze(barriers, ax=ax, old_barrier=old_barrier_hex, new_barrier=new_barrier_hex, **kwargs)
+            _save_figure(fig, save_path, suffix=i + 2)
+            plt.show()
 
 
-def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
+def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, save_path=None, **kwargs):
     """
     Given 2 hex mazes, plot each maze highlighting the different hexes the
     rat must run through on optimal paths between reward ports. Used for comparing
@@ -1549,6 +1600,11 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
             The second hex maze represented in any valid format
         print_info (bool): Optional. Print the hexes different on optimal paths between the mazes.
             Defaults to True
+        save_path (str, Path, or list): Optional. File path to save the figure to. The file format
+            is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
@@ -1600,10 +1656,11 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, **kwargs):
     axs[0].set_title("Maze 1")
     axs[1].set_title("Maze 2")
     plt.tight_layout()
+    _save_figure(fig, save_path)
     plt.show()
 
 
-def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
+def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, save_path=None, **kwargs):
     """
     Given 2 hex mazes, plot each maze highlighting the different hexes the 
     rat must run through on optimal paths between reward ports. Creates a 2x3
@@ -1621,6 +1678,11 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
             The second hex maze represented in any valid format
         print_info (bool): Optional. Print the hexes different on optimal paths between the mazes.
             Defaults to True
+        save_path (str, Path, or list): Optional. File path to save the figure to. The file format
+            is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
@@ -1718,6 +1780,7 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
     axs[0, 2].set_title(f"Hexes different between port 2 and 3")
     axs[1, 2].set_xlabel(f"{num_hexes_different_path23} hexes different between port 2 and 3")
     plt.tight_layout()
+    _save_figure(fig, save_path)
     plt.show()
 
     # Print the different hexes
@@ -1731,7 +1794,7 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, **kwargs):
         print(f"There are {hex_diff} hexes different across all optimal paths (not double counting hexes).")
 
 
-def plot_evaluate_maze_sequence(barrier_sequence: list[set], **kwargs):
+def plot_evaluate_maze_sequence(barrier_sequence: list[set], same_plot=True, save_path=None, **kwargs):
     """
     Given a sequence of barrier sets that each differ by the movement of
     a single barrier, plot each maze in the sequence showing a comparison of
@@ -1741,10 +1804,22 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], **kwargs):
     The reference maze has optimal paths highlighted in green. It is shown
     in a row compared to all other mazes in the sequence, where hexes on
     optimal paths in the other maze that are not on optimal paths in the
-    reference maze are highlighted in orange.
+    reference maze are highlighted in orange. By default, all rows are shown
+    together in one big figure.
 
     Parameters:
         barrier_sequence (list[set]): List of sequential barrier sets
+        same_plot (bool): Optional. Plot all rows (one per reference maze) as a single
+            (num mazes)x(num mazes) grid of subplots in the same figure. If False, each row
+            is plotted as a separate figure. Defaults to True
+        save_path (str, Path, or list): Optional. File path to save the figure to. The file format
+            is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
+            multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
+            don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
+            Defaults to None (figure is not saved).
+            If same_plot=False, each row (reference maze) is saved to a separate file with
+            the reference maze number appended to the file name, starting from 1
+            (e.g. "eval_1.pdf", "eval_2.pdf").
 
         show_barriers (bool): If the barriers should be shown as black hexes and labeled.
             If False, only open hexes are shown. Defaults to False
@@ -1770,28 +1845,47 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], **kwargs):
     kwargs.setdefault("show_choice_points", False)
     kwargs.setdefault("show_hex_labels", False)
 
+    num_mazes = len(barrier_sequence)
+
+    # If we want all rows on the same plot, set up a (num mazes)x(num mazes) grid of subplots
+    if same_plot:
+        fig, axs = plt.subplots(num_mazes, num_mazes, figsize=(18, 3 * num_mazes), squeeze=False)
+
     # Loop through each maze in the sequence
     for ref, maze in enumerate(barrier_sequence):
 
-        # Compare the maze with each other maze in the sequence
-        fig, axs = plt.subplots(1, len(barrier_sequence), figsize=(18, 3))
+        # Get the row of axes for this reference maze (on the big plot, or on a new figure for this row)
+        if same_plot:
+            row_axs = axs[ref]
+        else:
+            fig, axs = plt.subplots(1, num_mazes, figsize=(18, 3), squeeze=False)
+            row_axs = axs[0]
 
+        # Compare the maze with each other maze in the sequence
         for i, other_maze in enumerate(barrier_sequence):
             if i == ref:
                 # If this maze is the reference for this row, highlight optimal paths
-                plot_hex_maze(maze, ax=axs[i], show_optimal_paths=True, **kwargs)
-                axs[i].set_title(f"Maze {i+1}")
+                plot_hex_maze(maze, ax=row_axs[i], show_optimal_paths=True, **kwargs)
+                row_axs[i].set_title(f"Maze {i+1}")
             else:
                 # Otherwise, get the hexes different on optimal paths between the reference maze and another maze in the sequence
                 _, optimal_hexes_other_maze_not_reference_maze = hexes_different_on_optimal_paths(maze, other_maze)
 
                 # Plot the other maze highlighting the hexes different from the reference maze
                 plot_hex_maze(
-                    other_maze, ax=axs[i], highlight_hexes=optimal_hexes_other_maze_not_reference_maze, **kwargs
+                    other_maze, ax=row_axs[i], highlight_hexes=optimal_hexes_other_maze_not_reference_maze, **kwargs
                 )
-                axs[i].set_title(f"Maze {i+1} compared to Maze {ref+1}")
-                axs[i].set_xlabel(f"{len(optimal_hexes_other_maze_not_reference_maze)} hexes different")
+                row_axs[i].set_title(f"Maze {i+1} compared to Maze {ref+1}")
+                row_axs[i].set_xlabel(f"{len(optimal_hexes_other_maze_not_reference_maze)} hexes different")
 
-        # Adjust layout to ensure plots don't overlap
+        # If each row is its own figure, adjust layout, save, and show it now
+        if not same_plot:
+            plt.tight_layout()
+            _save_figure(fig, save_path, suffix=ref + 1)
+            plt.show()
+
+    # If all rows are on the same plot, adjust layout, save, and show it once all rows are drawn
+    if same_plot:
         plt.tight_layout()
+        _save_figure(fig, save_path)
         plt.show()
