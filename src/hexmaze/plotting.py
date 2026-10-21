@@ -1794,7 +1794,7 @@ def plot_hex_maze_path_comparison(maze_1, maze_2, print_info=True, save_path=Non
         print(f"There are {hex_diff} hexes different across all optimal paths (not double counting hexes).")
 
 
-def plot_evaluate_maze_sequence(barrier_sequence: list[set], save_path=None, **kwargs):
+def plot_evaluate_maze_sequence(barrier_sequence: list[set], same_plot=True, save_path=None, **kwargs):
     """
     Given a sequence of barrier sets that each differ by the movement of
     a single barrier, plot each maze in the sequence showing a comparison of
@@ -1804,16 +1804,20 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], save_path=None, **k
     The reference maze has optimal paths highlighted in green. It is shown
     in a row compared to all other mazes in the sequence, where hexes on
     optimal paths in the other maze that are not on optimal paths in the
-    reference maze are highlighted in orange.
+    reference maze are highlighted in orange. By default, all rows are shown
+    together in one big figure.
 
     Parameters:
         barrier_sequence (list[set]): List of sequential barrier sets
+        same_plot (bool): Optional. Plot all rows (one per reference maze) as a single
+            (num mazes)x(num mazes) grid of subplots in the same figure. If False, each row
+            is plotted as a separate figure. Defaults to True
         save_path (str, Path, or list): Optional. File path to save the figure to. The file format
             is inferred from the extension (e.g. .pdf, .png, .svg). Pass a list of paths to save
             multiple formats, e.g. ["maze.pdf", "maze.png"]. Folders in the path are created if they
             don't exist. Figures are saved at 300 dpi with surrounding whitespace trimmed.
             Defaults to None (figure is not saved).
-            Each row (reference maze) is a separate figure, so each is saved to a separate file with
+            If same_plot=False, each row (reference maze) is saved to a separate file with
             the reference maze number appended to the file name, starting from 1
             (e.g. "eval_1.pdf", "eval_2.pdf").
 
@@ -1841,29 +1845,47 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], save_path=None, **k
     kwargs.setdefault("show_choice_points", False)
     kwargs.setdefault("show_hex_labels", False)
 
+    num_mazes = len(barrier_sequence)
+
+    # If we want all rows on the same plot, set up a (num mazes)x(num mazes) grid of subplots
+    if same_plot:
+        fig, axs = plt.subplots(num_mazes, num_mazes, figsize=(18, 3 * num_mazes), squeeze=False)
+
     # Loop through each maze in the sequence
     for ref, maze in enumerate(barrier_sequence):
 
-        # Compare the maze with each other maze in the sequence
-        fig, axs = plt.subplots(1, len(barrier_sequence), figsize=(18, 3))
+        # Get the row of axes for this reference maze (on the big plot, or on a new figure for this row)
+        if same_plot:
+            row_axs = axs[ref]
+        else:
+            fig, axs = plt.subplots(1, num_mazes, figsize=(18, 3), squeeze=False)
+            row_axs = axs[0]
 
+        # Compare the maze with each other maze in the sequence
         for i, other_maze in enumerate(barrier_sequence):
             if i == ref:
                 # If this maze is the reference for this row, highlight optimal paths
-                plot_hex_maze(maze, ax=axs[i], show_optimal_paths=True, **kwargs)
-                axs[i].set_title(f"Maze {i+1}")
+                plot_hex_maze(maze, ax=row_axs[i], show_optimal_paths=True, **kwargs)
+                row_axs[i].set_title(f"Maze {i+1}")
             else:
                 # Otherwise, get the hexes different on optimal paths between the reference maze and another maze in the sequence
                 _, optimal_hexes_other_maze_not_reference_maze = hexes_different_on_optimal_paths(maze, other_maze)
 
                 # Plot the other maze highlighting the hexes different from the reference maze
                 plot_hex_maze(
-                    other_maze, ax=axs[i], highlight_hexes=optimal_hexes_other_maze_not_reference_maze, **kwargs
+                    other_maze, ax=row_axs[i], highlight_hexes=optimal_hexes_other_maze_not_reference_maze, **kwargs
                 )
-                axs[i].set_title(f"Maze {i+1} compared to Maze {ref+1}")
-                axs[i].set_xlabel(f"{len(optimal_hexes_other_maze_not_reference_maze)} hexes different")
+                row_axs[i].set_title(f"Maze {i+1} compared to Maze {ref+1}")
+                row_axs[i].set_xlabel(f"{len(optimal_hexes_other_maze_not_reference_maze)} hexes different")
 
-        # Adjust layout to ensure plots don't overlap
+        # If each row is its own figure, adjust layout, save, and show it now
+        if not same_plot:
+            plt.tight_layout()
+            _save_figure(fig, save_path, suffix=ref + 1)
+            plt.show()
+
+    # If all rows are on the same plot, adjust layout, save, and show it once all rows are drawn
+    if same_plot:
         plt.tight_layout()
-        _save_figure(fig, save_path, suffix=ref + 1)
+        _save_figure(fig, save_path)
         plt.show()
