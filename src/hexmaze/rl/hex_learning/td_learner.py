@@ -17,8 +17,8 @@ The single ``lam`` (lambda) controls:
                  whole path within a single trial.
     0 < lam<1  -> eligibility-trace blend of all intermediate horizons.
 
-See BaseHexLearner for the state representation options (``directional``,
-``goal_conditioned``) and the rest of the constructor arguments.
+See BaseHexLearner for the state representation options (``directional_states``,
+``goal_conditioned_states``) and the rest of the constructor arguments.
 """
 
 from .base_learner import BaseHexLearner
@@ -52,16 +52,3 @@ class HexMazeTDLearner(BaseHexLearner):
             **kwargs,
         )
 
-    def filtered_update_log(self, update):
-        """
-        Log entries from an update dict with a real, displayable change
-        of at least 0.00005, which is the smallest change that shows up once
-        values are rounded for display. Sorted by eligibility, largest first.
-        format_update_text and animate_learning's outlines both read this, so
-        the text and the maze agree on which hexes moved.
-        """
-        if update is None:
-            return []
-        log = [row for row in update["log"] if abs(row["new_value"] - row["old_value"]) >= 0.00005]
-        log.sort(key=lambda row: -row["eligibility"])
-        return log

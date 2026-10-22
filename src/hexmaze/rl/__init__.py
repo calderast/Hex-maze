@@ -7,11 +7,22 @@ from .hex_learning import (
     HexMazeAgent,
     UpdateRule,
     UpdateEvent,
+    RetrievalRule,
+    LocalRetrieval,
+    BestSweptRetrieval,
+    BestSweptOrCachedRetrieval,
+    FurthestSweptRetrieval,
     TDLambdaRule,
     ModelBasedRule,
     SWRRule,
+    fit_many,
 )
-from .port_learning import RescorlaWagner, BayesianPortLearner
+from .port_learning import (
+    RescorlaWagner,
+    BayesianPortLearner,
+    HiddenStatePortLearner,
+    BayesianHiddenStatePortLearner,
+)
 
 __all__ = [
     "HexMazeTDLearner",
@@ -22,9 +33,17 @@ __all__ = [
     "HexMazeAgent",
     "UpdateRule",
     "UpdateEvent",
+    "RetrievalRule",
+    "LocalRetrieval",
+    "BestSweptRetrieval",
+    "BestSweptOrCachedRetrieval",
+    "FurthestSweptRetrieval",
     "TDLambdaRule",
     "ModelBasedRule",
     "SWRRule",
+    "fit_many",
     "RescorlaWagner",
     "BayesianPortLearner",
+    "HiddenStatePortLearner",
+    "BayesianHiddenStatePortLearner",
 ]

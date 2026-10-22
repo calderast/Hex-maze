@@ -40,8 +40,8 @@ class SWRDualLearner(BaseHexLearner):
     All other arguments are passed through to BaseHexLearner, including the
     simulation options `reward_probs` and `no_backtrack`.
 
-    The hexes replayed on each trial are given to `learn` alongside the
-    trajectories and rewards, rather than to this constructor.
+    The hexes replayed on each trial are given to `learn` (or `fit_choices`)
+    alongside the trajectories and rewards.
     """
 
     def __init__(
