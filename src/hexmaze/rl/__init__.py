@@ -1,6 +1,5 @@
 from .hex_learning import (
     HexMazeTDLearner,
-    HexMazeTDLearnerOld,
     KrauszDualLearner,
     SWRDualLearner,
     BaseHexLearner,
@@ -25,7 +24,6 @@ from .port_learning import (
 
 __all__ = [
     "HexMazeTDLearner",
-    "HexMazeTDLearnerOld",
     "KrauszDualLearner",
     "SWRDualLearner",
     "BaseHexLearner",

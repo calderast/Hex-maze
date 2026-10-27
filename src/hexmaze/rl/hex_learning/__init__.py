@@ -1,5 +1,4 @@
 from .td_learner import HexMazeTDLearner
-from .td_learner_old import HexMazeTDLearnerOld
 from .base_learner import BaseHexLearner
 from .dual_learner import KrauszDualLearner
 from .swr_learner import SWRDualLearner
@@ -14,7 +13,7 @@ from .update_rules import UpdateRule, UpdateEvent, TDLambdaRule, ModelBasedRule,
 from .fitting import fit_many
 
 __all__ = [
-    "HexMazeTDLearner", "HexMazeTDLearnerOld", "KrauszDualLearner", "SWRDualLearner",
+    "HexMazeTDLearner", "KrauszDualLearner", "SWRDualLearner",
     "BaseHexLearner", "UpdateRule", "UpdateEvent",
     "RetrievalRule", "LocalRetrieval", "BestSweptRetrieval", "BestSweptOrCachedRetrieval", "FurthestSweptRetrieval",
     "TDLambdaRule", "ModelBasedRule", "SWRRule",
