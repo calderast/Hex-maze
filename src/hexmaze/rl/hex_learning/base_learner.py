@@ -57,20 +57,18 @@ from .retrieval_rules import LocalRetrieval
 from .update_rules import TDLambdaRule, ModelBasedRule, SWRRule
 
 
-def _ramp(dim, bright):
-    """A colormap running from `dim` at the lowest weight to `bright` at the highest."""
-    return LinearSegmentedColormap.from_list("outline", [dim, bright])
-
-
 # Named outline color -> the colormap that shades a changed hex's outline by its update's
 # weight (see UpdateEvent.changed and build_outlines inside animate_learning). Each runs
-# dim to bright, so a trace decaying back along the path fades as it goes, and the hexes
-# an update moved most stay legible against a maze that is dark wherever value is still
-# low. An UpdateEvent names one of these.
+# dim (lowest weight) to bright (highest), so a trace decaying back along the path fades
+# as it goes, and the hexes an update moved most stay legible against a maze that is dark
+# wherever value is still low. An UpdateEvent names one of these.
 _COLOR_TO_CMAP = {
-    "red": _ramp("#7f1d1d", "#ff8585"),
-    "green": _ramp("#14532d", "#6ee7a0"),
-    "lightgreen": _ramp("#2f7d3a", "#9dff8a"),
+    name: LinearSegmentedColormap.from_list("outline", [dim, bright])
+    for name, (dim, bright) in {
+        "red": ("#7f1d1d", "#ff8585"),
+        "green": ("#14532d", "#6ee7a0"),
+        "lightgreen": ("#2f7d3a", "#9dff8a"),
+    }.items()
 }
 
 
@@ -105,6 +103,17 @@ class BaseHexLearner:
     in one place, and each rule reads the ones it needs from the learner.
     `gamma` is a named argument here because it also sets how quickly prior
     values fall off with distance from a port, whichever rules are active.
+
+    HexMazeTDLearner, KrauszDualLearner and SWRDualLearner each fix their own
+    rules. Any other combination is built here directly, e.g.:
+
+        BaseHexLearner(
+            maze,
+            rules=[TDLambdaRule(), ModelBasedRule()],
+            alpha=0.3, gamma=0.95, lam=0.3,      # TDLambdaRule reads these
+            gamma_mb=0.8, a_T=0.1, a_mb=0.05,    # ModelBasedRule reads these
+            goal_conditioned_states=True,
+        )
     """
 
     # Starting value and (lower, upper) bounds for each parameter fit_choices can fit
@@ -140,9 +149,10 @@ class BaseHexLearner:
                 session with barrier changes, and the first one is what the agent
                 starts on (see learn).
             rules (list of UpdateRule): The active value-update mechanisms, e.g.
-                [TDLambdaRule()] or [TDLambdaRule(), ModelBasedRule()]. Order matters only
-                in that each rule's events become separate, sequential animation frames when
-                two rules fire on the same step.
+                [TDLambdaRule()] or [TDLambdaRule(), ModelBasedRule()]. At each moment of a
+                trial the rules are called in this order, so a later rule reads any value
+                an earlier one has just changed, and their animation frames come in this
+                order.
             gamma (float): Discount factor used for prior-value computation, and reused by
                 any rule (like TDLambdaRule) that wants a shared discount rate.
             temperature (float): Softmax temperature for action selection (policy-level, not
@@ -163,7 +173,7 @@ class BaseHexLearner:
                 back and forth far longer on the way there.
             retrieval (RetrievalRule): How the agent works out what each move on offer
                 is worth. Defaults to LocalRetrieval, which judges a move by the hex it
-                would step into
+                would step into.
             reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A,
                 2/B, 3/C. Read when simulating only, to sample whether a reward is delivered.
             **rule_kwargs: Rule-specific hyperparameters (e.g. alpha=, lam= for
@@ -427,25 +437,11 @@ class BaseHexLearner:
         return state[1] if self.directional_states else state
 
     def format_state(self, state):
-        """Human-readable label for a state key, e.g. 'V(48→43)' or 'V(43)'."""
+        """Human-readable label for a state key, e.g. '48→43', 'start→43' or '43'."""
         if self.directional_states:
             prev, cur = state
             return f"{prev if prev is not None else 'start'}→{cur}"
         return str(state)
-
-    def state_value(self, context, state):
-        """
-        Read a state's value.
-
-        Parameters:
-            context (int or None): Which value table to read, meaning the port
-                the trip started from
-            state (int or tuple): The hex, or the directed edge, to read
-
-        Returns:
-            float: That state's current value
-        """
-        return self.V[context][state]
 
     #  Rule-driven learning
 
@@ -780,31 +776,6 @@ class BaseHexLearner:
 
     #  Reading values along a timeseries
 
-    def steps_for_samples(self, path, sampled_hexes):
-        """
-        How far along the trial's path the rat was at each sample of a timeseries.
-
-        A trajectory is the same sequence of hexes as the samples with consecutive
-        repeats collapsed, so the rat has taken a step wherever a sample moves to
-        the next hex of the path. A sample that matches neither the hex the rat is
-        on nor the next one is a tracking error, and stays on the step it was on.
-
-        Parameters:
-            path (list[int]): The hexes the rat ran this trial, in order
-            sampled_hexes (list[int]): The hex the rat was in at each sample of
-                this trial, in order
-
-        Returns:
-            list[int]: The index into `path` that each sample belongs to
-        """
-        step = 0
-        steps = []
-        for hex in sampled_hexes:
-            if step + 1 < len(path) and hex == path[step + 1]:
-                step += 1
-            steps.append(step)
-        return steps
-
     def value_timeseries(self, trajectories, rewards, sampled_hexes, represented_hexes=None,
                          replayed_hexes=None, mazes=None, trials_per_block=None, values="trial"):
         """
@@ -874,7 +845,18 @@ class BaseHexLearner:
                 continue
 
             context = self.resolve_context(path)
-            steps = self.steps_for_samples(path, samples)
+
+            # How far along the path the rat was at each sample. A trajectory is the
+            # samples with consecutive repeats collapsed, so the rat has taken a step
+            # wherever a sample moves on to the next hex of the path. A sample that
+            # matches neither the hex the rat is on nor the next one is a tracking
+            # error, and stays on the step it was on.
+            steps, step = [], 0
+            for hex in samples:
+                if step + 1 < len(path) and hex == path[step + 1]:
+                    step += 1
+                steps.append(step)
+
             if represented is None:
                 represented = [None] * len(samples)
 
@@ -936,20 +918,19 @@ class BaseHexLearner:
     def junction_choice_info(self, cur_hex, entry_hex, next_hex, context, sweeps=None):
         """
         Binary junction-choice info for one step, matching choice_nll's
-        score_at="junctions" scoring: 
-        
-        Returns None if cur_hex isn't a real 3-way junction, or next_hex is 
-        entry_hex, meaning the rat backtracked. (This is valid, just not a binary 
+        score_at="junctions" scoring.
+
+        Returns None if cur_hex isn't a real 3-way junction, or next_hex is
+        entry_hex, meaning the rat backtracked. (This is valid, just not a binary
         left/right choice, so we follow Tim's paper in not scoring it).
-        Also returns None if next_hex isn't one of the junction candidates at all. 
-        (Could happen due to a position tracking error. Callers that need to warn 
-        about that, like choice_nll, check it themselves). 
+        Also returns None if next_hex isn't one of the junction candidates at all,
+        which is a position tracking error.
         Otherwise returns:
-        {"candidates": [hexA, hexB], 
-        "values": {hex: V(hex)}, 
-        "credited": {hex: the swept hex its value came from}, 
-        "probabilities": {hex: p}, 
-        "choice": next_hex, 
+        {"candidates": [hexA, hexB],
+        "values": {hex: the value the retrieval rule gave that move},
+        "credited": {hex: the swept hex its value came from},
+        "probabilities": {hex: p},
+        "choice": next_hex,
         "probability": p_choice}.
         """
         candidates = self.junction_candidates(cur_hex, entry_hex)
@@ -960,11 +941,13 @@ class BaseHexLearner:
 
         # What the agent compared, which is what the probabilities came from. With
         # a sweep down one of these ways, that is what the sweep found there.
-        values = dict(zip(candidates, self.action_values(cur_hex, candidates, context, sweeps)))
+        values = dict(zip(
+            candidates, self.retrieval.action_values(self, cur_hex, candidates, context, sweeps)
+        ))
 
         # Where each of those values was read from, which is a swept hex only for
-        # the ways the retrieval rule credited a sweep
-        credited = self.credited_hexes(cur_hex, candidates, context, sweeps)
+        # the ways the retrieval rule credited a sweep (see RetrievalRule.credited_hexes)
+        credited = self.retrieval.credited_hexes(self, cur_hex, candidates, context, sweeps)
         return {
             "candidates": candidates,
             "values": values,
@@ -1302,9 +1285,10 @@ class BaseHexLearner:
             path.append(next_hex)
             visited.add(next_hex)
 
-            # Reward is delivered (or not) on arrival at a goal port
+            # Reward is delivered (or not) on arrival at a goal port, with that port's
+            # reward probability. With no reward_probs given, reward is always 0
             if next_hex in goal_hexes:
-                reward = self.sample_reward(next_hex)
+                reward = 1.0 if random.random() < self.reward_probs.get(next_hex, 0.0) else 0.0
 
             events = self.learn_step(prev_hex, cur_hex, next_hex, context, reward)
             if record:
@@ -1317,70 +1301,36 @@ class BaseHexLearner:
 
     #  Action selection
 
-    def get_neighbors(self, hex, visited=None):
-        """Available neighbors of `hex`, respecting no_backtrack."""
-        neighbors = list(self.graph.neighbors(hex))
-        # Hexes not yet visited this trial, falling back to every neighbor at a dead
-        # end or wherever all of them have been visited
-        if self.no_backtrack and visited is not None:
-            unvisited = [neighbor for neighbor in neighbors if neighbor not in visited]
-            if unvisited:
-                return unvisited
-        return neighbors
+    def choose_action(self, hex, context, visited):
+        """
+        Pick the simulated agent's next hex by softmax over the value of each move.
 
-    def choose_action(self, hex, context, visited=None):
-        """Pick the next hex via softmax over the value of entering each neighbor."""
-        neighbors = self.get_neighbors(hex, visited)
+        With no_backtrack, only hexes not yet visited this trial are on offer,
+        falling back to every neighbor at a dead end or wherever all of them have
+        been visited.
+
+        Parameters:
+            hex (int): The hex the agent is deciding from
+            context (int or None): The value table to read
+            visited (set[int]): The hexes visited so far this trial
+
+        Returns:
+            int: The hex the agent moves to
+        """
+        neighbors = list(self.graph.neighbors(hex))
+        if self.no_backtrack:
+            unvisited = [neighbor for neighbor in neighbors if neighbor not in visited]
+            neighbors = unvisited or neighbors
         probabilities = self.softmax_probabilities(hex, neighbors, context)
         return int(np.random.choice(neighbors, p=probabilities))
-
-    def action_values(self, hex, neighbors, context, sweeps=None):
-        """
-        The value compared for each candidate move, from this learner's retrieval rule.
-
-        Everything that turns values into choices goes through here -- the policy,
-        the simulated agent, and the choice likelihood -- so they cannot disagree.
-
-        Parameters:
-            hex (int): The hex the agent is deciding from
-            neighbors (list[int]): The hexes it could move to
-            context (int or None): The value table to read, meaning the port the
-                trip started from
-            sweeps (list[list[int]] or list[int]): The sweeps the rat made from this
-                hex, each a sequence of hexes in the order they were represented, or
-                one run of represented hexes (see RetrievalRule)
-
-        Returns:
-            np.ndarray: One value per neighbor, in the order given
-        """
-        return self.retrieval.action_values(self, hex, neighbors, context, sweeps or [])
-
-    def credited_hexes(self, hex, neighbors, context, sweeps=None):
-        """
-        Which represented hex each candidate move's value was read from.
-
-        A move the agent valued by the hex it steps into has no entry, so this
-        holds just the moves a sweep spoke for: under BestSweptRetrieval the
-        highest-valued hex the sweep down that way reached, under
-        FurthestSweptRetrieval the hex it ended on. Reported so a plot or an
-        animation can show which represented hex a choice rested on.
-
-        Parameters:
-            hex (int): The hex the agent is deciding from
-            neighbors (list[int]): The hexes it could move to
-            context (int or None): The value table to read, meaning the port the
-                trip started from
-            sweeps (list[list[int]] or list[int]): The sweeps the rat made from this
-                hex, or one run of represented hexes (see RetrievalRule)
-
-        Returns:
-            dict: {move: the represented hex its value came from}
-        """
-        return self.retrieval.credited_hexes(self, hex, neighbors, context, sweeps or [])
 
     def softmax_probabilities(self, hex, neighbors, context, sweeps=None):
         """
         The probability of choosing each neighbor, from the values being compared.
+
+        The value of each move comes from this learner's retrieval rule, and every
+        choice the model makes or scores goes through here: the simulated agent,
+        the choice likelihood, and the junction choices shown in animations.
 
         Temperature sets how strongly the agent prefers the better option: near
         0 it almost always takes the highest-valued neighbor, and at large
@@ -1390,13 +1340,14 @@ class BaseHexLearner:
             hex (int): The hex the agent is deciding from
             neighbors (list[int]): The hexes it could move to
             context (int or None): The value table to read
-            sweeps (list[list[int]]): The sweeps the rat made from this hex, each a
-                sequence of hexes in the order they were represented
+            sweeps (list[list[int]] or list[int], optional): The sweeps the rat made
+                from this hex, or one run of represented hexes (see RetrievalRule).
+                None when the rat represented nothing beyond its own location
 
         Returns:
             np.ndarray: One probability per neighbor, summing to 1
         """
-        values = self.action_values(hex, neighbors, context, sweeps)
+        values = self.retrieval.action_values(self, hex, neighbors, context, sweeps)
         scaled = values / self.temperature
 
         # Subtracting the largest value leaves every probability unchanged,
@@ -1406,21 +1357,6 @@ class BaseHexLearner:
 
         exponentiated = np.exp(scaled)
         return exponentiated / exponentiated.sum()
-
-    def sample_reward(self, hex):
-        """
-        Sample a binary reward at a reward port (used when simulating).
-
-        Parameters:
-            hex (int): The hex the agent arrived at (1, 2, or 3)
-
-        Returns:
-            float: 1.0 if reward was delivered, otherwise 0.0
-        """
-        if hex in self.reward_probs and random.random() < self.reward_probs[hex]:
-            return 1.0
-        # If no reward_probs argument was set, reward is always 0 :(
-        return 0.0
 
     #  Inspection
 
@@ -1521,7 +1457,7 @@ class BaseHexLearner:
         # shows its prior
         return {
             hex: (
-                self.state_value(context, (entry_directions[hex], hex))
+                self.V[context][(entry_directions[hex], hex)]
                 if hex in entry_directions
                 else self.prior_for_hex(context, hex)
             )
@@ -1567,35 +1503,19 @@ class BaseHexLearner:
             header = f"path: {path_so_far}\n{header}"
         return header
 
-    def format_update_text(self, cur_hex, event, path_so_far=None):
-        """
-        Multi-line diagnostic text for one animate_learning frame: the hex
-        path walked so far this trial, which hex the rat is in, and (if an
-        event just happened) that event's own description -- see
-        UpdateEvent.describe. Each rule writes its own description, so this
-        text looks the same whichever rule produced the event.
-        """
-        header = self.format_header_text(cur_hex, path_so_far)
-        if event is None:
-            return header + "\n(no update yet this trial)"
-        return header + "\n" + event.describe()
-
     def format_junction_text(self, junction_hex, info):
         """
         Text block describing one binary junction choice (see
         junction_choice_info): the two candidate hexes with their retrieved
         values and choice probabilities, which one was actually taken, and for a
         way the retrieval rule credited a sweep, the swept hex the value came from.
-        Returns None if `info` is None (not a scored junction choice there).
         """
-        if info is None:
-            return None
         choosing_between = " and ".join(str(hex) for hex in info["candidates"])
         lines = [f"junction at hex {junction_hex}  (choosing between {choosing_between}):"]
         for hex in info["candidates"]:
             marker = "  ← chosen" if hex == info["choice"] else ""
             # A value read from a sweep belongs to a hex further out, so say which
-            credited = info.get("credited", {}).get(hex)
+            credited = info["credited"].get(hex)
             source = f"  from swept hex {credited}" if credited is not None else ""
             lines.append(
                 f"  hex {hex}  V={info['values'][hex]:.4f}{source}  p={info['probabilities'][hex]:.3f}{marker}"
@@ -1700,7 +1620,7 @@ class BaseHexLearner:
                 hex-by-hex path walked so far this trial.
             show_equation (bool): If True (default), draw a text box each frame with which
                 hex the rat is in and the firing event's own description (see
-                format_update_text).
+                UpdateEvent.describe).
             colormap (str): Matplotlib colormap used to color hexes by value.
             vmin, vmax (float or None): Range of hex values the colormap spans.
                 Defaults to 0 and 1. None fits that end of the scale to the values
@@ -1862,20 +1782,26 @@ class BaseHexLearner:
                 # came in from
                 rat_from = path[step_label - 1] if step_label > 0 else None
 
-                event = snap.get("event")
+                # Each changed state is outlined in its event's color, shaded by how
+                # strongly the update included it (see UpdateEvent.changed)
+                event = snap["event"]
                 changed_hexes = {}
                 if show_updates and event is not None:
                     changed_hexes = {
-                        state: (event.color, entry[2] if len(entry) > 2 else 1.0)
-                        for state, entry in event.changed.items()
+                        state: (event.color, weight)
+                        for state, (_, _, weight) in event.changed.items()
                     }
 
                 is_reward_step = snapshot_index == last_snapshot and show_reward
                 title = trial_title(step_label, "  →  " + ("rewarded" if reward else "omission") if is_reward_step else "")
-                equation_text = (
-                    self.format_update_text(cur_hex, event, path_so_far=path_line(step_label))
-                    if show_equation else None
-                )
+
+                # Which hex the rat is in, then the update's own equation and the
+                # states it moved, written by the rule that made it
+                equation_text = None
+                if show_equation:
+                    equation_text = self.format_header_text(cur_hex, path_so_far=path_line(step_label)) + "\n" + (
+                        "(no update yet this trial)" if event is None else event.describe()
+                    )
 
                 frames.append({
                     "graph": self.graph,
@@ -2097,19 +2023,3 @@ class BaseHexLearner:
         if owns_fig:
             plt.close(fig)
         return anim
-
-
-class HexMazeAgent(BaseHexLearner):
-    """
-    Concrete hex-maze learner with a configurable list of value-update
-    rules (see module docstring and update_rules.py). Construct directly
-    when you want more than plain TD(lambda), e.g.:
-
-        HexMazeAgent(
-            maze,
-            rules=[TDLambdaRule(), ModelBasedRule()],
-            alpha=0.3, gamma=0.95, lam=0.3,      # TDLambdaRule reads these
-            gamma_mb=0.8, a_T=0.1, a_mb=0.05,    # ModelBasedRule reads these
-            goal_conditioned_states=True,
-        )
-    """

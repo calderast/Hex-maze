@@ -45,6 +45,7 @@ class RetrievalRule:
     Sweeps are given in one of two forms, and every method here accepts both:
     a list of sweeps, each a sequence of hexes in the order they were
     represented, or one run of every hex represented while the rat stood there.
+    They are None when the rat represented nothing beyond its own location.
     """
 
     # Names the hex credited_hexes picks out, so a plot can say what it marked.
@@ -60,8 +61,9 @@ class RetrievalRule:
             hex (int): The hex the agent is deciding from
             neighbors (list[int]): The hexes it could move to
             context (int or None): The value table to read
-            sweeps (list[list[int]] or list[int]): The sweeps the rat made from
-                this hex, or one run of represented hexes
+            sweeps (list[list[int]] or list[int] or None): The sweeps the rat made
+                from this hex, or one run of represented hexes. None when the rat
+                represented nothing beyond its own location
 
         Returns:
             np.ndarray: One value per neighbor, in the order given
@@ -81,8 +83,9 @@ class RetrievalRule:
             hex (int): The hex the agent is deciding from
             neighbors (list[int]): The hexes it could move to
             context (int or None): The value table to read
-            sweeps (list[list[int]] or list[int]): The sweeps the rat made from
-                this hex, or one run of represented hexes
+            sweeps (list[list[int]] or list[int] or None): The sweeps the rat made
+                from this hex, or one run of represented hexes. None when the rat
+                represented nothing beyond its own location
 
         Returns:
             dict: {move: the represented hex its value came from}
@@ -100,7 +103,7 @@ class LocalRetrieval(RetrievalRule):
 
     def action_values(self, learner, hex, neighbors, context, sweeps):
         return np.array(
-            [learner.state_value(context, learner.state_key(hex, neighbor)) for neighbor in neighbors]
+            [learner.V[context][learner.state_key(hex, neighbor)] for neighbor in neighbors]
         )
 
 
@@ -141,9 +144,9 @@ def sweeps_along_move(learner, sweeps, hex, neighbor):
 
     Parameters:
         learner (BaseHexLearner): The learner doing the choosing
-        sweeps (list[list[int]] or list[int]): The sweeps the rat made from `hex`,
-            each a sequence of hexes in the order they were represented, or one
-            run of hexes in the order it represented them
+        sweeps (list[list[int]] or list[int] or None): The sweeps the rat made from
+            `hex`, each a sequence of hexes in the order they were represented, or
+            one run of hexes in the order it represented them
         hex (int): The hex the rat is deciding from
         neighbor (int): The hex this move would step into
 
@@ -188,6 +191,8 @@ def sweeps_along_move(learner, sweeps, hex, neighbor):
                 on_the_way = learner.bfs_entry_directions(previous)
                 reached.append((swept, on_the_way[swept]))
             previous = swept
+
+        # Never empty, since a sweep down this move opens with the hex it steps into
         along.append(reached)
     return along
 
@@ -212,11 +217,11 @@ class BestSweptRetrieval(RetrievalRule):
             along = sweeps_along_move(learner, sweeps, hex, neighbor)
             if along:
                 values.append(max(
-                    learner.state_value(context, learner.state_key(reached_from, swept))
+                    learner.V[context][learner.state_key(reached_from, swept)]
                     for sweep in along for swept, reached_from in sweep
                 ))
             else:
-                values.append(learner.state_value(context, learner.state_key(hex, neighbor)))
+                values.append(learner.V[context][learner.state_key(hex, neighbor)])
         return np.array(values)
 
     def credited_hexes(self, learner, hex, neighbors, context, sweeps):
@@ -227,7 +232,7 @@ class BestSweptRetrieval(RetrievalRule):
             if reached:
                 swept, reached_from = max(
                     reached,
-                    key=lambda pair: learner.state_value(context, learner.state_key(pair[1], pair[0])),
+                    key=lambda pair: learner.V[context][learner.state_key(pair[1], pair[0])],
                 )
                 credited[neighbor] = swept
         return credited
@@ -251,10 +256,10 @@ class BestSweptOrCachedRetrieval(RetrievalRule):
         values = []
         for neighbor in neighbors:
             along = sweeps_along_move(learner, sweeps, hex, neighbor)
-            cached = learner.state_value(context, learner.state_key(hex, neighbor))
+            cached = learner.V[context][learner.state_key(hex, neighbor)]
             values.append(max(
                 [cached] + [
-                    learner.state_value(context, learner.state_key(reached_from, swept))
+                    learner.V[context][learner.state_key(reached_from, swept)]
                     for sweep in along for swept, reached_from in sweep
                 ]
             ))
@@ -265,15 +270,15 @@ class BestSweptOrCachedRetrieval(RetrievalRule):
         for neighbor in neighbors:
             along = sweeps_along_move(learner, sweeps, hex, neighbor)
             reached = [pair for sweep in along for pair in sweep]
-            cached = learner.state_value(context, learner.state_key(hex, neighbor))
             if not reached:
                 continue
+            cached = learner.V[context][learner.state_key(hex, neighbor)]
             swept, reached_from = max(
                 reached,
-                key=lambda pair: learner.state_value(context, learner.state_key(pair[1], pair[0])),
+                key=lambda pair: learner.V[context][learner.state_key(pair[1], pair[0])],
             )
             # Only a sweep that beat what the rat already knew is what the value rests on
-            if learner.state_value(context, learner.state_key(reached_from, swept)) > cached:
+            if learner.V[context][learner.state_key(reached_from, swept)] > cached:
                 credited[neighbor] = swept
         return credited
 
@@ -297,23 +302,26 @@ class FurthestSweptRetrieval(RetrievalRule):
         for neighbor in neighbors:
             along = sweeps_along_move(learner, sweeps, hex, neighbor)
             if along:
+                # The last hex of each sweep down this way, paired with the hex it
+                # was reached from
+                endings = [sweep[-1] for sweep in along]
                 values.append(max(
-                    learner.state_value(context, learner.state_key(reached_from, swept))
-                    for sweep in along for swept, reached_from in [sweep[-1]]
+                    learner.V[context][learner.state_key(reached_from, swept)]
+                    for swept, reached_from in endings
                 ))
             else:
-                values.append(learner.state_value(context, learner.state_key(hex, neighbor)))
+                values.append(learner.V[context][learner.state_key(hex, neighbor)])
         return np.array(values)
 
     def credited_hexes(self, learner, hex, neighbors, context, sweeps):
         credited = {}
         for neighbor in neighbors:
             along = sweeps_along_move(learner, sweeps, hex, neighbor)
-            endings = [sweep[-1] for sweep in along if sweep]
+            endings = [sweep[-1] for sweep in along]
             if endings:
                 swept, reached_from = max(
                     endings,
-                    key=lambda pair: learner.state_value(context, learner.state_key(pair[1], pair[0])),
+                    key=lambda pair: learner.V[context][learner.state_key(pair[1], pair[0])],
                 )
                 credited[neighbor] = swept
         return credited

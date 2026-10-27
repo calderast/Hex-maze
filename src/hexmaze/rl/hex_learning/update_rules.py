@@ -160,8 +160,8 @@ class TDLambdaRule(UpdateRule):
 
         # The hex being left is pulled toward the discounted value of the hex
         # being entered:  td_error = gamma * V(next hex) - V(current hex)
-        old_value = learner.state_value(context, state)
-        next_value = learner.state_value(context, next_state)
+        old_value = learner.V[context][state]
+        next_value = learner.V[context][next_state]
         td_error = learner.gamma * next_value - old_value
         updated_states = []
         self._apply_td_error(learner, context, state, td_error, updated_states)
@@ -174,7 +174,7 @@ class TDLambdaRule(UpdateRule):
         # value is pulled toward the reward delivered there.
         #     td_error = reward - V(port)
         if is_terminal:
-            old_port_value = learner.state_value(context, next_state)
+            old_port_value = learner.V[context][next_state]
             reward_td_error = reward - old_port_value
             states_updated_by_reward = []
             self._apply_td_error(learner, context, next_state, reward_td_error, states_updated_by_reward)
@@ -221,7 +221,7 @@ class TDLambdaRule(UpdateRule):
             # Every eligible state moves a share of the prediction error,
             # scaled by its own eligibility:
             #     V(state) <- V(state) + alpha * td_error * e(state)
-            old_value = learner.state_value(context, traced_state)
+            old_value = learner.V[context][traced_state]
             new_value = old_value + self._alpha(learner) * td_error * e
             learner.V[context][traced_state] = new_value
 
@@ -358,24 +358,6 @@ class ModelBasedRule(UpdateRule):
         """The learning rate for the value sweep at a port, from the learner."""
         return getattr(learner, "a_mb", self.DEFAULT_A_MB)
 
-    def _all_states(self, learner):
-        """
-        Every state in the learner's representation: each hex, or each
-        directed edge (prev, cur) for a directional learner. The state a trip
-        starts in, (None, hex), is never entered on a step, so its memory trace
-        is always 0 and it is left out. The map is
-        averaged over this whole set on every port entry (see on_trial_end),
-        so a state the rat has stopped visiting decays out of the map as its
-        memory trace stays at zero.
-        """
-        if not learner.directional_states:
-            return list(learner.graph.nodes())
-        return [
-            (prev, cur)
-            for cur in learner.graph.nodes()
-            for prev in learner.graph.neighbors(cur)
-        ]
-
     def on_trial_start(self, learner, context):
         """Start the trial with an empty memory trace, so the map records only
         where the rat went on its way to this trial's port."""
@@ -388,7 +370,7 @@ class ModelBasedRule(UpdateRule):
         # The states the new maze allows. Anything learned about a state the
         # maze no longer has is dropped, so if that hex reopens later it starts
         # from scratch.
-        valid = set(self._all_states(learner))
+        valid = set(learner.all_states())
         for port_map in self.T.values():
             for state in list(port_map):
                 if state not in valid:
@@ -455,8 +437,10 @@ class ModelBasedRule(UpdateRule):
         # the rat did not visit this trial. Their memory trace is 0, so each
         # arrival at this port without visiting them decays their weight by
         # (1 - a_T), and a state that stops being visited fades out of the map.
+        # (The state a trip starts in, (None, hex), is never entered on a step,
+        # so it stays at 0 and is never updated.)
         #     T(port, state) <- (1 - a_T) * T(port, state) + a_T * m(state)
-        for state in self._all_states(learner):
+        for state in learner.all_states():
             memory_trace = self.m.get(state, 0.0)
             T_for_port[state] = (1 - a_T) * T_for_port.get(state, 0.0) + a_T * memory_trace
 
@@ -469,7 +453,7 @@ class ModelBasedRule(UpdateRule):
         for state, T_for_state in T_for_port.items():
             if T_for_state == 0.0:
                 continue
-            old_value = learner.state_value(context, state)
+            old_value = learner.V[context][state]
             new_value = old_value + a_mb * T_for_state * (reward - old_value)
             learner.V[context][state] = new_value
             if abs(new_value - old_value) >= 0.00005:
@@ -597,19 +581,20 @@ class SWRRule(UpdateRule):
         a_swr = self._a_swr(learner)
         port = path[-1]
 
-        # A hex replayed several times is updated only once.
-        states = []
-        for hex in learner.replayed_hexes_this_trial:
-            for state in self._states_for_hex(learner, hex, port):
-                if state not in states:
-                    states.append(state)
+        # A hex replayed several times is updated only once (dict.fromkeys keeps the
+        # first appearance of each state, in replay order)
+        states = list(dict.fromkeys(
+            state
+            for hex in learner.replayed_hexes_this_trial
+            for state in self._states_for_hex(learner, hex, port)
+        ))
 
         # Each replayed hex moves a fraction a_swr of the way to the reward:
         #     V(state) <- V(state) + a_swr * (reward - V(state))
         changed = {}
         rows = []
         for state in states:
-            old_value = learner.state_value(context, state)
+            old_value = learner.V[context][state]
             new_value = old_value + a_swr * (reward - old_value)
             learner.V[context][state] = new_value
             # Every replayed hex is moved by the same fraction, so each is
