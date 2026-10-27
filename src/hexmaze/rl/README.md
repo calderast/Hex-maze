@@ -7,8 +7,7 @@ Reinforcement learning agents for the hex maze.
 ```text
 hexmaze/rl/
 ├── hex_learning/        # trajectory-based, learns values over hexes
-│   ├── td_learner.py    # HexMazeTDLearner
-│   └── q_learner.py     # HexMazeQLearner
+│   └── td_learner.py    # HexMazeTDLearner
 └── port_learning/       # outcome-based, learns values over ports
     ├── rescorla_wagner.py       # RescorlaWagner
     ├── bayesian.py              # BayesianPortLearner
@@ -51,73 +50,87 @@ All port learners share the same interface:
 
 Learns values over individual hexes from maze trajectories (sequences of hex visits). 
 
-### `HexMazeTDLearner` — TD value learning
+### `HexMazeTDLearner` — TD(λ) value learning
 
-TD (temporal-difference) value learner that maintains 3 V-tables (one per starting port).
+Model-free hex-value learner using temporal-difference learning with eligibility
+traces (the model-free process of Krausz et al. 2023, *Neuron*). A single `lam`
+knob spans the family from TD(0) to Monte Carlo.
 
-- Learns **V(hex)** — the value of being at a given hex
-- Supports both **TD(0)** (forward, one-step) and **TD(1)** (backward, full-path) updates
-- On-policy: updates use the value of the hex the agent actually moved to
+- Learns **V(state)** — the value of being at a maze location
+- On-policy: choices are softmax over the value of the location you would move into
 
-**TD(0) update** (at each step along the trajectory):
-
-```text
-V(hex) ← V(hex) + α₀ · [r + γ · V(next_hex) - V(hex)]
-```
-
-**TD(1) backward pass** (after the full trajectory, for each hex at time t):
+**TD(λ) update** (eligibility trace `e`, applied each step; `δ` is the TD error):
 
 ```text
-V(hex_t) ← V(hex_t) + α₁ · [γ^(T-t) · R - V(hex_t)]
+e(state) += 1
+for every traced state s:
+    V(s) ← V(s) + α · δ · e(s)
+    e(s) ← γ · λ · e(s)
 ```
 
-where T is the final step and R (0 or 1) is the reward.
+`λ = 0` is pure TD(0) (one-step bootstrap; value propagates back one hex per
+repeated traversal — the paper's model-free signature). `λ = 1` is the
+Monte-Carlo return. Intermediate `λ` blends all horizons via the trace.
 
-**Parameters:**
+**Representation flags:**
 
-- **`td0_alpha`**: learning rate for TD(0) forward updates (default 0.3; set to 0 to disable)
-- **`td1_alpha`**: learning rate for TD(1) backward pass (default 0.1; set to 0 to disable)
+- **`directional`** (default `False`): if `True`, states are directed edges
+  `(prev_hex, cur_hex)` (~126 states, the paper's representation) instead of
+  plain hexes (49). Produces approach-dependent value ramps.
+- **`goal_conditioned`** (default `True`): if `True`, keep one value table per
+  start/excluded port (3 tables) so the just-departed port is not an attractive
+  goal during `simulate()`. If `False`, use a single shared table (the paper's
+  choice — faithful for *fitting*, but will run back toward the departed port
+  when used to *generate* behavior).
+- **`alpha`**: TD learning rate (default 0.3).
+- **`lam`**: eligibility-trace decay (default 0.0 = TD(0)).
 
-### `HexMazeQLearner` — Q-learning
+Reward ports are always terminal (the paper's treatment): reward is delivered on
+the transition into the port, the port bootstraps value 0, and each trip is an
+episode with the eligibility trace reset between trips.
 
-Q-learning agent that maintains 3 Q-tables (one per starting port).
+**Paper-exact model-free preset:**
 
-- Learns **Q(hex, action)** — the value of moving to a specific neighbor from a given hex
-- Captures directional preferences (e.g. "from hex 25, moving toward hex 26 is better than hex 24")
-- Off-policy: updates use `max Q(next_hex, a')` regardless of the action actually taken
-
-**Q-learning update** (at each step along the trajectory):
-
-```text
-Q(hex, a) ← Q(hex, a) + α · [r + γ · max_a' Q(next_hex, a') - Q(hex, a)]
+```python
+HexMazeTDLearner(
+    graph, reward_probs,
+    lam=0.0, directional=True, goal_conditioned=False,
+    priors=("flat", 0.2),
+)
 ```
 
-At terminal hexes (reward ports), `max Q(next_hex, a') = 0`.
-
-**Parameters:**
-
-- **`alpha`**: learning rate (default 0.3)
+> Note: the model-based / path-independent inference component of the paper's
+> dual-process model is **not** implemented here — this is the model-free half only.
 
 ### Hex value learning common interface
 
-Both hex learners share the same interface:
+Both hex learners share most of the interface:
 
 | Method | Description |
 | --- | --- |
-| `learn(trajectories, rewards, start_ports)` | Run updates on provided trajectories (rat hex paths) |
 | `simulate(start_hex, n_trials, max_steps)` | Self-generated trajectories with online updates |
-| `process_trajectory(path, reward, start_port)` | Update on a single trajectory |
-| `process_trajectory_with_history(...)` | Same as above, but returns hex value snapshots at each step |
+| `process_trajectory_with_history(...)` | Same as `process_trajectory`, but returns hex value snapshots at each step |
 | `action_probabilities(hex, start_port)` | Softmax choice probabilities at a hex |
 | `get_state_values(start_port)` | Per-hex values under one start port |
 | `get_max_state_values()` | Max value across all 3 tables per hex |
 | `reset()` | Re-initialize tables and re-apply hex value priors |
 | `set_graph(new_graph)` | Swap the maze graph (e.g. after barrier changes) |
 
+**TD learner:**
+
+| Method | Description |
+| --- | --- |
+| `learn(trajectories, rewards)` | Run updates on provided trajectories (rat hex paths) |
+| `process_trajectory(path, reward)` | Update on a single trajectory |
+| `choice_nll(trajectories, rewards)` | Negative log-likelihood of the rat's hex-to-hex choices under current params |
+| `fit_choices(maze, reward_probs, trajectories, rewards, **kwargs)` | (classmethod) Fit `alpha`/`gamma`/`lam`/`temperature` by minimizing `choice_nll` via L-BFGS-B |
+
 **Q-learner only:**
 
 | Method | Description |
 | --- | --- |
+| `learn(trajectories, rewards, start_ports)` | Run updates on provided trajectories (rat hex paths) |
+| `process_trajectory(path, reward, start_port)` | Update on a single trajectory |
 | `get_q_values(start_port)` | Full Q-table: `{hex: {neighbor: q_value}}` |
 
 **Shared parameters:**
@@ -130,22 +143,29 @@ Both hex learners share the same interface:
 
 **Table update logic:**
 
-Both learners use the same rule for deciding which of the 3 tables to update at a given hex:
+The **Q-learner** uses a maze-thirds rule to decide which of the 3 tables to update at a given hex:
 
 - If the hex is in the same third as the start port (or is a critical choice point): update only the start port's table
 - If the hex is in a different third T: update all tables except T's
 
 TODO: decide if I like this. Figure out what to do with mazes that have more than 1 critical choice point!
 
+The **TD(λ) learner** does not share value across tables: a trip updates only the
+active context's table (the start/excluded port when `goal_conditioned=True`, or
+the single shared table otherwise). Cross-context / path-independent generalization
+is intentionally left to a future model-based component.
+
 **`start_port` defaults:**
 
-In both learners, `start_port` is optional for `process_trajectory` and `process_trajectory_with_history`. It defaults to `path[0]` if that hex is a reward port; otherwise an error is raised.
+The **TD learner** always derives its context from `path[0]` (see `resolve_context`) — there is no separate `start_port` argument to `learn`/`process_trajectory`. With `goal_conditioned=False` (a single shared table) `path[0]` never needs to be a real port. With `goal_conditioned=True`, the context is `path[0]` if it's a reward port, else a placeholder: one of the other two ports (excluding the trip's end port, `path[-1]`) — this covers trajectories with no real start, e.g. a session's first trial.
+
+The **Q-learner** still takes an explicit, optional `start_port` for `process_trajectory`/`process_trajectory_with_history`, defaulting to `path[0]` if that hex is a reward port.
 
 ## Quick start
 
 ```python
 from hexmaze import maze_to_graph, plot_hex_maze
-from hexmaze.rl import HexMazeTDLearner, HexMazeQLearner
+from hexmaze.rl import HexMazeTDLearner
 from hexmaze.rl import RescorlaWagner, BayesianPortLearner, HiddenStatePortLearner
 
 ### Hex learning (trajectory-based)
@@ -154,15 +174,13 @@ barriers = {37, 7, 39, 41, 14, 46, 20, 23, 30}
 graph = maze_to_graph(barriers)
 
 td = HexMazeTDLearner(graph, reward_probs=[0.9, 0.5, 0.1], priors=[0.9, 0.5, 0.1])
-ql = HexMazeQLearner(graph, reward_probs=[0.9, 0.5, 0.1], priors=[0.9, 0.5, 0.1])
 
 # Simulate self-generated exploration
 td_results = td.simulate(start_state=1, n_trials=100)
-ql_results = ql.simulate(start_hex=1, n_trials=100)
 
 # Or learn from rat trajectories
 td.reset()
-td.learn(trajectories, rewards, start_ports)
+td.learn(trajectories, rewards)
 
 # Inspect learned values
 td_values = td.get_state_values(start_port=1)       # {hex: V(hex)}
