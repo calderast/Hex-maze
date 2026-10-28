@@ -3,13 +3,12 @@ td_learner.py
 
 TD(lambda) hex value agent for the hex maze.
 
-A hex maze agent that learns values by temporal-difference learning.
-It is BaseHexLearner holding a single TDLambdaRule, so the state
-representation, policy, fitting and simulation are all as described there,
-and the value update is the one in TDLambdaRule.
+This is just a BaseHexLearner with a single TDLambdaRule, so the state
+representation, policy, fitting, and simulation all work as described in
+base_learner.py, and the value update is the one in TDLambdaRule.
 
-Value is learned over maze locations via TD learning with eligibility traces.
-The single ``lam`` (lambda) controls:
+Hex values are learned using TD learning with eligibility traces.
+The ``lam`` (lambda) parameter controls how far back credit reaches:
 
     lam = 0.0  -> pure TD(0): one-step bootstrapping, value propagates
                  backward one hex per repeated traversal (e.g. Krausz 2023)
@@ -51,4 +50,3 @@ class HexMazeTDLearner(BaseHexLearner):
             lam=lam,
             **kwargs,
         )
-

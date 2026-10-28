@@ -1,25 +1,25 @@
 """
 retrieval_rules.py
 
-How a hex maze agent works out what each move on offer is worth.
+Retrieval rules decide how a hex maze agent values each possible move.
 
-Each rule below implements one theory of what the rat consults at a choice
-point. A learner holds one of them, and everything that turns values into
-choices reads it: the policy, the simulated agent, and the likelihood of the
-rat's observed choices.
+Each rule is one theory of what information the rat uses to make a choice.
+A learner holds one retrieval rule, which is used everywhere values get turned
+into choices: the policy, the simulated agent, and the likelihood of the rat's
+observed choices.
 
-The rules here are given the sweeps the rat made while standing on a hex (see
-BaseHexLearner.choice_nll for how sweeps are supplied per trial). Each sweep is the
-hexes it represented, in the order they were represented, so a sweep reads as a
-route the rat ran out in its head. The hex a sweep opens with is the move it
-set off down, which is how each rule knows which sweep speaks for which move,
-and a rat that sweeps down both arms makes one sweep for each.
+The rules can use the sweeps the rat made while at a hex (see
+BaseHexLearner.choice_nll for how to pass in sweeps for each trial). Each sweep
+is a list of the hexes it represented, in the order they were represented, so a
+sweep is basically a route the rat "ran" in its head. The first hex in a sweep
+tells us which move the sweep was evaluating (if the rat sweeps down both
+arms of a junction, that's two separate sweeps).
 
 For a directional learner, each swept hex is read in the direction the sweep
-arrived at it from, which is the hex before it in that same sweep.
+arrived at it from (the hex before it in that same sweep).
 
-RetrievalRule, what every rule provides, comes first, followed by
-LocalRetrieval, the default, which judges a move by the hex it steps into.
+RetrievalRule (the base class) comes first, followed by LocalRetrieval
+(the default), which values a move by the hex it steps into.
 """
 
 import numpy as np
@@ -33,37 +33,37 @@ __all__ = [
 
 class RetrievalRule:
     """
-    How the agent works out what each move on offer is worth.
+    Base interface for how the agent values each possible move.
 
-    A RetrievalRule says which values the agent consults when it chooses. This
-    is where sweeping enters the model: a rat representing hexes beyond its own
-    location can evaluate a move by what lies down that way.
+    A RetrievalRule decides which values the agent looks at when it makes a
+    choice. This is where sweeps come into the model: a rat representing hexes
+    beyond its current location can evaluate a move based on what's down that way.
 
-    A learner holds exactly one of these, since each candidate move needs a
-    single number to be compared by the softmax.
+    A learner holds exactly one retrieval rule, since the softmax needs a single
+    value for each possible move.
 
-    Sweeps are given in one of two forms, and every method here accepts both:
-    a list of sweeps, each a sequence of hexes in the order they were
-    represented, or one run of every hex represented while the rat stood there.
-    They are None when the rat represented nothing beyond its own location.
+    Sweeps can be given in one of two formats, and every method here accepts both:
+    a list of sweeps (each a list of hexes in the order they were represented),
+    or a single list of every hex represented while the rat was at that hex.
+    Sweeps are None when the rat didn't represent anything beyond its current location.
     """
 
-    # Names the hex credited_hexes picks out, so a plot can say what it marked.
-    # A rule that credits no hex leaves this None.
+    # Describes which hex credited_hexes picks out, so a plot can label it.
+    # A rule that doesn't credit any hex leaves this as None.
     credit_label = None
 
     def action_values(self, learner, hex, neighbors, context, sweeps):
         """
-        The value compared for each candidate move.
+        Get the value of each possible move.
 
         Parameters:
-            learner (BaseHexLearner): The learner doing the choosing
-            hex (int): The hex the agent is deciding from
+            learner (BaseHexLearner): The learner making the choice
+            hex (int): The hex the agent is choosing from
             neighbors (list[int]): The hexes it could move to
-            context (int or None): The value table to read
+            context (int or None): The value table to read from
             sweeps (list[list[int]] or list[int] or None): The sweeps the rat made
-                from this hex, or one run of represented hexes. None when the rat
-                represented nothing beyond its own location
+                from this hex, or a single list of represented hexes. None if the rat
+                didn't represent anything beyond its current location
 
         Returns:
             np.ndarray: One value per neighbor, in the order given
@@ -72,20 +72,20 @@ class RetrievalRule:
 
     def credited_hexes(self, learner, hex, neighbors, context, sweeps):
         """
-        Which represented hex each move's value was read from.
+        Get the represented hex that each move's value came from.
 
-        A move valued by the hex it steps into has no entry here, so this holds
-        only the moves a sweep spoke for. Used to show on the maze what the
-        agent's choice rested on.
+        Only includes moves whose value came from a sweep (a move valued by the
+        hex it steps into has no entry). Used to show on the maze what the
+        agent's choice was based on.
 
         Parameters:
-            learner (BaseHexLearner): The learner doing the choosing
-            hex (int): The hex the agent is deciding from
+            learner (BaseHexLearner): The learner making the choice
+            hex (int): The hex the agent is choosing from
             neighbors (list[int]): The hexes it could move to
-            context (int or None): The value table to read
+            context (int or None): The value table to read from
             sweeps (list[list[int]] or list[int] or None): The sweeps the rat made
-                from this hex, or one run of represented hexes. None when the rat
-                represented nothing beyond its own location
+                from this hex, or a single list of represented hexes. None if the rat
+                didn't represent anything beyond its current location
 
         Returns:
             dict: {move: the represented hex its value came from}
@@ -95,10 +95,10 @@ class RetrievalRule:
 
 class LocalRetrieval(RetrievalRule):
     """
-    The agent judges a move by the hex it would step into.
+    The agent values a move by the hex it would step into.
 
-    Whatever the rat is representing elsewhere leaves the choice alone, so this
-    is the agent that decides from cached value at its own location.
+    This ignores sweeps entirely, so this agent chooses based only on cached
+    values next to its current location.
     """
 
     def action_values(self, learner, hex, neighbors, context, sweeps):
@@ -109,7 +109,7 @@ class LocalRetrieval(RetrievalRule):
 
 def steps_out_to(beyond, neighbor, swept):
     """
-    How many hexes out from a move a hex sits, following the way in.
+    Count how many hexes out from a move a hex is.
 
     Parameters:
         beyond (dict): {hex: the hex it is entered from}, walking out from the move
@@ -117,7 +117,7 @@ def steps_out_to(beyond, neighbor, swept):
         swept (int): The hex to measure
 
     Returns:
-        int: Steps from `neighbor` out to `swept`
+        int: Number of steps from `neighbor` out to `swept`
     """
     steps = 0
     while swept != neighbor:
@@ -128,36 +128,35 @@ def steps_out_to(beyond, neighbor, swept):
 
 def sweeps_along_move(learner, sweeps, hex, neighbor):
     """
-    What the rat swept down one move, as (hex, the hex it was reached from).
+    Get the hexes the rat swept to down one move, as (hex, the hex it was reached from).
 
-    Given sweeps, a sweep speaks for the move it opens with, and a sweep that
-    skips hexes has the direction it arrived from filled in by walking out from
-    the last hex it did catch.
+    If sweeps are given as a list of sweeps, a sweep belongs to the move it starts
+    with. If a sweep skips hexes, we fill in the direction it arrived from by
+    walking out from the last hex it did hit.
 
-    Given one run of everything the rat represented, the maze decides instead:
-    a hex counts for this move if it lies beyond it, which is everything
-    reachable by taking this move and carrying on outward without doubling back
-    past the rat. The rat's own hex and the hexes behind it are left out by that
-    walk, and the hexes that remain come back ordered by how far out they sit.
-    A hex the maze lets the rat reach either way round lies beyond both moves
-    and counts for both.
+    If sweeps are given as a single list of every represented hex, we use the maze
+    to decide which move each hex belongs to: a hex counts for this move if you can
+    reach it by taking this move and continuing outward without backtracking past
+    the rat. This leaves out the rat's own hex and the hexes behind it, and the
+    remaining hexes are sorted by how far out they are. A hex reachable either way
+    (e.g. if the 2 paths reconnect later) counts for both moves.
 
     Parameters:
-        learner (BaseHexLearner): The learner doing the choosing
+        learner (BaseHexLearner): The learner making the choice
         sweeps (list[list[int]] or list[int] or None): The sweeps the rat made from
-            `hex`, each a sequence of hexes in the order they were represented, or
-            one run of hexes in the order it represented them
-        hex (int): The hex the rat is deciding from
+            `hex`, each a list of hexes in the order they were represented, or
+            a single list of hexes in the order they were represented
+        hex (int): The hex the rat is choosing from
         neighbor (int): The hex this move would step into
 
     Returns:
-        list[list[tuple]]: One list per sweep down this move, holding each of its
+        list[list[tuple]]: One list per sweep down this move, with each of its
             hexes paired with the hex it was reached from
     """
     if not sweeps:
         return []
 
-    # One run of represented hexes, with no sweeps marked out in it
+    # A single list of represented hexes (not split into sweeps)
     if not isinstance(sweeps[0], (list, tuple, set)):
         beyond = learner.bfs_entry_directions(neighbor, prev_hex=hex)
         reached = [
@@ -176,37 +175,37 @@ def sweeps_along_move(learner, sweeps, hex, neighbor):
         reached = []
         previous = hex
         for swept in sweep:
-            # A barrier hex has no value to read, and a hex represented twice in a
-            # row is still the same place along the sweep
+            # Skip barrier hexes (no value to read) and repeats of the same hex
             if swept not in learner.graph or swept == previous:
                 continue
             if learner.graph.has_edge(previous, swept):
                 reached.append((swept, previous))
             else:
                 # The sweep skips from `previous` to `swept` without the hexes
-                # between, so the direction it arrived from was not recorded.
-                # Walking out from `previous` gives the neighbour of `swept` that
-                # lies on the way there, which is the direction it would have
-                # come from had every hex been caught.
+                # in between, so we don't know the direction it arrived from.
+                # Walk out from `previous` to find the neighbor of `swept` on the
+                # way there, which is the direction it would have come from if
+                # we had caught every hex.
                 on_the_way = learner.bfs_entry_directions(previous)
                 reached.append((swept, on_the_way[swept]))
             previous = swept
 
-        # Never empty, since a sweep down this move opens with the hex it steps into
+        # This is never empty, since a sweep down this move starts with the hex it steps into
         along.append(reached)
     return along
 
 
 class BestSweptRetrieval(RetrievalRule):
     """
-    A move is worth the best hex the rat swept to down that way.
+    A move's value is the best hex the rat swept to down that way.
 
-        value(move) = max value among the hexes of the sweeps that set off down it
+        value(move) = max value among the hexes of the sweeps down that way
 
-    The sweep is the whole evaluation, so sweeping only to poor hexes down one
-    way makes that move worth little, whatever the rat had learned about the hex
-    it would step into. A move no sweep set off down is worth that hex, which is
-    what every move is worth when the rat sweeps nowhere.
+    The value comes entirely from the sweep, so if the rat only sweeps to
+    low-value hexes down one way, that move gets a low value (regardless of
+    what the rat had learned about the hex it would step into). A move with no
+    sweeps down it gets the value of the hex it steps into (so if the rat
+    doesn't sweep at all, this is the same as LocalRetrieval).
     """
 
     credit_label = "best swept-to hex"
@@ -240,14 +239,14 @@ class BestSweptRetrieval(RetrievalRule):
 
 class BestSweptOrCachedRetrieval(RetrievalRule):
     """
-    A move is worth the better of what the rat already knows and what it swept to.
+    A move's value is the better of the cached value and the best swept-to hex.
 
         value(move) = max(value of the hex the move steps into,
                           max value among the hexes of the sweeps down that way)
 
-    Sweeping can raise a move, by finding something good down that way, and
-    leaves it alone otherwise, so what the rat learned about a branch over many
-    trials survives a single sweep into a dead end.
+    Sweeping can only raise a move's value (by finding something good down that
+    way), never lower it. So what the rat learned about a path over many trials
+    isn't wiped out by a single sweep into a dead end.
     """
 
     credit_label = "swept-to hex that beat the value the rat already had"
@@ -277,7 +276,7 @@ class BestSweptOrCachedRetrieval(RetrievalRule):
                 reached,
                 key=lambda pair: learner.V[context][learner.state_key(pair[1], pair[0])],
             )
-            # Only a sweep that beat what the rat already knew is what the value rests on
+            # Only credit the swept hex if it beat the cached value
             if learner.V[context][learner.state_key(reached_from, swept)] > cached:
                 credited[neighbor] = swept
         return credited
@@ -285,14 +284,14 @@ class BestSweptOrCachedRetrieval(RetrievalRule):
 
 class FurthestSweptRetrieval(RetrievalRule):
     """
-    A move is worth where the rat's sweep down that way ended up.
+    A move's value is the value of where the rat's sweep down that way ended.
 
-        value(move) = value of the last hex of the sweeps that set off down it
+        value(move) = value of the last hex of the sweeps down that way
 
-    A sweep read as a rollout: the rat runs the route out in its head, and what
-    it finds at the end is what that way is worth. Where the rat made several
-    sweeps down the same move, the best of their endings is taken. A move no
-    sweep set off down is worth the hex it steps into.
+    This treats a sweep like a rollout: the rat runs the route in its head, and
+    whatever it finds at the end is the value of that way. If the rat made
+    several sweeps down the same way, we take the best ending. A move with no
+    sweeps down it gets the value of the hex it steps into.
     """
 
     credit_label = "furthest swept-to hex"

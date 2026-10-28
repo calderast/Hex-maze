@@ -1,19 +1,18 @@
 """
 swr_learner.py
 
-A hex maze agent that learns from running the maze and from replaying it.
+Hex value agent that learns both from running the maze and from SWR replay.
 
-Runs a model-free and a replay-driven update side by side on the same value
-table:
+This is a BaseHexLearner with two rules that update the same value table:
 
     TDLambdaRule   model-free TD, defaulting to TD(0): on every step, the hex
-                   being left is pulled toward the value of the hex being
-                   entered.
-    SWRRule        replay update: on arrival at a reward port, the hexes
-                   replayed during that trial's sharp-wave ripples are each
-                   pulled toward the reward that was delivered.
+                   the rat is leaving moves toward the value of the hex it
+                   is entering.
+    SWRRule        replay update: when the rat reaches a reward port, each hex
+                   replayed during that trial's sharp-wave ripples moves toward
+                   the reward that was delivered.
 
-Both rules write to the same V, so a hex can be updated by either mechanism
+Both rules write to the same V, so a hex can be updated by either rule
 (or both) on the same trial. See update_rules.py for each rule's equations,
 and BaseHexLearner for the state representation and policy options.
 """
@@ -26,7 +25,7 @@ __all__ = ["SWRDualLearner"]
 
 class SWRDualLearner(BaseHexLearner):
     """
-    Learner combining model-free TD with value learning from replayed hexes.
+    Dual learner: model-free TD plus value learning from SWR-replayed hexes.
 
     Parameters:
         maze: The hex maze represented in any valid format
@@ -34,14 +33,14 @@ class SWRDualLearner(BaseHexLearner):
         gamma (float): Discount factor. Defaults to 0.95
         lam (float): Eligibility trace decay for the model-free rule.
             Defaults to 0.0, which is TD(0)
-        a_swr (float): Learning rate for replayed hexes. 0.0 leaves replay with
+        a_swr (float): Learning rate for replayed hexes. 0.0 means replay has
             no effect on value, leaving a pure TD learner. Defaults to 0.1
 
     All other arguments are passed through to BaseHexLearner, including the
     simulation options `reward_probs` and `no_backtrack`.
 
-    The hexes replayed on each trial are given to `learn` (or `fit_choices`)
-    alongside the trajectories and rewards.
+    Pass the hexes replayed on each trial to `learn` (or `fit_choices`) as
+    `replayed_hexes`, alongside the trajectories and rewards.
     """
 
     def __init__(
