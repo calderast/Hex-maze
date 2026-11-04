@@ -12,3 +12,7 @@ src/hexmaze/__pycache__/*
 src/hexmaze/rl/__pycache__/*
 src/hexmaze/rl/hex_learning/__pycache__/*
 src/hexmaze/rl/port_learning/__pycache__/*
+
+# Saved learning animations
+animations/
+Tutorials/animations/
