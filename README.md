@@ -77,6 +77,7 @@ Navigate to the `Tutorials/` folder and begin with the [`Getting_Started.ipynb`]
 - [Searching the barrier sequence database for the sequence you want](./Tutorials/21_Barrier_Sequence_Database_Search.ipynb)
 - [Generating barrier sequences with custom criteria](./Tutorials/33_Generate_Custom_Barrier_Sequence_Database.ipynb)
 - [Modeling port values based on choices and reward outcomes](./Tutorials/40_Port_Value_Models.ipynb)
+- [Learning hex values from trajectories: fitting, plotting, and animating models](./Tutorials/41_Hex_Value_Learning.ipynb)
 
 These 3 are also provided for reference:
 - [How the hex maze database was generated](./Tutorials/30_Generate_Hex_Maze_Database.ipynb)
@@ -144,11 +145,18 @@ All port learners support maximum-likelihood fitting (`.fit_rewards()` and `.fit
 
 ### Hex value learning (trajectory-based)
 
-Learns values over individual hexes from maze trajectories.
+Learns values over individual hexes from the paths the rat runs (and whether each trial was rewarded).
 
-- **`HexMazeTDLearner`** — TD(0) + TD(1) value learning, maintains V(hex) per starting port
+- **`HexMazeTDLearner`** — TD(λ) value learning
+- **`KrauszDualLearner`** — TD(λ) + a model-based memory trace (Krausz et al. 2023)
+- **`SWRDualLearner`** — TD(λ) + value updates from SWR replay
 
-Supports learning from rat trajectories, self-generated simulation, configurable priors, and mid-session barrier changes. Learned values can be visualized as heatmaps on the maze with `plot_hex_maze(color_by=...)`.
+Each learner can value moves locally or from the rat's sweeps (retrieval rules), and use either directional or
+goal-conditioned states. All hex learners support fitting to the rat's choices (`.fit_choices()`, or `fit_many` to fit
+many models in parallel), BIC model comparison, value snapshots after every trial or step, value timeseries,
+animations of learning, simulation, configurable priors, and mid-session barrier changes.
+See the hex learning [README](src/hexmaze/rl/hex_learning/README.md) for detailed docs, and the
+[Hex Value Learning](./Tutorials/41_Hex_Value_Learning.ipynb) tutorial to get started.
 
 ## Other info
 

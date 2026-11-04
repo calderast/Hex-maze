@@ -6,12 +6,12 @@ Dual-process hex value agent for the hex maze (Krausz et al.).
 This is a BaseHexLearner with two rules that update the same value table,
 which together make up the dual-process model:
 
-    TDLambdaRule   -- model-free TD, defaulting to TD(0): on every step, the
-                      state the rat is leaving bootstraps from the next state.
-    ModelBasedRule -- model-based update at the port: we keep a recency-weighted
-                      memory trace m over the trial, average it into a persistent
-                      map T when the rat reaches a port, then move every state
-                      weighted by T toward the reward received.
+    TDLambdaRule:   model-free TD (TD(0) by default). On every step, the state the
+                    rat is leaving moves toward the value of the next state.
+    ModelBasedRule: model-based update at the port. We keep a memory trace m of
+                    where the rat has been this trial (recent states count more),
+                    average it into a map T when the rat reaches a port, then move
+                    every state toward the reward, weighted by T.
 
 Both rules write to the same V, so a state can be updated by either rule
 (or both) on the same trial. See update_rules.py for each rule's equations,

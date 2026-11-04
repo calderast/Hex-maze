@@ -238,8 +238,8 @@ class TDLambdaRule(UpdateRule):
 
     def _make_event(self, learner, kind, **info):
         """
-        Package one prediction error and the states it changed into an
-        UpdateEvent, so we can outline them on the maze and show the update as text.
+        Turn one prediction error and the states it changed into an UpdateEvent,
+        so we can outline them on the maze and show the update as text.
 
         Parameters:
             learner (BaseHexLearner): The learner the update was applied to
@@ -309,10 +309,10 @@ class TDLambdaRule(UpdateRule):
 
 class ModelBasedRule(UpdateRule):
     """
-    Model-based port-entry update (Krausz et al.): on reaching a reward
-    port, sweeps a value update over every state on paths that have led
-    into that port, weighted by a persistent, recency-averaged map T
-    learned online.
+    Model-based update at the port (Krausz et al.): when the rat reaches a reward
+    port, update the value of every state on paths that have led to that port,
+    weighted by a map T of how recently and often each state led there (T is
+    learned as the session goes).
     Reads params:
     `learner.gamma_mb` (default 0.9)
     `learner.a_T` (default 0.1)
@@ -360,9 +360,9 @@ class ModelBasedRule(UpdateRule):
         self.m = {}
 
     def on_maze_changed(self, learner):
-        """Drop T/m entries for states no longer in the graph
+        """Drop T and m for states that aren't in the new maze
         (e.g. a hex that's now a barrier, or if directional,
-        an edge that no longer exists)."""
+        a direction of travel that isn't possible anymore)."""
         # Get the states that exist in the new maze. Drop anything learned about
         # states that don't, so if that hex opens up again later it starts fresh.
         valid = set(learner.all_states())

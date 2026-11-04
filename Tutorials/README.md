@@ -24,6 +24,14 @@ See [Maze Configuration Database Search](./20_Maze_Configuration_Database_Search
 These notebooks are provided as reference for how the maze databases were generated.
 You can ignore these unless you plan to generate a new database using different maze criteria.
 
-## 4. Modeling port values
+## 4. Modeling port and hex values
 
-This notebook ([Port Value Models](./40_Port_Value_Models.ipynb)) covers various reinforcement learning models used to fit port values (reward expectation) based on rat port choices and reward outcomes. Note the RL module is still in progress.
+These notebooks cover reinforcement learning models of the rat's behavior. Note the RL module is still in progress.
+
+Port values (reward expectation at each port, from port choices and reward outcomes):
+- [Port Value Models](./40_Port_Value_Models.ipynb): various RL models fit to port choices and rewards
+
+Hex values (a value for each hex, learned from the paths the rat runs):
+- [Hex Value Learning](./41_Hex_Value_Learning.ipynb): How to fit a model to a session, look at the learned hex values (and how they change after each trial), and animate learning
+
+See the hex learning [README](../src/hexmaze/rl/hex_learning/README.md) for full docs.

@@ -92,12 +92,12 @@ def represented_hexes(sweeps):
 
 class BaseHexLearner:
     """
-    Hex-maze value learner driven by a list of UpdateRule objects (see
+    Hex maze value learner that uses a list of UpdateRules to update values (see
     module docstring). The learner holds the value table V, steps through trials
     hex by hex, and calls each rule at the start of a trial, on every step, and at
     the port. The rules decide how the values change.
 
-    Each rule's hyperparameters (e.g. TDLambdaRule's alpha/lam,
+    Each rule's parameters (e.g. TDLambdaRule's alpha/lam,
     ModelBasedRule's gamma_mb/a_T/a_mb) are passed to the constructor and
     stored as attributes of the learner, so all of a model's parameters live
     in one place, and each rule reads the ones it needs from the learner.
@@ -153,17 +153,17 @@ class BaseHexLearner:
                 trial the rules are called in this order, so a later rule reads any value
                 an earlier one has just changed, and their animation frames come in this
                 order.
-            gamma (float): Discount factor used for prior-value computation, and reused by
-                any rule (like TDLambdaRule) that wants a shared discount rate.
-            temperature (float): Softmax temperature for action selection (policy-level, not
-                tied to any one update rule).
-            directional_states (bool): If True, states are directed edges (prev_hex, cur_hex); else
-                hexes.
-            goal_conditioned_states (bool): If True, keep one value function per start port (3
-                value tables); else a single shared value function. A learner is set up
-                with exactly one of directional_states and goal_conditioned_states.
-            priors (None, "uniform", ("flat", value), or list of 3 floats): Hex value
-                initialization strategy (see distance_priors/build_prior_table).
+            gamma (float): Discount per hex. Used for the priors, and by any rule that
+                discounts (like TDLambdaRule).
+            temperature (float): Softmax temperature for choices (this is used for every
+                learner, no matter which update rules it has).
+            directional_states (bool): If True, each state is a direction of travel through a
+                hex, (prev_hex, cur_hex). If False, each state is a hex.
+            goal_conditioned_states (bool): If True, keep a separate value table for each start
+                port (3 value tables). If False, use one shared value table. Use exactly one of
+                directional_states and goal_conditioned_states.
+            priors (None, "uniform", ("flat", value), or list of 3 floats): What values
+                every hex starts at (see distance_priors/build_prior_table).
             no_backtrack (bool): If True, the simulated agent avoids revisiting hexes
                 within a trial when it can (see choose_action/simulate). This only
                 applies to simulated behavior, so scoring and the update rules still
@@ -176,7 +176,7 @@ class BaseHexLearner:
                 would step into.
             reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A,
                 2/B, 3/C. Read when simulating only, to sample whether a reward is delivered.
-            **rule_kwargs: Rule-specific hyperparameters (e.g. alpha=, lam= for
+            **rule_kwargs: Parameters for the update rules (e.g. alpha=, lam= for
                 TDLambdaRule; gamma_mb=, a_T=, a_mb= for ModelBasedRule), set as plain
                 attributes on this instance.
         """
@@ -293,7 +293,7 @@ class BaseHexLearner:
             rule.on_reset(self)
 
     def build_prior_table(self, priors):
-        """Precompute {context: {hex: prior value}} (or None for all-zeros)."""
+        """Get the starting value of every hex, as {context: {hex: prior value}} (or None if every hex starts at 0)."""
         # Every hex starts at 0, so the agent has learned nothing about the maze
         if priors is None:
             self.prior_table = None
@@ -333,7 +333,7 @@ class BaseHexLearner:
 
     def distance_priors(self, port_values):
         """
-        Build distance-discounted priors per context.
+        Get priors for each context that decay with distance from the ports.
 
         For each context, value(hex) = max over that context's goal ports of
         port_value[goal] * gamma^(distance from hex to goal), using the empty maze
@@ -374,16 +374,16 @@ class BaseHexLearner:
         return table
 
     def prior_for_hex(self, context, hex):
-        """Prior value for a hex in a context (0.0 when no priors set)."""
+        """Get the prior value of a hex in a context (0 if there are no priors)."""
         if self.prior_table is None:
             return 0.0
         return self.prior_table[context].get(hex, 0.0)
 
     def set_graph(self, new_maze):
         """
-        Swap the maze (e.g. after a barrier change). Accepts a maze in any valid
-        format (barrier set, string, networkx graph, etc.), converted via
-        ``maze_to_graph``. States the new maze no longer has are dropped from V,
+        Swap in a new maze (e.g. after a barrier change). The maze can be in any valid
+        format (barrier set, string, networkx graph, etc.), and gets converted with
+        maze_to_graph. States the new maze no longer has are dropped from V,
         states it opens up are added at their prior value, and each rule drops
         what it has learned about the removed states too (see
         UpdateRule.on_maze_changed).
@@ -420,19 +420,19 @@ class BaseHexLearner:
     #  State helpers
 
     def context_for_port(self, start_port):
-        """The value table key for a trip starting at start_port."""
+        """Get which value table a trial starting at start_port uses."""
         return start_port if self.goal_conditioned_states else None
 
     def state_key(self, prev_hex, cur_hex):
-        """State key for arriving at `cur_hex` from `prev_hex` (None at trip start)."""
+        """Get the state for arriving at `cur_hex` from `prev_hex` (None at the start of a trial)."""
         return (prev_hex, cur_hex) if self.directional_states else cur_hex
 
     def hex_of_state(self, state):
-        """The maze hex underlying a state key."""
+        """Get the hex a state is in."""
         return state[1] if self.directional_states else state
 
     def format_state(self, state):
-        """Human-readable label for a state key, e.g. '48→43', 'start→43' or '43'."""
+        """Get a readable label for a state, e.g. '48→43', 'start→43' or '43'."""
         if self.directional_states:
             prev, cur = state
             return f"{prev if prev is not None else 'start'}→{cur}"
@@ -614,9 +614,8 @@ class BaseHexLearner:
     def learn_path(self, path, reward, context, replayed_hexes=None, record=False,
                    before_step=None):
         """
-        Step through a single recorded path within one context, updating values
-        after each move (in the order the rat ran them). Reward is delivered at
-        the terminal state (path[-1]).
+        Learn from one trial's path, updating values after each move (in the order
+        the rat ran them). Reward is delivered at the end of the path (path[-1]).
 
         Parameters:
             path (list[int]): The hexes the rat ran this trial, in order, ending
@@ -679,7 +678,7 @@ class BaseHexLearner:
 
     def resolve_context(self, path):
         """
-        The value-table context for a trip, derived from path[0].
+        Get which value table a trial uses, from where it starts (path[0]).
 
         With goal_conditioned_states=False there is a single shared table, so
         path[0] never needs to be a real port. With goal_conditioned_states=True,
@@ -912,8 +911,8 @@ class BaseHexLearner:
 
     def junction_choice_info(self, cur_hex, entry_hex, next_hex, context, sweeps=None):
         """
-        Binary junction-choice info for one step, matching choice_nll's
-        score_at="junctions" scoring.
+        Get the left/right choice the rat made at a junction on this step (scored the
+        same way as choice_nll with score_at="junctions").
 
         Returns None if cur_hex isn't a real 3-way junction, or next_hex is
         entry_hex, meaning the rat backtracked. (This is valid, just not a binary
@@ -955,8 +954,8 @@ class BaseHexLearner:
     def choice_nll(self, trajectories, rewards, replayed_hexes=None, swept_hexes=None,
                    mazes=None, trials_per_block=None, record=False, score_at="steps"):
         """
-        Negative log-likelihood of the rat's hex-to-hex choices under this
-        model's current parameters.
+        Get the negative log-likelihood of the rat's hex-to-hex choices, using this
+        learner's current parameters.
 
         Steps through each trajectory move by move. Each move is scored by the
         softmax probability of the hex the rat actually stepped to (using the
@@ -1091,8 +1090,7 @@ class BaseHexLearner:
                      mazes=None, trials_per_block=None,
                      rules=None, score_at="steps", **kwargs):
         """
-        Fit hyperparameters to maximize the likelihood of the rat's
-        hex-to-hex choices.
+        Fit the parameters that make the rat's hex-to-hex choices most likely.
 
         Which parameters are actually fit depends on which rule types are in
         `rules`: alpha/lam only matter (and are only fit) if a TDLambdaRule
@@ -1220,16 +1218,14 @@ class BaseHexLearner:
 
     def simulate(self, start_state, n_trials=65, record_history=False):
         """
-        Run n_trials of self-generated exploration with rule updates. Each
+        Let the agent run the maze itself for n_trials, learning as it goes. Each
         trial runs until the agent reaches one of its goal ports, and the next
         trial starts from that port. Returns a list of {"path", "reward",
         "start_port"} dicts.
 
-        When record_history=True, each result dict also carries a "history":
-        the per-event list of value snapshots (see snapshot()) captured as
-        the update(s) propagate along that trial's path. Use this to build
-        step-by-step learning animations (snapshot_values() collapses a
-        snapshot to {hex: value}).
+        When record_history=True, each dict also has a "history": a value snapshot
+        after every update on that trial (see snapshot()), e.g. for animating
+        learning step by step (snapshot_values() turns a snapshot into {hex: value}).
         """
         results = []
         current_hex = start_state
@@ -1253,12 +1249,11 @@ class BaseHexLearner:
 
     def run_trial(self, start_hex, start_port, goal_hexes, record=False):
         """
-        Simulate one trial using the current policy until the agent reaches a
-        goal port. The agent learns from each move as it makes it, so every
+        Simulate one trial, until the agent reaches a goal port. The agent learns from each move as it makes it, so every
         choice uses the most up-to-date values.
 
-        Returns (path, reward, history), where history is the per-event value
-        snapshot list when record=True, else None.
+        Returns (path, reward, history), where history is a value snapshot after
+        every update if record=True, and None otherwise.
         """
         context = self.context_for_port(start_port)
         path = [start_hex]
@@ -1355,8 +1350,9 @@ class BaseHexLearner:
 
     def get_state_values(self, start_port):
         """
-        Per-hex values {hex: value} for a context, viewed as if walking
-        straight out from start_port (see bfs_entry_directions).
+        Get the value of each hex, {hex: value}, walking straight out from start_port.
+        For a directional learner, each hex is read in the direction you'd enter it
+        walking out from that port (see bfs_entry_directions).
         """
         port = resolve_port(start_port)
         context = self.context_for_port(port)
@@ -1365,12 +1361,13 @@ class BaseHexLearner:
 
     def bfs_entry_directions(self, origin, prev_hex=None):
         """
-        BFS outward from `origin`, having just arrived from `prev_hex` (or
-        None if `origin` has no real predecessor, e.g. a trip's starting
-        port). Returns {hex: predecessor}: the direction you'd enter each
-        reachable hex from if you kept walking straight out from `origin`
-        without doubling back through `prev_hex`. Hexes only reachable by
-        turning back through `prev_hex` aren't included.
+        Get the direction you'd enter each hex from if you kept walking straight out
+        from `origin` (a BFS outward from `origin`). `prev_hex` is the hex you just came
+        from (or None, e.g. at the port a trial starts from), and we don't walk back
+        through it, so hexes you can only reach by turning around aren't included.
+
+        Returns:
+            dict: {hex: the hex you'd enter it from}
         """
         entry_from = {origin: prev_hex}
         visited = {origin} | ({prev_hex} if prev_hex is not None else set())
@@ -1388,38 +1385,38 @@ class BaseHexLearner:
 
     def resolve_snapshot_entry_directions(self, path, step_index):
         """
-        {hex: prev_hex} entry directions for a snapshot taken after
-        step_index steps into path (path[step_index] is the rat's current
-        hex), combining three tiers in priority order (lowest first, so
-        later entries overwrite earlier ones):
-            1. every hex, via a BFS rooted at the trip's start (path[0]);
-            2. hexes already entered earlier in this same trial, using the
-               real direction they were entered with, taken from path;
-            3. hexes ahead of the rat, via a BFS from its current position
-               (path[step_index]) that excludes backtracking into where it
-               just came from.
+        Get the direction to read each hex's value in, {hex: prev_hex}, when the rat is
+        step_index steps into path (so it's at path[step_index]). Each source below
+        overwrites the ones before it:
+            1. Every hex: the direction you'd enter it walking out from where the
+               trial started (path[0])
+            2. Hexes ahead of the rat: the direction you'd enter it walking out from
+               where the rat is now, without turning around
+            3. Hexes the rat already went through this trial: the direction it
+               actually entered them from
+        The rat's real path has to win over 2, since once the rat has gone around a
+        loop, walking out from where it is now can reach hexes behind it the other
+        way around.
         """
         start_directions = self.bfs_entry_directions(path[0])
-        # A hex entered more than once this trial keeps its most recent direction
-        experienced = {path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)}
         cur_hex = path[step_index]
         prev_hex = path[step_index - 1] if step_index > 0 else None
         ahead = self.bfs_entry_directions(cur_hex, prev_hex)
-        return {**start_directions, **experienced, **ahead}
+        # A hex entered more than once this trial keeps its most recent direction
+        experienced = {path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)}
+        return {**start_directions, **ahead, **experienced}
 
     def plot_entry_directions(self, path, step_index, ax=None, **plot_kwargs):
         """
-        Visualize the entry-direction heuristic (resolve_snapshot_entry_directions)
-        used for directional-state display: draws a gray arrow from each hex's
-        assigned predecessor to that hex, for the snapshot taken after
-        step_index steps into path. The rat is drawn at its current position
-        (path[step_index]) and the real path walked so far is overlaid as
-        black arrows (hex_path), so any hex already visited this trial should
-        show a black arrow exactly on top of its gray one -- only hexes not
-        yet visited (guessed via BFS) should show gray-only arrows.
+        Plot which direction each hex's value is read in when the rat is step_index
+        steps into path (see resolve_snapshot_entry_directions). Each hex gets a gray
+        arrow from the hex it's read as entered from. The rat is drawn where it is
+        (path[step_index]), and its path so far is drawn in black on top, so every hex
+        it already went through should have a black arrow right on top of its gray one
+        (only hexes it hasn't been to yet should have just a gray arrow).
 
-        Only meaningful with directional_states=True; with directional_states=False every
-        hex has a single state regardless of entry direction.
+        This only matters for directional_states=True (with directional_states=False,
+        each hex only has one state).
         """
         entry_directions = self.resolve_snapshot_entry_directions(path, step_index)
         arrows = {}
@@ -1439,10 +1436,10 @@ class BaseHexLearner:
 
     def forward_hex_values(self, context, entry_directions):
         """
-        {hex: value} for a context, given a precomputed {hex: prev_hex}
-        entry-direction map (see resolve_snapshot_entry_directions). With
-        directional_states=False there's only one state per hex, so entry
-        directions don't matter and this just reads V[context] directly.
+        Get the value of each hex, {hex: value}, in a context, reading each hex in the
+        direction given by entry_directions ({hex: prev_hex}, see
+        resolve_snapshot_entry_directions). With directional_states=False there's only
+        one state per hex, so the directions don't matter and we just read V[context].
         """
         if not self.directional_states:
             return {hex: self.V[context][hex] for hex in self.graph.nodes()}
@@ -1459,8 +1456,9 @@ class BaseHexLearner:
 
     def snapshot(self, path, step_index):
         """
-        One history entry: the rat's current hex (path[step_index]), how far
-        along the path that is, and per-context value maps (see
+        Get a snapshot of the values when the rat is step_index steps into path: the
+        rat's hex (path[step_index]), how far along the path that is, the direction each
+        hex is read in, and the {hex: value} map for each context (see
         resolve_snapshot_entry_directions).
         """
         entry_directions = self.resolve_snapshot_entry_directions(path, step_index)
@@ -1473,10 +1471,10 @@ class BaseHexLearner:
 
     def snapshot_values(self, snapshot, start_port=None):
         """
-        Collapse a recorded snapshot to a single {hex: value} map for plotting.
+        Turn a recorded snapshot into one {hex: value} map for plotting.
 
-        With start_port given, returns that context's map; otherwise returns the
-        max value across all contexts.
+        With start_port, this is that context's values. Without it, each hex gets
+        its max value across all contexts.
         """
         per_context = snapshot["values"]
         if start_port is not None:
@@ -1489,7 +1487,7 @@ class BaseHexLearner:
     #  Animation text
 
     def format_header_text(self, cur_hex, path_so_far=None):
-        """Shared header line(s) for animate_learning's text box: the path
+        """Get the first line(s) of animate_learning's text box: the path
         so far (optional) and which hex the rat is in."""
         header = f"rat at hex {cur_hex}"
         if path_so_far:
@@ -1498,10 +1496,10 @@ class BaseHexLearner:
 
     def format_junction_text(self, junction_hex, info):
         """
-        Text block describing one binary junction choice (see
-        junction_choice_info): the two candidate hexes with their retrieved
-        values and choice probabilities, which one the rat actually chose, and (if
-        the retrieval rule used a sweep) the swept hex each value came from.
+        Get the text for one left/right junction choice (see junction_choice_info):
+        the two possible hexes with their values and choice probabilities, which one
+        the rat actually chose, and (if the retrieval rule used a sweep) the swept hex
+        each value came from.
         """
         choosing_between = " and ".join(str(hex) for hex in info["candidates"])
         lines = [f"junction at hex {junction_hex}  (choosing between {choosing_between}):"]
@@ -1578,8 +1576,8 @@ class BaseHexLearner:
             trials_per_block (list of int, optional): How many trials are run on each maze
             start_port (None, a port (1/2/3 or "A"/"B"/"C"), or "trial"): Which context's
                 value table to color by (see snapshot_values). None (default): max value
-                across all contexts -- can mask a real decrease in one context if another
-                context's value is higher. A port: always that one fixed context's table.
+                across all contexts (note this can hide a real decrease in one context if
+                another context's value is higher). A port: always that one fixed context's table.
                 "trial": whichever context the currently-animated trial actually belongs to.
                 Ignored when panels=True.
             panels (bool): If True, draw a subplot per context (self.contexts) side by side,
@@ -1679,9 +1677,12 @@ class BaseHexLearner:
         def trial_title(step_label, suffix=""):
             if not show_trial_info:
                 return None
+            # Show the port the trial actually started from (the session's first
+            # trial may start somewhere else, so show the hex instead)
+            start = port_labels[path[0]] if path[0] in REWARD_PORTS else f"hex {path[0]}"
             return (
                 f"Trial {trial_index + 1}/{n_animated_trials}  "
-                f"start {port_labels.get(context, context)}  "
+                f"start {start}  "
                 f"step {step_label}/{n_steps}{suffix}"
             )
 
@@ -1880,14 +1881,12 @@ class BaseHexLearner:
             )
 
         def build_outlines(frame):
-            """(outline_hexes, outline_colors) lists. Each changed hex gets
-            its own single-hex group, shaded along its event's color ramp by its
-            weight (TD's eligibility, model-based's T) normalized against the
-            max weight among hexes of that same color in this frame, so the
-            eligibility/memory-trace decay is visible directly as an outline
-            fading from bright to dim. The junction-candidate group 
-            (`choice_color`) stays a single flat color, since it's always exactly 
-            two hexes with no decay to show."""
+            """Get the (outline_hexes, outline_colors) lists for a frame. Each changed
+            hex gets its own outline, shaded by its weight (TD's eligibility, or the
+            model-based T) relative to the biggest weight of that color in this frame,
+            so we can see the eligibility/memory trace fade from bright to dim along
+            the path. The two junction hexes (`choice_color`) are always one flat
+            color, since there's no decay to show there."""
             by_color = {}
             for state, (color, weight) in frame["changed_hexes"].items():
                 by_color.setdefault(color, []).append((self.hex_of_state(state), weight))
@@ -1919,9 +1918,9 @@ class BaseHexLearner:
             return (groups, colors) if groups else (None, None)
 
         def draw_panel(panel_ax, frame, values, is_active):
-            """Draw one axes' worth of the maze for a frame. is_active gates
-            the rat/reward marker/outline -- in panels mode only the trial's
-            own context should show them; in single-axis mode it's always True."""
+            """Draw the maze for one frame on one axes. is_active is whether to
+            draw the rat, reward marker, and outlines (with panels, only the trial's
+            own context shows them, and with one axes it's always True)."""
             panel_ax.clear()
             outline, outline_colors = build_outlines(frame) if is_active else (None, None)
             # Draw each frame on the maze at that point in the session (in case of barrier changes)

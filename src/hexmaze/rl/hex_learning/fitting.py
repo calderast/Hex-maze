@@ -29,9 +29,8 @@ def fit_many(jobs, max_workers=None):
 
     Each job is a learner class plus the arguments to pass to its fit_choices.
     Note that the fits run in separate processes, so any warnings raised while
-    fitting (e.g. a tracking error in a trajectory) are printed by the worker
-    process. When running from a notebook, these show up in the terminal running
-    Jupyter, not in the notebook!
+    fitting (e.g. a tracking error in a trajectory) are printed by each worker
+    process, and a warnings filter set in the calling process won't hide them.
 
     Parameters:
         jobs (dict): {key: (learner class, {argument: value} for fit_choices)}. The
