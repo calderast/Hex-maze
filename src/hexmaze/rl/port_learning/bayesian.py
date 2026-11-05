@@ -19,9 +19,9 @@ The reward probability for each port is learned independently.
 
 import numpy as np
 from scipy import stats
-from scipy.optimize import minimize
 
 from ...utils import REWARD_PORTS, resolve_port
+from ..fitting import bic, fit_from_starts
 
 
 class BayesianPortLearner:
@@ -44,7 +44,7 @@ class BayesianPortLearner:
         self,
         prior_a=1.0,
         prior_b=1.0,
-        temperature=1.0,
+        beta=1.0,
         decay=0.05,
     ):
         """
@@ -53,14 +53,15 @@ class BayesianPortLearner:
                 Default 1.0 gives a uniform prior.
             prior_b (float): Initial beta parameter for Beta prior (pseudo-count of omissions).
                 Default 1.0 gives a uniform prior.
-            temperature (float): Softmax temperature for port selection.
+            beta (float): Softmax inverse temperature for port selection (not to be confused
+                with the Beta prior).
             decay (float): Per-trial decay toward the prior. Each trial:
                 a ← a * (1 - decay) + prior_a * decay
                 b ← b * (1 - decay) + prior_b * decay
         """
         self.prior_a = prior_a
         self.prior_b = prior_b
-        self.temperature = temperature
+        self.beta = beta
         self.decay = decay
 
         self.posteriors = {
@@ -182,9 +183,9 @@ class BayesianPortLearner:
         # Get expected reward probability for each port
         q_vals = np.array([self.expected_value(p) for p in available_ports])
 
-        # Lower temperature = more likely to choose the highest-value port
-        # Higher temperature = choices are more random
-        q_vals_scaled = q_vals / self.temperature
+        # Higher beta (inverse temperature) = more likely to choose the highest-value port
+        # Lower beta = choices are more random
+        q_vals_scaled = self.beta * q_vals
 
         # Subtract the max before exp for numerical stability (doesn't change the output)
         q_vals_scaled -= q_vals_scaled.max()
@@ -240,7 +241,7 @@ class BayesianPortLearner:
 
         On each trial the rat chooses between the 2 ports it didn't just visit
         (first trial: all 3 ports available). The choice probability comes from
-        softmax over posterior means with self.temperature.
+        softmax over posterior means with self.beta (inverse temperature).
 
         This is different from nll(), which scores how well the model predicts
         REWARDS. choice_nll() scores how well the model predicts which PORT
@@ -254,7 +255,7 @@ class BayesianPortLearner:
             float: Total negative log-likelihood of the choice sequence.
         """
         model = BayesianPortLearner(prior_a=self.prior_a, prior_b=self.prior_b,
-                                    temperature=self.temperature, decay=self.decay)
+                                    beta=self.beta, decay=self.decay)
         total = 0.0
         prev_port = None
         for port, reward in zip(ports, rewards):
@@ -275,87 +276,91 @@ class BayesianPortLearner:
         return total
 
     @classmethod
-    def fit_choices(cls, ports, rewards):
+    def fit_choices(cls, ports, rewards, n_starts=8, seed=0):
         """
-        Fit prior_strength, decay, and temperature to maximize the likelihood
+        Fit prior_strength, decay, and beta (inverse temperature) to maximize the likelihood
         of the rat's port choices (not rewards).
 
-        Uses L-BFGS-B to minimize choice_nll(). Returns a fitted instance with
-        best-fit parameters and ``choice_nll_``, ``choice_bic_``, and
-        ``choice_result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port the rat chose on each trial.
             rewards (list of int or float): Reward received on each trial.
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             BayesianPortLearner: Fitted instance with attributes:
                 - choice_nll_    : choice NLL at optimum
-                - choice_bic_    : BIC (3 params: prior_strength, decay, temperature)
-                - choice_result_ : raw scipy OptimizeResult
+                - choice_bic_    : BIC (3 params: prior_strength, decay, beta)
+                - choice_result_ : raw scipy OptimizeResult for the best starting point
+                - choice_results_: the OptimizeResult from every starting point
         """
         def _obj(params):
-            prior_strength, decay, temperature = params
+            prior_strength, decay, beta = params
             return cls(prior_a=prior_strength, prior_b=prior_strength,
-                       temperature=temperature,
+                       beta=beta,
                        decay=decay).choice_nll(ports, rewards)
 
-        result = minimize(_obj, x0=[1.0, 0.05, 1.0],
-                          bounds=[(0.01, 30.0), (0.0, 0.5), (0.01, 10.0)],
-                          method='L-BFGS-B')
+        # prior_strength and beta are above 0, and decay is between 0 and 1
+        values, result, results = fit_from_starts(
+            _obj, start_values=[1.0, 0.05, 1.0], kinds=["positive", "unit", "positive"],
+            n_starts=n_starts, seed=seed,
+        )
 
-        fitted = cls(prior_a=result.x[0], prior_b=result.x[0],
-                     temperature=result.x[2], decay=result.x[1])
+        fitted = cls(prior_a=values[0], prior_b=values[0],
+                     beta=values[2], decay=values[1])
         fitted.choice_nll_ = result.fun
-        n = len(rewards)
-        fitted.choice_bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.choice_bic_ = bic(result.fun, len(values), len(rewards))
         fitted.choice_result_ = result
+        fitted.choice_results_ = results
         return fitted
 
 
     @classmethod
-    def fit_rewards(cls, ports, rewards):
+    def fit_rewards(cls, ports, rewards, n_starts=8, seed=0):
         """
         Fit prior_strength and decay to maximise the likelihood of a reward sequence.
         prior_a and prior_b are constrained equal (symmetric prior).
 
-        Returns a fitted instance with best-fit parameters and ``reward_nll_``,
-        ``reward_bic_``, and ``reward_result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port sequence.
             rewards (list of int or float): Reward sequence.
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             BayesianPortLearner: Fitted instance with attributes:
                 - reward_nll_    : NLL at optimum
                 - reward_bic_    : BIC (2 params)
-                - reward_result_ : raw scipy OptimizeResult
+                - reward_result_ : raw scipy OptimizeResult for the best starting point
+                - reward_results_: the OptimizeResult from every starting point
         """
         # Objective: construct a fresh model for each candidate parameter set and compute NLL
-        # L-BFGS-B respects the bounds without needing a penalty
         def _obj(params):
             prior_strength, decay = params
             return cls(prior_a=prior_strength, prior_b=prior_strength,
                        decay=decay).reward_nll(ports, rewards)
 
-        # Starting point: prior_strength=1.0 (uniform prior), decay=0.05 (mild forgetting)
-        # Bounds keep prior_strength in (0, 30] and decay in [0, 0.5]
-        result = minimize(_obj, x0=[1.0, 0.05],
-                          bounds=[(0.01, 30.0), (0.0, 0.5)],
-                          method='L-BFGS-B')
+        # First starting point: prior_strength=1.0 (uniform prior), decay=0.05 (mild forgetting)
+        # prior_strength is above 0, and decay is between 0 and 1
+        values, result, results = fit_from_starts(
+            _obj, start_values=[1.0, 0.05], kinds=["positive", "unit"], n_starts=n_starts, seed=seed,
+        )
 
         # Fitted = model with the best fit prior_strength and decay parameters
-        fitted = cls(prior_a=result.x[0], prior_b=result.x[0], decay=result.x[1])
+        fitted = cls(prior_a=values[0], prior_b=values[0], decay=values[1])
         fitted.reward_nll_ = result.fun
         # Compute Bayesian Information Criterion (BIC) as a metric for how good this model is
         # BIC = k*ln(n) + 2*NLL, where k = number of free parameters and n = number of trials
         # The k*ln(n) term penalises model complexity, so models with different
         # numbers of parameters can be compared on the same scale (lower is better)
         # This model has k=2 (prior_strength, decay)
-        n = len(rewards)
-        fitted.reward_bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.reward_bic_ = bic(result.fun, len(values), len(rewards))
         fitted.reward_result_ = result
+        fitted.reward_results_ = results
         return fitted
 
     def get_history(self):

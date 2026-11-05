@@ -112,12 +112,13 @@ All port learners share these methods:
 | `reset()` | Re-initialize to starting state, keeping parameters |
 | `reward_nll(ports, rewards)` | Negative log-likelihood of a reward sequence under current parameters |
 | `choice_nll(ports, rewards)` | Negative log-likelihood of a port choice sequence under current parameters |
-| `fit_rewards(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL via L-BFGS-B. Returns fitted instance with `.reward_nll_`, `.reward_bic_` attributes |
-| `fit_choices(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL via L-BFGS-B. Returns fitted instance with `.choice_nll_`, `.choice_bic_` attributes |
+| `fit_rewards(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL (see below). Returns fitted instance with `.reward_nll_`, `.reward_bic_` attributes |
+| `fit_choices(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL (see below). Returns fitted instance with `.choice_nll_`, `.choice_bic_` attributes |
 
 **Shared parameters:**
 
-- **`temperature`**: softmax temperature for `choice_probabilities` (RW/Bayesian set at init; HS passes per call)
+- **`beta`**: softmax inverse temperature for `choice_probabilities` (set at init).
+  Higher beta means more reliably choosing the higher-valued port (beta=0 is random)
 - **`decay`**: per-trial decay toward initial values (0 = no forgetting)
 
 ## Model-Specific Methods
@@ -186,6 +187,9 @@ for state in hs.get_state_posteriors():
 ## Model Comparison with BIC
 
 Each model's free parameters are fit by minimizing negative log-likelihood (NLL) over the port visit / reward sequence.
+The fit works the same way as the hex learners' (see `fit_from_starts` in `rl/fitting.py`): each parameter is fit as
+an unbounded number (the logit of a parameter between 0 and 1, and the log of one above 0), from `n_starts=8`
+starting points, keeping the best fit (the likelihood can have more than one local optimum).
 
 All models expose `.reward_nll_`/`.choice_nll_` and `.reward_bic_`/`.choice_bic_` after fitting. 
 

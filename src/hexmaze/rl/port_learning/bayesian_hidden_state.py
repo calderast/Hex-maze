@@ -21,9 +21,9 @@ slot probability estimates (analogous to a decreased learning rate).
 import numpy as np
 from itertools import permutations
 from scipy import stats
-from scipy.optimize import minimize
 
 from ...utils import REWARD_PORTS, resolve_port
+from ..fitting import bic, fit_from_starts
 
 
 class BayesianHiddenStatePortLearner:
@@ -51,6 +51,7 @@ class BayesianHiddenStatePortLearner:
         slot_probs=(0.9, 0.5, 0.1),
         prior_strength=2.0,
         decay=0.0,
+        beta=1.0,
     ):
         """
         Parameters:
@@ -63,10 +64,12 @@ class BayesianHiddenStatePortLearner:
                 Use >= 1 to avoid U-shaped priors on extreme slot values.
             decay (float): Per-trial probability of switching to a different permutation.
                 0 = no switching expected. >0 = volatile environment.
+            beta (float): Softmax inverse temperature for port selection.
         """
         self.slot_probs = tuple(slot_probs)
         self.prior_strength = prior_strength
         self.decay = decay
+        self.beta = beta
         n_slots = len(slot_probs)
 
         # All permutations: states[i][port] = slot index
@@ -253,14 +256,13 @@ class BayesianHiddenStatePortLearner:
             for i, state in enumerate(self.states)
         ]
 
-    def choice_probabilities(self, available_ports=None, temperature=1.0):
+    def choice_probabilities(self, available_ports=None):
         """
         Softmax choice probabilities over expected values.
 
         Parameters:
             available_ports (list of int or str, optional): Which ports to choose among
                 (1/2/3 or A/B/C). Defaults to all 3.
-            temperature (float): Softmax temperature.
 
         Returns:
             dict of {int: float}: {port: probability}
@@ -273,9 +275,9 @@ class BayesianHiddenStatePortLearner:
         # Get expected reward probability for each port
         q_vals = np.array([self.expected_value(p) for p in available_ports])
 
-        # Lower temperature = more likely to choose the highest-value port
-        # Higher temperature = choices are more random
-        q_vals_scaled = q_vals / temperature
+        # Higher beta (inverse temperature) = more likely to choose the highest-value port
+        # Lower beta = choices are more random
+        q_vals_scaled = self.beta * q_vals
 
         # Subtract the max before exp for numerical stability (doesn't change the output)
         q_vals_scaled -= q_vals_scaled.max()
@@ -321,53 +323,54 @@ class BayesianHiddenStatePortLearner:
         return total
 
     @classmethod
-    def fit(cls, ports, rewards, slot_probs=(0.9, 0.5, 0.1)):
+    def fit(cls, ports, rewards, slot_probs=(0.9, 0.5, 0.1), n_starts=8, seed=0):
         """
         Fit prior_strength and decay to maximise the likelihood of a
         reward sequence. slot_probs are treated as fixed and known.
 
-        Returns a fitted instance with best-fit parameters and ``nll_``, ``bic_``,
-        and ``result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port sequence.
             rewards (list of int or float): Reward sequence.
             slot_probs (tuple of float): The assumed prior means for each slot.
                 Defaults to (0.9, 0.5, 0.1).
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             BayesianHiddenStatePortLearner: Fitted instance with attributes:
                 - nll_    : NLL at optimum
                 - bic_    : BIC (2 params)
-                - result_ : raw scipy OptimizeResult
+                - result_ : raw scipy OptimizeResult for the best starting point
+                - results_: the OptimizeResult from every starting point
         """
         # Objective: construct a fresh model for each candidate parameter set and compute NLL
-        # L-BFGS-B respects the bounds without needing a penalty
         def _obj(params):
             prior_strength, decay = params
             return cls(slot_probs=slot_probs,
                        prior_strength=prior_strength,
                        decay=decay).nll(ports, rewards)
 
-        # Starting point: prior_strength=2.0 (weak prior), decay=0.05 (mild volatility)
-        # Bounds keep prior_strength in [1, 20] and decay in [0, 0.5]
-        result = minimize(_obj, x0=[2.0, 0.05],
-                          bounds=[(1.0, 20.0), (0.0, 0.5)],
-                          method='L-BFGS-B')
+        # First starting point: prior_strength=2.0 (weak prior), decay=0.05 (mild volatility)
+        # prior_strength is above 0, and decay is between 0 and 1
+        values, result, results = fit_from_starts(
+            _obj, start_values=[2.0, 0.05], kinds=["positive", "unit"], n_starts=n_starts, seed=seed,
+        )
 
         # Fitted = model with the best fit prior_strength and decay
         fitted = cls(slot_probs=slot_probs,
-                     prior_strength=result.x[0],
-                     decay=result.x[1])
+                     prior_strength=values[0],
+                     decay=values[1])
         fitted.nll_ = result.fun
         # Compute Bayesian Information Criterion (BIC) as a metric for how good this model is
         # BIC = k*ln(n) + 2*NLL, where k = number of free parameters and n = number of trials
         # The k*ln(n) term penalises model complexity, so models with different
         # numbers of parameters can be compared on the same scale (lower is better)
         # This model has k=2 (prior_strength, decay)
-        n = len(rewards)
-        fitted.bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.bic_ = bic(result.fun, len(values), len(rewards))
         fitted.result_ = result
+        fitted.results_ = results
         return fitted
 
     def get_history(self):

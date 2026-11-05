@@ -10,7 +10,7 @@ from .retrieval_rules import (
     FurthestSweptRetrieval,
 )
 from .update_rules import UpdateRule, UpdateEvent, TDLambdaRule, ModelBasedRule, SWRRule
-from .fitting import fit_many
+from ..fitting import fit_many
 
 __all__ = [
     "HexMazeTDLearner", "KrauszDualLearner", "SWRDualLearner",

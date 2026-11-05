@@ -16,8 +16,7 @@ hex_learning/
 ├── dual_learner.py     # KrauszDualLearner (TD(λ) + model-based memory trace)
 ├── swr_learner.py      # SWRDualLearner    (TD(λ) + SWR replay)
 ├── update_rules.py     # UpdateRule, TDLambdaRule, ModelBasedRule, SWRRule
-├── retrieval_rules.py  # RetrievalRule, LocalRetrieval, BestSwept..., FurthestSweptRetrieval
-└── fitting.py          # fit_many (fit models in parallel)
+└── retrieval_rules.py  # RetrievalRule, LocalRetrieval, BestSwept..., FurthestSweptRetrieval
 ```
 
 ## How a learner is built
@@ -36,7 +35,7 @@ and once the rat reaches the port. Several rules can run on the same value table
 
 | Learner | Update rule(s) | Parameters (defaults) |
 |---|---|---|
-| `HexMazeTDLearner` | TD(λ) | `alpha=0.3`, `gamma=0.95`, `lam=0.0`, `temperature=1.0` |
+| `HexMazeTDLearner` | TD(λ) | `alpha=0.3`, `gamma=0.95`, `lam=0.0`, `beta=1.0` |
 | `KrauszDualLearner` | TD(λ) + model-based memory trace (Krausz et al. 2023) | + `gamma_mb=0.9`, `a_T=0.1`, `a_mb=0.1` |
 | `SWRDualLearner` | TD(λ) + SWR replay | + `a_swr=0.1` |
 | `BaseHexLearner` | any list you pass as `rules=` | whatever those rules read |
@@ -115,7 +114,8 @@ Use exactly one of these:
 - **`priors`**: starting values. `None` (all 0, default), `"uniform"` (0.5 at ports, decaying by `gamma` per hex
   of empty-maze distance), `("flat", value)` (every hex starts at `value`, e.g. `("flat", 0.2)` matches Tim's paper),
   or `[pA, pB, pC]` (like `"uniform"` but with your own port values).
-- **`temperature`**: softmax temperature for choices.
+- **`beta`**: softmax inverse temperature for choices. Higher beta means the agent more reliably picks the
+  higher-valued move (beta=0 is random).
 - **`reward_probs`**: `[pA, pB, pC]`, only used to sample rewards in `simulate`.
 - **`no_backtrack`**: if True (default), the simulated agent avoids revisiting hexes in a trial. Only affects `simulate`.
 
@@ -138,7 +138,7 @@ Tracking errors in a trajectory (e.g. a jump between two hexes that aren't neigh
 | Method | What it does |
 |---|---|
 | `learn(trajectories, rewards, ...)` | Learn from the rat's trajectories. `record="trial"` or `"step"` returns value snapshots |
-| `fit_choices(maze, trajectories, rewards, ...)` | (classmethod) Fit parameters to the rat's choices. Returns a fresh learner with `.choice_nll_`, `.choice_bic_`, `.choices_scored_` |
+| `fit_choices(maze, trajectories, rewards, ...)` | (classmethod) Fit parameters to the rat's choices (see [How fitting works](#how-fitting-works)). Returns a fresh learner with `.choice_nll_`, `.choice_bic_`, `.choices_scored_` |
 | `choice_nll(trajectories, rewards, ...)` | NLL of the rat's choices under the current parameters. `record=True` also returns per-choice probabilities |
 | `value_timeseries(trajectories, rewards, sampled_hexes, represented_hexes=None, ...)` | Value of where the rat is (and what it's representing) at every sample, as a DataFrame |
 | `animate_learning(trajectories, rewards, ...)` | Animate learning one update at a time. `save_to=` writes an .mp4 or .gif |
@@ -149,14 +149,32 @@ Tracking errors in a trajectory (e.g. a jump between two hexes that aren't neigh
 | `set_graph(maze)` | Swap in a new maze (e.g. on a barrier change) |
 | `critical_choice_points(start_port=None)` | The critical choice point(s) of the current maze |
 
-`fit_many(jobs)` runs a dict of `{key: (learner class, fit_choices arguments)}` fits in parallel and returns
-`{key: fitted learner}`.
+`fit_many(jobs)` (in `rl/fitting.py`) runs a dict of `{key: (learner class, fit_choices arguments)}` fits in parallel and returns
+`{key: fitted learner}` (each fit runs its starting points one at a time, since the fits themselves are already in
+parallel).
 
 **`score_at`** (for `fit_choices` and `choice_nll`) picks which of the rat's moves are scored:
 
 - `"steps"` (default): every step, against all neighbors
 - `"junctions"`: only left/right choices at 3-way junctions (backtracking at a junction isn't scored)
 - `"choice_points"`: only left/right choices at the critical choice point for the trial's start port
+
+## How fitting works
+
+`fit_choices` fits the same way as the Daw lab's [em](https://github.com/ndawlab/em) package (the port learners fit
+the same way, see `fit_from_starts` in `rl/fitting.py`):
+
+- **Which parameters are fit**: `gamma` and `beta` for every learner, plus the parameters each of its update rules
+  reads (each rule lists them in its `FIT_PARAMS`, e.g. `alpha` and `lam` for `TDLambdaRule`). Pass a value to fix a
+  parameter instead of fitting it (e.g. `lam=0.0` for TD(0)). A new update rule just has to list its parameters in
+  `FIT_PARAMS` to be fittable.
+- **Unbounded parameters**: each parameter is fit as an unbounded number (the logit of a parameter between 0 and 1,
+  and the log of `beta`, the inverse temperature), so the optimizer never gets stuck against a bound. The fitted learner has the parameters
+  back in their normal units.
+- **Multiple starting points** (`n_starts=8`): the likelihood can have more than one local optimum, so we fit from
+  the default starting values plus random ones, and keep the best fit. The starting points run in parallel
+  (`max_workers`), and `seed` makes the random ones reproducible. `choice_results_` has the result from every
+  starting point, so you can check whether they found different fits.
 
 ## Things to watch out for
 
