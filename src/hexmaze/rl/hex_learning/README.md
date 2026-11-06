@@ -169,8 +169,8 @@ the same way, see `fit_from_starts` in `rl/fitting.py`):
   parameter instead of fitting it (e.g. `lam=0.0` for TD(0)). A new update rule just has to list its parameters in
   `FIT_PARAMS` to be fittable.
 - **Unbounded parameters**: each parameter is fit as an unbounded number (the logit of a parameter between 0 and 1,
-  and the log of `beta`, the inverse temperature), so the optimizer never gets stuck against a bound. The fitted learner has the parameters
-  back in their normal units.
+  and the log of `beta`, the inverse temperature), so the optimizer never gets stuck against a bound. The fitted
+  learner has the parameters back in their normal units.
 - **Multiple starting points** (`n_starts=8`): the likelihood can have more than one local optimum, so we fit from
   the default starting values plus random ones, and keep the best fit. The starting points run in parallel
   (`max_workers`), and `seed` makes the random ones reproducible. `choice_results_` has the result from every

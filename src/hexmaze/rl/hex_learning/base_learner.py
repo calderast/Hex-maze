@@ -1208,7 +1208,7 @@ class BaseHexLearner:
         fitted = fit.build(final_values)
         fitted.choice_nll_ = nll
         n_choices = len(choices)
-        fitted.choice_bic_ = bic(nll, len(free_names), n_choices) if n_choices > 0 else float("nan")
+        fitted.choice_bic_ = bic(nll, len(free_names), n_choices)
         fitted.choices_scored_ = n_choices
         fitted.choice_result_ = result
         fitted.choice_results_ = results
