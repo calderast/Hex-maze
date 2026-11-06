@@ -15,9 +15,9 @@ The Q value (reward expectation) for each port is learned independently.
 """
 
 import numpy as np
-from scipy.optimize import minimize
 
 from ...utils import REWARD_PORTS, resolve_port
+from ..fitting import bic, fit_from_starts
 
 
 class RescorlaWagner:
@@ -34,20 +34,20 @@ class RescorlaWagner:
     def __init__(
         self,
         alpha=0.3,
-        temperature=1.0,
+        beta=1.0,
         initial_value=0.5,
         decay=0.05,
     ):
         """
         Parameters:
             alpha (float): Learning rate.
-            temperature (float): Softmax temperature for port selection.
+            beta (float): Softmax inverse temperature for port selection.
             initial_value (float): Starting Q-value for all ports.
             decay (float): Per-trial decay toward initial_value applied before each update.
                 Q(port) ← Q(port) * (1 - decay) + initial_value * decay
         """
         self.alpha = alpha
-        self.temperature = temperature
+        self.beta = beta
         self.initial_value = initial_value
         self.decay = decay
 
@@ -129,9 +129,9 @@ class RescorlaWagner:
         # Get Q values for the ports we're choosing between
         q_vals = np.array([self.Q[p] for p in available_ports])
 
-        # Lower temperature = more likely to choose the port with the highest Q value
-        # Higher temperature = choices are more random
-        q_vals_scaled = q_vals / self.temperature
+        # Higher beta (inverse temperature) = more likely to choose the port with the highest Q value
+        # Lower beta = choices are more random
+        q_vals_scaled = self.beta * q_vals
 
         # Subtract the max before exp for numerical stability (doesn't change the output)
         q_vals_scaled -= q_vals_scaled.max()
@@ -184,7 +184,7 @@ class RescorlaWagner:
 
         On each trial the rat chooses between the 2 ports it didn't just visit
         (first trial: all 3 ports available). The choice probability comes from
-        softmax over Q-values with self.temperature.
+        softmax over Q-values with self.beta (inverse temperature).
 
         This is different from reward_nll(), which scores how well the model predicts
         reward outcomes. choice_nll() scores how well the model predicts which port
@@ -199,7 +199,7 @@ class RescorlaWagner:
         """
         model = RescorlaWagner(alpha=self.alpha, decay=self.decay,
                                initial_value=self.initial_value,
-                               temperature=self.temperature)
+                               beta=self.beta)
         total = 0.0
         prev_port = None
         for port, reward in zip(ports, rewards):
@@ -220,86 +220,89 @@ class RescorlaWagner:
         return total
 
     @classmethod
-    def fit_choices(cls, ports, rewards):
+    def fit_choices(cls, ports, rewards, n_starts=8, seed=0):
         """
-        Fit alpha, decay, and temperature to maximize the likelihood of the
+        Fit alpha, decay, and beta (inverse temperature) to maximize the likelihood of the
         rat's port choices (not rewards).
 
-        Uses L-BFGS-B to minimize choice_nll(). Returns a fitted instance with
-        best-fit parameters and ``choice_nll_``, ``choice_bic_``, and
-        ``choice_result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port the rat chose on each trial.
             rewards (list of int or float): Reward received on each trial.
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             RescorlaWagner: Fitted instance with attributes:
                 - choice_nll_    : choice NLL at optimum
-                - choice_bic_    : BIC (3 params: alpha, decay, temperature)
-                - choice_result_ : raw scipy OptimizeResult
+                - choice_bic_    : BIC (3 params: alpha, decay, beta)
+                - choice_result_ : raw scipy OptimizeResult for the best starting point
+                - choice_results_: the OptimizeResult from every starting point
         """
         def _obj(params):
-            alpha, decay, temperature = params
+            alpha, decay, beta = params
             return cls(alpha=alpha, decay=decay,
-                       temperature=temperature).choice_nll(ports, rewards)
+                       beta=beta).choice_nll(ports, rewards)
 
-        result = minimize(_obj, x0=[0.3, 0.05, 1.0],
-                          bounds=[(1e-3, 1.0), (0.0, 0.5), (0.01, 10.0)],
-                          method='L-BFGS-B')
+        # alpha and decay are between 0 and 1, and beta is above 0
+        values, result, results = fit_from_starts(
+            _obj, start_values=[0.3, 0.05, 1.0], kinds=["unit", "unit", "positive"],
+            n_starts=n_starts, seed=seed,
+        )
 
-        fitted = cls(alpha=result.x[0], decay=result.x[1],
-                     temperature=result.x[2])
+        fitted = cls(alpha=values[0], decay=values[1],
+                     beta=values[2])
         fitted.choice_nll_ = result.fun
-        n = len(rewards)
-        fitted.choice_bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.choice_bic_ = bic(result.fun, len(values), len(rewards))
         fitted.choice_result_ = result
+        fitted.choice_results_ = results
         return fitted
 
 
     @classmethod
-    def fit_rewards(cls, ports, rewards):
+    def fit_rewards(cls, ports, rewards, n_starts=8, seed=0):
         """
         Fit alpha and decay parameters to maximize the likelihood of a reward sequence.
 
-        Uses L-BFGS-B to minimize negative log-likelihood. Returns a new
-        fitted instance with best-fit parameters. The fitted instance also
-        has ``reward_nll_``, ``reward_bic_``, and ``reward_result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port sequence.
             rewards (list of int or float): Reward sequence.
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             RescorlaWagner: Fitted instance with attributes:
                 - reward_nll_    : NLL at optimum
                 - reward_bic_    : BIC (2 params)
-                - reward_result_ : raw scipy OptimizeResult
+                - reward_result_ : raw scipy OptimizeResult for the best starting point
+                - reward_results_: the OptimizeResult from every starting point
         """
 
         # Objective: construct a fresh model for each candidate parameter set and compute NLL
-        # L-BFGS-B respects the bounds without needing a penalty
         def _obj(params):
             alpha, decay = params
             return cls(alpha=alpha, decay=decay).reward_nll(ports, rewards)
 
-        # Starting point: alpha=0.3 (moderate learning rate), decay=0.05 (mild forgetting) 
-        # Bounds keep alpha in (0, 1] and decay in [0, 0.5]
-        result = minimize(_obj, x0=[0.3, 0.05],
-                          bounds=[(1e-3, 1.0), (0.0, 0.5)],
-                          method='L-BFGS-B')
+        # First starting point: alpha=0.3 (moderate learning rate), decay=0.05 (mild forgetting)
+        # Both are between 0 and 1
+        values, result, results = fit_from_starts(
+            _obj, start_values=[0.3, 0.05], kinds=["unit", "unit"], n_starts=n_starts, seed=seed,
+        )
 
         # Fitted = model with the best fit alpha and decay parameters
-        fitted = cls(alpha=result.x[0], decay=result.x[1])
+        fitted = cls(alpha=values[0], decay=values[1])
         fitted.reward_nll_ = result.fun
         # Compute Bayesian Information Criterion (BIC) as a metric for how good this model is
         # BIC = k*ln(n) + 2*NLL, where k = number of free parameters and n = number of trials
         # The k*ln(n) term penalises model complexity, so models with different
         # numbers of parameters can be compared on the same scale (lower is better)
         # This model has k=2 (alpha, decay)
-        n = len(rewards)
-        fitted.reward_bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.reward_bic_ = bic(result.fun, len(values), len(rewards))
         fitted.reward_result_ = result
+        fitted.reward_results_ = results
         return fitted
 
     def get_history(self):

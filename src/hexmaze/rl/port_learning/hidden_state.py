@@ -25,9 +25,9 @@ See BayesianHiddenStatePortLearner for a version that also learns the reward pro
 
 import numpy as np
 from itertools import permutations
-from scipy.optimize import minimize
 
 from ...utils import REWARD_PORTS, resolve_port
+from ..fitting import bic, fit_from_starts
 
 
 class HiddenStatePortLearner:
@@ -49,7 +49,7 @@ class HiddenStatePortLearner:
     Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
     """
 
-    def __init__(self, reward_set=(0.9, 0.5, 0.1), decay=0.0, alpha=1.0):
+    def __init__(self, reward_set=(0.9, 0.5, 0.1), decay=0.0, alpha=1.0, beta=1.0):
         """
         Parameters:
             reward_set (tuple of float): The set of reward probabilities assigned across ports.
@@ -58,10 +58,12 @@ class HiddenStatePortLearner:
             alpha (float): Learning rate for belief updates (0, 1].
                 1.0 = full Bayesian update. <1.0 = blend updated belief with current belief,
                 producing more conservative updates (analogous to alpha in Rescorla-Wagner).
+            beta (float): Softmax inverse temperature for port selection.
         """
         self.reward_set = reward_set
         self.decay = decay
         self.alpha = alpha
+        self.beta = beta
 
         # All possible assignments: each is a dict {1: p, 2: p, 3: p}
         self.states = []
@@ -210,14 +212,13 @@ class HiddenStatePortLearner:
             for i, s in enumerate(self.states)
         ]
 
-    def choice_probabilities(self, available_ports=None, temperature=1.0):
+    def choice_probabilities(self, available_ports=None):
         """
         Softmax choice probabilities over expected values.
 
         Parameters:
             available_ports (list of int or str, optional): Which ports to choose among
                 (1/2/3 or A/B/C). Defaults to all 3.
-            temperature (float): Softmax temperature.
 
         Returns:
             dict of {int: float}: {port: probability}
@@ -230,9 +231,9 @@ class HiddenStatePortLearner:
         # Get expected reward probability for each port
         q_vals = np.array([self.expected_value(p) for p in available_ports])
 
-        # Lower temperature = more likely to choose the highest-value port
-        # Higher temperature = choices are more random
-        q_vals_scaled = q_vals / temperature
+        # Higher beta (inverse temperature) = more likely to choose the highest-value port
+        # Lower beta = choices are more random
+        q_vals_scaled = self.beta * q_vals
 
         # Subtract the max before exp for numerical stability (doesn't change the output)
         q_vals_scaled -= q_vals_scaled.max()
@@ -275,14 +276,14 @@ class HiddenStatePortLearner:
             model.update(port, reward)
         return total
 
-    def choice_nll(self, ports, rewards, temperature=None):
+    def choice_nll(self, ports, rewards):
         """
         Compute the negative log-likelihood of the rat's port CHOICES under
         this model's current parameters.
 
         On each trial the rat chooses between the 2 ports it didn't just visit
         (first trial: all 3 ports available). The choice probability comes from
-        softmax over expected values with the given temperature.
+        softmax over expected values with self.beta (inverse temperature).
 
         This is different from nll(), which scores how well the model predicts
         REWARDS. choice_nll() scores how well the model predicts which PORT
@@ -291,15 +292,12 @@ class HiddenStatePortLearner:
         Parameters:
             ports (list of int or str): Port the rat chose on each trial.
             rewards (list of int or float): Reward received on each trial.
-            temperature (float, optional): Softmax temperature. If None, uses 1.0.
 
         Returns:
             float: Total negative log-likelihood of the choice sequence.
         """
-        if temperature is None:
-            temperature = getattr(self, '_choice_temperature', 1.0)
         model = HiddenStatePortLearner(reward_set=self.reward_set,
-                                       alpha=self.alpha, decay=self.decay)
+                                       alpha=self.alpha, decay=self.decay, beta=self.beta)
         total = 0.0
         prev_port = None
         for port, reward in zip(ports, rewards):
@@ -310,8 +308,7 @@ class HiddenStatePortLearner:
                 available = [p for p in REWARD_PORTS if p != prev_port]
 
             # Softmax probability of the rat's actual choice BEFORE updating
-            probs = model.choice_probabilities(available_ports=available,
-                                               temperature=temperature)
+            probs = model.choice_probabilities(available_ports=available)
             p_choice = probs[resolve_port(port)]
             total -= np.log(max(p_choice, 1e-10))
 
@@ -321,94 +318,96 @@ class HiddenStatePortLearner:
         return total
 
     @classmethod
-    def fit_choices(cls, ports, rewards, reward_set=(0.9, 0.5, 0.1)):
+    def fit_choices(cls, ports, rewards, reward_set=(0.9, 0.5, 0.1), n_starts=8, seed=0):
         """
-        Fit alpha, decay, and temperature to maximize the likelihood of the
+        Fit alpha, decay, and beta (inverse temperature) to maximize the likelihood of the
         rat's port choices (not rewards).
 
-        Uses L-BFGS-B to minimize choice_nll(). Returns a fitted instance with
-        best-fit parameters and ``choice_nll_``, ``choice_bic_``, and
-        ``choice_result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port the rat chose on each trial.
             rewards (list of int or float): Reward received on each trial.
             reward_set (tuple of float): The assumed set of reward probabilities.
                 Defaults to (0.9, 0.5, 0.1).
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             HiddenStatePortLearner: Fitted instance with attributes:
                 - choice_nll_    : choice NLL at optimum
-                - choice_bic_    : BIC (3 params: alpha, decay, temperature)
-                - choice_result_ : raw scipy OptimizeResult
-                - temperature    : best-fit softmax temperature
+                - choice_bic_    : BIC (3 params: alpha, decay, beta)
+                - choice_result_ : raw scipy OptimizeResult for the best starting point
+                - choice_results_: the OptimizeResult from every starting point
         """
         def _obj(params):
-            alpha, decay, temperature = params
-            model = cls(reward_set=reward_set, alpha=alpha, decay=decay)
-            return model.choice_nll(ports, rewards, temperature=temperature)
+            alpha, decay, beta = params
+            return cls(reward_set=reward_set, alpha=alpha, decay=decay,
+                       beta=beta).choice_nll(ports, rewards)
 
-        result = minimize(_obj, x0=[1.0, 0.05, 1.0],
-                          bounds=[(1e-3, 1.0), (0.0, 0.5), (0.01, 10.0)],
-                          method='L-BFGS-B')
+        # alpha and decay are between 0 and 1, and beta is above 0
+        # (alpha starts at 0.9, since a parameter fit as its logit can't start at exactly 1)
+        values, result, results = fit_from_starts(
+            _obj, start_values=[0.9, 0.05, 1.0], kinds=["unit", "unit", "positive"],
+            n_starts=n_starts, seed=seed,
+        )
 
-        fitted = cls(reward_set=reward_set, alpha=result.x[0],
-                     decay=result.x[1])
-        fitted.temperature = result.x[2]
-        fitted._choice_temperature = result.x[2]
+        fitted = cls(reward_set=reward_set, alpha=values[0],
+                     decay=values[1], beta=values[2])
         fitted.choice_nll_ = result.fun
-        n = len(rewards)
-        fitted.choice_bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.choice_bic_ = bic(result.fun, len(values), len(rewards))
         fitted.choice_result_ = result
+        fitted.choice_results_ = results
         return fitted
 
 
     @classmethod
-    def fit_rewards(cls, ports, rewards, reward_set=(0.9, 0.5, 0.1)):
+    def fit_rewards(cls, ports, rewards, reward_set=(0.9, 0.5, 0.1), n_starts=8, seed=0):
         """
         Fit alpha and decay to maximise the likelihood of a reward sequence.
         The reward_set is treated as fixed and known.
 
-        Returns a fitted instance with best-fit parameters and ``reward_nll_``,
-        ``reward_bic_``, and ``reward_result_`` attributes.
+        See fit_from_starts (in rl/fitting.py) for how the fit works.
 
         Parameters:
             ports (list of int or str): Port sequence.
             rewards (list of int or float): Reward sequence.
             reward_set (tuple of float): The assumed set of reward probabilities.
                 Defaults to (0.9, 0.5, 0.1).
+            n_starts (int): How many starting points to fit from (default 8).
+            seed (int): Seed for the random starting points, so fits are reproducible.
 
         Returns:
             HiddenStatePortLearner: Fitted instance with attributes:
                 - reward_nll_    : NLL at optimum
                 - reward_bic_    : BIC (2 params)
-                - reward_result_ : raw scipy OptimizeResult
+                - reward_result_ : raw scipy OptimizeResult for the best starting point
+                - reward_results_: the OptimizeResult from every starting point
         """
         # Objective: construct a fresh model for each candidate parameter set and compute NLL
-        # L-BFGS-B respects the bounds without needing a penalty
         def _obj(params):
             alpha, decay = params
             return cls(reward_set=reward_set,
                        alpha=alpha,
                        decay=decay).reward_nll(ports, rewards)
 
-        # Starting point: alpha=1.0 (full Bayesian update), decay=0.05
-        # Bounds keep alpha in (0, 1] and decay in [0, 0.5]
-        result = minimize(_obj, x0=[1.0, 0.05],
-                          bounds=[(1e-3, 1.0), (0.0, 0.5)],
-                          method='L-BFGS-B')
+        # First starting point: alpha=0.9 (almost a full Bayesian update, since a parameter
+        # fit as its logit can't start at exactly 1), decay=0.05. Both are between 0 and 1
+        values, result, results = fit_from_starts(
+            _obj, start_values=[0.9, 0.05], kinds=["unit", "unit"], n_starts=n_starts, seed=seed,
+        )
 
         # Fitted = model with the best fit alpha and decay
-        fitted = cls(reward_set=reward_set, alpha=result.x[0], decay=result.x[1])
+        fitted = cls(reward_set=reward_set, alpha=values[0], decay=values[1])
         fitted.reward_nll_ = result.fun
         # Compute Bayesian Information Criterion (BIC) as a metric for how good this model is
         # BIC = k*ln(n) + 2*NLL, where k = number of free parameters and n = number of trials
         # The k*ln(n) term penalises model complexity, so models with different
         # numbers of parameters can be compared on the same scale (lower is better)
         # This model has k=2 (alpha, decay)
-        n = len(rewards)
-        fitted.reward_bic_ = len(result.x) * np.log(n) + 2 * result.fun
+        fitted.reward_bic_ = bic(result.fun, len(values), len(rewards))
         fitted.reward_result_ = result
+        fitted.reward_results_ = results
         return fitted
 
     def get_history(self):

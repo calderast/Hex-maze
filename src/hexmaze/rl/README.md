@@ -12,13 +12,13 @@ hexmaze/rl/
 │   ├── dual_learner.py     # KrauszDualLearner
 │   ├── swr_learner.py      # SWRDualLearner
 │   ├── update_rules.py     # TDLambdaRule, ModelBasedRule, SWRRule
-│   ├── retrieval_rules.py  # LocalRetrieval, BestSweptRetrieval, ...
-│   └── fitting.py          # fit_many
-└── port_learning/       # outcome-based, learns values over ports
-    ├── rescorla_wagner.py       # RescorlaWagner
-    ├── bayesian.py              # BayesianPortLearner
-    ├── hidden_state.py          # HiddenStatePortLearner
-    └── bayesian_hidden_state.py # BayesianHiddenStatePortLearner (in progress)
+│   └── retrieval_rules.py  # LocalRetrieval, BestSweptRetrieval, ...
+├── port_learning/       # outcome-based, learns values over ports
+│   ├── rescorla_wagner.py       # RescorlaWagner
+│   ├── bayesian.py              # BayesianPortLearner
+│   ├── hidden_state.py          # HiddenStatePortLearner
+│   └── bayesian_hidden_state.py # BayesianHiddenStatePortLearner (in progress)
+└── fitting.py           # fit_from_starts (how every learner fits its parameters), fit_many
 ```
 
 ## Port value learning
@@ -84,7 +84,7 @@ goal-conditioned (one value per hex, with a separate table per start port). Use 
 | Method | Description |
 | --- | --- |
 | `learn(trajectories, rewards)` | Learn from the rat's trajectories. `record="trial"`/`"step"` returns value snapshots |
-| `fit_choices(maze, trajectories, rewards)` | (classmethod) Fit parameters to the rat's choices. Returns a fresh learner with `.choice_nll_`, `.choice_bic_` |
+| `fit_choices(maze, trajectories, rewards)` | (classmethod) Fit parameters to the rat's choices (unbounded, from multiple starting points). Returns a fresh learner with `.choice_nll_`, `.choice_bic_` |
 | `choice_nll(trajectories, rewards)` | NLL of the rat's choices. `record=True` also returns per-choice probabilities |
 | `value_timeseries(trajectories, rewards, sampled_hexes)` | Value of where the rat is (and what it's representing) at each sample |
 | `animate_learning(trajectories, rewards)` | Animate learning one update at a time (`save_to=` for .mp4/.gif) |

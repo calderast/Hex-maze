@@ -47,14 +47,45 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import animation
 from matplotlib.colors import LinearSegmentedColormap
-from scipy.optimize import minimize
 
 from ...utils import create_empty_hex_maze, maze_to_graph
 from ...core import get_safe_hex_distance, get_pairwise_distance_matrix, get_critical_choice_points
 from ...utils import REWARD_PORTS, resolve_port
 from ...plotting import plot_hex_maze
+from ..fitting import bic, fit_from_starts
 from .retrieval_rules import LocalRetrieval
-from .update_rules import TDLambdaRule, ModelBasedRule, SWRRule
+
+
+class _ChoiceFit:
+    """Everything fit_choices needs to score a set of parameters, kept together so each
+    starting point can be fit in its own process (see fit_from_starts)."""
+
+    def __init__(self, cls, maze, reward_probs, rules, fixed, free_names, kwargs, data, score_at):
+        self.cls = cls
+        self.maze = maze
+        self.reward_probs = reward_probs
+        self.rules = rules
+        self.fixed = fixed
+        self.free_names = free_names
+        self.kwargs = kwargs
+        self.data = data
+        self.score_at = score_at
+
+    def build(self, free_values):
+        """Build a fresh learner with these values for the free parameters."""
+        params = dict(self.fixed)
+        params.update(zip(self.free_names, free_values))
+        if self.rules is None:
+            # The class builds its own fresh rules on every call
+            return self.cls(self.maze, reward_probs=self.reward_probs, **params, **self.kwargs)
+        return self.cls(
+            self.maze, rules=copy.deepcopy(self.rules), reward_probs=self.reward_probs,
+            **params, **self.kwargs,
+        )
+
+    def nll(self, free_values):
+        """Get the choice NLL with these values for the free parameters."""
+        return self.build(free_values).choice_nll(**self.data, score_at=self.score_at)
 
 
 # Map each outline color name to a colormap used to shade a changed hex's outline by
@@ -116,24 +147,17 @@ class BaseHexLearner:
         )
     """
 
-    # Starting value and (lower, upper) bounds for each parameter fit_choices can fit
-    _FIT_PARAM_DEFAULTS = {
-        # Every learner
-        "gamma": (0.9, (0.0, 0.999)), "temperature": (0.5, (0.01, 10.0)),
-        # TDLambdaRule
-        "alpha": (0.3, (1e-3, 1.0)), "lam": (0.3, (0.0, 1.0)),
-        # ModelBasedRule
-        "gamma_mb": (0.9, (0.0, 0.999)), "a_T": (0.1, (1e-3, 1.0)), "a_mb": (0.1, (1e-3, 1.0)),
-        # SWRRule
-        "a_swr": (0.1, (1e-3, 1.0)),
-    }
+    # The parameters every learner has, no matter which update rules it uses:
+    # {name: (first starting value for fit_choices, kind)}. Each update rule adds its
+    # own (see UpdateRule.FIT_PARAMS)
+    FIT_PARAMS = {"gamma": (0.9, "unit"), "beta": (2.0, "positive")}
 
     def __init__(
         self,
         maze,
         rules=None,
         gamma=0.95,
-        temperature=1.0,
+        beta=1.0,
         directional_states=True,
         goal_conditioned_states=False,
         priors=None,
@@ -155,8 +179,9 @@ class BaseHexLearner:
                 order.
             gamma (float): Discount per hex. Used for the priors, and by any rule that
                 discounts (like TDLambdaRule).
-            temperature (float): Softmax temperature for choices (this is used for every
-                learner, no matter which update rules it has).
+            beta (float): Softmax inverse temperature for choices (this is used for every
+                learner, no matter which update rules it has). Higher beta means the agent
+                more reliably picks the higher-valued move, and beta=0 means random choices.
             directional_states (bool): If True, each state is a direction of travel through a
                 hex, (prev_hex, cur_hex). If False, each state is a hex.
             goal_conditioned_states (bool): If True, keep a separate value table for each start
@@ -193,7 +218,7 @@ class BaseHexLearner:
         # A learner with no rules just holds its priors and never updates them
         self.rules = [] if rules is None else rules
         self.gamma = gamma
-        self.temperature = temperature
+        self.beta = beta
         self.directional_states = directional_states
         self.goal_conditioned_states = goal_conditioned_states
         self.priors = priors
@@ -1083,38 +1108,26 @@ class BaseHexLearner:
         return (total, choices) if record else total
 
     @classmethod
-    def fit_choices(cls, maze, trajectories, rewards, reward_probs=None,
-                     alpha=None, gamma=None, lam=None, temperature=None,
-                     gamma_mb=None, a_T=None, a_mb=None, a_swr=None, replayed_hexes=None,
-                     swept_hexes=None,
-                     mazes=None, trials_per_block=None,
-                     rules=None, score_at="steps", **kwargs):
+    def fit_choices(cls, maze, trajectories, rewards, reward_probs=None, replayed_hexes=None,
+                    swept_hexes=None, mazes=None, trials_per_block=None, rules=None,
+                    score_at="steps", n_starts=8, seed=0, max_workers=None, **kwargs):
         """
         Fit the parameters that make the rat's hex-to-hex choices most likely.
 
-        Which parameters are actually fit depends on which rule types are in
-        `rules`: alpha/lam only matter (and are only fit) if a TDLambdaRule
-        is present; gamma_mb/a_T/a_mb only if a ModelBasedRule is present;
-        a_swr only if an SWRRule is present. gamma and temperature are always
-        fit, since gamma also sets how prior values decay with distance and
-        temperature sets how values are turned into choices (regardless of which
-        update rules are active). Parameters that don't affect the likelihood
-        (e.g. gamma_mb for a TD-only agent) are left out, so they don't slow down
-        the optimizer or count against the model in BIC.
+        We fit from n_starts starting points in parallel and keep the best fit, with each
+        parameter fit as an unbounded number (see fit_from_starts). Warnings from the data
+        are hidden while fitting, and shown once when we score the best fit.
+
+        Every learner fits gamma and beta (inverse temperature), plus the parameters its
+        update rules read (each rule lists them in its FIT_PARAMS, e.g. alpha and lam for
+        a TDLambdaRule). To fix a parameter instead of fitting it, pass its value (e.g.
+        lam=0.0 for TD(0)).
 
         Parameters:
             maze (see __init__.):
             trajectories (list of list of int):
             rewards (list of float):
             reward_probs (see __init__.):
-            gamma, temperature (float or None): Every learner's parameters (see above).
-                A value fixes the parameter at that value; None (default) fits it.
-            alpha, lam (float or None): TDLambdaRule's parameters. Same fix-or-fit
-                convention, fit only if a TDLambdaRule is present.
-            gamma_mb, a_T, a_mb (float or None): ModelBasedRule's parameters. Same
-                fix-or-fit convention.
-            a_swr (float or None): SWRRule's learning rate for replayed hexes. Same
-                fix-or-fit convention.
             replayed_hexes (list[list[int]], optional): The hexes replayed on each
                 trial, passed to choice_nll. Used by SWRRule
             swept_hexes (list[list[list[list[int]]]], optional): The sweeps the rat made
@@ -1123,74 +1136,66 @@ class BaseHexLearner:
                 barrier changes (see learn)
             trials_per_block (list of int, optional): How many trials are run on each maze
             rules (list of UpdateRule or None): The rules to fit with. None (default) uses
-                whichever rules the class itself builds, so HexMazeTDLearner fits TD
-                parameters and KrauszDualLearner fits the model-based ones too;
-                BaseHexLearner requires them to be passed. If given, a fresh deep copy is
-                built for every candidate parameter set evaluated during optimization (and
-                for the final returned instance), so no rule's internal state (e.g.
-                ModelBasedRule's persistent T map) leaks between evaluations.
+                the class's own rules (BaseHexLearner needs them passed). Each set of
+                parameters we try gets a fresh copy, so nothing a rule learns (e.g.
+                ModelBasedRule's T map) carries over between them.
             score_at ({"steps", "junctions", "choice_points"}): Which of the rat's moves
                 are scored, passed to choice_nll.
-            **kwargs: Extra constructor flags held fixed during fitting (e.g. directional_states,
-                goal_conditioned_states, priors, no_backtrack).
+            n_starts (int): How many starting points to fit from
+            seed (int): Seed for the random starting points, so fits are reproducible
+            max_workers (int or None): How many starting points to fit at once. None
+                (default) uses one per core, and 1 fits them one at a time
+            **kwargs: Values for parameters to fix instead of fit (e.g. lam=0.0, and None
+                means fit it), and any other constructor arguments (e.g. directional_states,
+                priors, retrieval).
 
         Returns:
-            BaseHexLearner subclass instance: Fresh instance built with the best-fit (and
-                any fixed) parameters (and the fixed **kwargs), carrying:
-                - choice_nll_ : choice NLL at optimum
-                - choice_bic_ : BIC, counting only the *fitted* params and the choices
-                  actually scored
-                - choices_scored_ : how many of the rat's choices were scored (divide
-                  choice_nll_ by this to get the NLL per choice)
-                - choice_result_ : raw scipy OptimizeResult, or None if every parameter
-                  was fixed
-                - score_at_ : the score_at value used to fit
+            BaseHexLearner subclass instance: A new, untrained learner with the best-fit
+                (and any fixed) parameters, with:
+                - choice_nll_ : choice NLL at the best fit
+                - choice_bic_ : BIC, counting only the fitted parameters and scored choices
+                - choices_scored_ : how many of the rat's choices were scored
+                - choice_result_ : the scipy OptimizeResult for the best starting point
+                  (None if every parameter was fixed)
+                - choice_results_ : the OptimizeResult for every starting point (to check
+                  whether different starting points found different fits)
+                - score_at_ : the score_at used to fit
         """
-        # Learner classes like HexMazeTDLearner and KrauszDualLearner set their own
-        # rules, so build one and get the rules from it. BaseHexLearner needs the
-        # rules passed in.
-        resolved_rules = rules if rules is not None else cls(maze, reward_probs=reward_probs, **kwargs).rules
-        has_td = any(isinstance(rule, TDLambdaRule) for rule in resolved_rules)
-        has_mb = any(isinstance(rule, ModelBasedRule) for rule in resolved_rules)
-        has_swr = any(isinstance(rule, SWRRule) for rule in resolved_rules)
+        # Learner classes like KrauszDualLearner set their own rules, so build one to get
+        # them (BaseHexLearner needs the rules passed in)
+        given = {name: value for name, value in kwargs.items() if value is not None}
+        learner_rules = rules if rules is not None else cls(maze, reward_probs=reward_probs, **given).rules
 
-        candidates = {"gamma": gamma, "temperature": temperature}
-        if has_td:
-            candidates["alpha"] = alpha
-            candidates["lam"] = lam
-        if has_mb:
-            candidates["gamma_mb"] = gamma_mb
-            candidates["a_T"] = a_T
-            candidates["a_mb"] = a_mb
-        if has_swr:
-            candidates["a_swr"] = a_swr
+        # Get the parameters this learner can fit: every learner's, plus each rule's own
+        fit_params = dict(cls.FIT_PARAMS)
+        for rule in learner_rules:
+            fit_params.update(rule.FIT_PARAMS)
 
-        fixed = {name: value for name, value in candidates.items() if value is not None}
-        free_names = [name for name, value in candidates.items() if value is None]
+        # A parameter passed with a value is fixed, and the rest are fit. Anything else
+        # in kwargs is a constructor argument
+        fixed = {name: value for name, value in given.items() if name in fit_params}
+        free_names = [name for name in fit_params if name not in fixed]
+        constructor_kwargs = {name: value for name, value in kwargs.items() if name not in fit_params}
 
-        def _build(free_values):
-            params = dict(fixed)
-            params.update(zip(free_names, free_values))
-            if rules is None:
-                # The class builds its own fresh rules on every call
-                return cls(maze, reward_probs=reward_probs, **params, **kwargs)
-            return cls(
-                maze, rules=copy.deepcopy(rules), reward_probs=reward_probs, **params, **kwargs
-            )
+        fit = _ChoiceFit(
+            cls, maze, reward_probs, rules, fixed, free_names, constructor_kwargs,
+            data=dict(
+                trajectories=trajectories, rewards=rewards, replayed_hexes=replayed_hexes,
+                swept_hexes=swept_hexes, mazes=mazes, trials_per_block=trials_per_block,
+            ),
+            score_at=score_at,
+        )
 
         if free_names:
-            x0 = [cls._FIT_PARAM_DEFAULTS[name][0] for name in free_names]
-            bounds = [cls._FIT_PARAM_DEFAULTS[name][1] for name in free_names]
-            result = minimize(
-                lambda x: _build(x).choice_nll(
-                    trajectories, rewards, replayed_hexes, swept_hexes, mazes, trials_per_block,
-                    score_at=score_at,
-                ),
-                x0=x0, bounds=bounds, method='L-BFGS-B',
+            final_values, result, results = fit_from_starts(
+                fit.nll,
+                start_values=[fit_params[name][0] for name in free_names],
+                kinds=[fit_params[name][1] for name in free_names],
+                n_starts=n_starts, seed=seed, max_workers=max_workers,
             )
-            final_values = result.x
         else:
-            # Nothing to fit (every parameter was pinned)
+            # Nothing to fit (every parameter was fixed)
+            results = []
             result = None
             final_values = []
 
@@ -1199,18 +1204,14 @@ class BaseHexLearner:
         # choice points scores way fewer choices than there are hex-to-hex steps).
         # Then throw that learner away and return a fresh, untrained learner with the
         # same parameters.
-        nll, choices = _build(final_values).choice_nll(
-            trajectories, rewards, replayed_hexes, swept_hexes, mazes, trials_per_block,
-            record=True, score_at=score_at,
-        )
-        fitted = _build(final_values)
+        nll, choices = fit.build(final_values).choice_nll(**fit.data, record=True, score_at=score_at)
+        fitted = fit.build(final_values)
         fitted.choice_nll_ = nll
         n_choices = len(choices)
-        fitted.choice_bic_ = (
-            len(free_names) * np.log(n_choices) + 2 * nll if n_choices > 0 else float("nan")
-        )
+        fitted.choice_bic_ = bic(nll, len(free_names), n_choices)
         fitted.choices_scored_ = n_choices
         fitted.choice_result_ = result
+        fitted.choice_results_ = results
         fitted.score_at_ = score_at
         return fitted
 
@@ -1321,9 +1322,9 @@ class BaseHexLearner:
         choice the model makes or scores goes through here: the simulated agent,
         the choice likelihood, and the junction choices shown in animations.
 
-        Temperature sets how strongly the agent prefers the better option: near
-        0 it almost always picks the highest-valued neighbor, and for large
-        values its choices are closer to random.
+        The inverse temperature beta sets how strongly the agent prefers the better
+        option: for large beta it almost always picks the highest-valued neighbor, and
+        near 0 its choices are closer to random.
 
         Parameters:
             hex (int): The hex the agent is choosing from
@@ -1337,10 +1338,10 @@ class BaseHexLearner:
             np.ndarray: One probability per neighbor, summing to 1
         """
         values = self.retrieval.action_values(self, hex, neighbors, context, sweeps)
-        scaled = values / self.temperature
+        scaled = self.beta * values
 
-        # Subtract the max value to keep exp() from overflowing when temperature
-        # is small (this doesn't change the probabilities)
+        # Subtract the max value to keep exp() from overflowing when beta (inverse
+        # temperature) is big (this doesn't change the probabilities)
         scaled -= scaled.max()
 
         exponentiated = np.exp(scaled)

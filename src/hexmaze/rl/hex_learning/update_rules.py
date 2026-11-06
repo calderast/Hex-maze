@@ -60,7 +60,14 @@ class UpdateRule:
     so combining value update mechanisms (e.g. TD learning plus replay) is
     as easy as passing in two rules. Every hook here does nothing by default,
     so a rule only needs to implement the ones it cares about.
+
+    Each rule lists the parameters it reads from the learner in FIT_PARAMS, so
+    fit_choices knows what to fit: {name: (first starting value, kind)}, where kind
+    is "unit" for a parameter between 0 and 1, or "positive" for one above 0 (see
+    fit_from_starts). A new rule just has to list its own parameters to be fittable.
     """
+
+    FIT_PARAMS = {}
 
     def on_trial_start(self, learner, context):
         """
@@ -139,6 +146,7 @@ class TDLambdaRule(UpdateRule):
 
     DEFAULT_ALPHA = 0.3
     DEFAULT_LAM = 0.0
+    FIT_PARAMS = {"alpha": (0.3, "unit"), "lam": (0.3, "unit")}
 
     def _alpha(self, learner):
         """Get the learning rate from the learner (or the default)."""
@@ -332,6 +340,7 @@ class ModelBasedRule(UpdateRule):
     DEFAULT_GAMMA_MB = 0.9
     DEFAULT_A_T = 0.1
     DEFAULT_A_MB = 0.1
+    FIT_PARAMS = {"gamma_mb": (0.9, "unit"), "a_T": (0.1, "unit"), "a_mb": (0.1, "unit")}
 
     def __init__(self):
         self.T = {}   # {port: {state: T(port, state)}}, persists across trials
@@ -513,6 +522,7 @@ class SWRRule(UpdateRule):
     """
 
     DEFAULT_A_SWR = 0.1
+    FIT_PARAMS = {"a_swr": (0.1, "unit")}
 
     def _a_swr(self, learner):
         """Get the learning rate for replayed hexes from the learner (or the default)."""
