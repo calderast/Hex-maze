@@ -77,6 +77,10 @@ T(port, state) <- (1 - a_T) * T(port, state) + a_T * m(state)       # at the por
 V(state) <- V(state) + a_mb * T(port, state) * (reward - V(state))  # at the port
 ```
 
+For a goal-conditioned learner, set `mb_all_start_ports=True` to also update the value table for the other start port
+that could have led to the reached port (`T` is already shared across start ports, since it's indexed by the port
+reached).
+
 **`SWRRule`**: at the port, each hex replayed during that trial's SWRs moves toward the reward.
 Pass the replayed hexes for each trial as `replayed_hexes`.
 
@@ -85,6 +89,9 @@ V(hex) <- V(hex) + a_swr * (reward - V(hex))
 ```
 
 For a directional learner, a replayed hex updates the directions of travel through it that head toward the port.
+For a goal-conditioned learner, set `swr_all_start_ports=True` to also update the value table for the other start
+port that could have led to the reached port (a model-based update of paths to the port, not just the trip the rat
+took).
 
 ## Retrieval rules
 
@@ -113,7 +120,8 @@ Use exactly one of these:
 
 - **`priors`**: starting values. `None` (all 0, default), `"uniform"` (0.5 at ports, decaying by `gamma` per hex
   of empty-maze distance), `("flat", value)` (every hex starts at `value`, e.g. `("flat", 0.2)` matches Tim's paper),
-  or `[pA, pB, pC]` (like `"uniform"` but with your own port values).
+  or `[pA, pB, pC]` (like `"uniform"` but with your own port values). With directional states, a move only gets the
+  value of the ports it heads toward.
 - **`beta`**: softmax inverse temperature for choices. Higher beta means the agent more reliably picks the
   higher-valued move (beta=0 is random).
 - **`reward_probs`**: `[pA, pB, pC]`, only used to sample rewards in `simulate`.

@@ -188,7 +188,7 @@ class BaseHexLearner:
                 port (3 value tables). If False, use one shared value table. Use exactly one of
                 directional_states and goal_conditioned_states.
             priors (None, "uniform", ("flat", value), or list of 3 floats): What values
-                every hex starts at (see distance_priors/build_prior_table).
+                every state starts at (see distance_priors/build_prior_table).
             no_backtrack (bool): If True, the simulated agent avoids revisiting hexes
                 within a trial when it can (see choose_action/simulate). This only
                 applies to simulated behavior, so scoring and the update rules still
@@ -276,7 +276,7 @@ class BaseHexLearner:
             self._choice_points[start_port] = get_critical_choice_points(self.graph, start_port)
         return self._choice_points[start_port]
 
-    def all_states(self):
+    def all_states(self, graph=None):
         """
         Get every state this learner has a value for.
 
@@ -284,18 +284,23 @@ class BaseHexLearner:
         For a directional learner (states are directed edges), this is each way
         of arriving at a hex, plus the starting state for each hex, (None, hex).
 
+        Args:
+            graph (nx.Graph, optional): The maze to get states for (defaults to the
+                learner's current maze)
+
         Returns:
             list: Every state in this learner's representation
         """
+        graph = self.graph if graph is None else graph
         if not self.directional_states:
-            return list(self.graph.nodes())
+            return list(graph.nodes())
 
         # The starting state of a trip (before the rat has moved)
-        states = [(None, hex) for hex in self.graph.nodes()]
+        states = [(None, hex) for hex in graph.nodes()]
 
         # Every way of arriving at each hex from one of its neighbors
         states += [
-            (prev, cur) for cur in self.graph.nodes() for prev in self.graph.neighbors(cur)
+            (prev, cur) for cur in graph.nodes() for prev in graph.neighbors(cur)
         ]
         return states
 
@@ -310,7 +315,7 @@ class BaseHexLearner:
         # Initialize every state to its prior (0 if no priors were given)
         for context in self.contexts:
             for state in self.all_states():
-                self.V[context][state] = self.prior_for_hex(context, self.hex_of_state(state))
+                self.V[context][state] = self.prior_for_state(context, state)
         # Only the session's very first trial may lack a real start port.
         self._is_first_trial = True
 
@@ -340,7 +345,7 @@ class BaseHexLearner:
         elif isinstance(priors, tuple) and len(priors) == 2 and priors[0] == "flat":
             value = priors[1]
             self.prior_table = {
-                context: {hex: value for hex in create_empty_hex_maze().nodes()}
+                context: {state: value for state in self.all_states(create_empty_hex_maze())}
                 for context in self.contexts
             }
 
@@ -360,49 +365,58 @@ class BaseHexLearner:
         """
         Get priors for each context that decay with distance from the ports.
 
-        For each context, value(hex) = max over that context's goal ports of
-        port_value[goal] * gamma^(distance from hex to goal), using the empty maze
-        for distances. A context's goals are all ports except its key (the start
+        For each context, value(state) = max over that context's goal ports of
+        port_value[goal] * gamma^(distance from the state's hex to goal), using the empty
+        maze for distances. A context's goals are all ports except its key (the start
         port); a non-goal-conditioned (None) context uses all three ports as goals.
+
+        For a directional state (prev_hex, cur_hex), only the goals this move gets closer
+        to count (so heading away from a port doesn't get that port's value). A starting
+        state (None, hex) counts every goal.
         """
         # Use distances in the empty maze (no barriers), so these priors reflect
         # what the rat knows about the task in general (e.g. reward ports are at
         # the 3 corners) before it learns which paths are open in this maze
         empty_maze = create_empty_hex_maze()
         port_value = {i + 1: port_values[i] for i in range(3)}
+        distance = {
+            hex: {port: get_safe_hex_distance(empty_maze, start_hex=hex, target_hex=port) for port in REWARD_PORTS}
+            for hex in empty_maze.nodes()
+        }
 
         table = {}
         for context in self.contexts:
-            # Context is the start port for the trial, because the rat cannot get 
-            # reward at the port it just visited, so the other two ports are the 
-            # only valid goals. 
-            # A learner keeping a single shared table (context=None) counts all 
+            # Context is the start port for the trial, because the rat cannot get
+            # reward at the port it just visited, so the other two ports are the
+            # only valid goals.
+            # A learner keeping a single shared table (context=None) counts all
             # three ports as potential goals.
             goals = [port for port in REWARD_PORTS if port != context]
             table[context] = {}
 
-            # Every hex in the empty maze gets a prior, so if a barrier change
-            # opens up a new hex later, that hex has a prior too
-            for hex in empty_maze.nodes():
-                # The prior for the port hex is the expected p(reward) at that port
+            # Every state in the empty maze gets a prior, so if a barrier change
+            # opens up a new hex later, its states have a prior too
+            for state in self.all_states(empty_maze):
+                prev, hex = state if self.directional_states else (None, state)
+                # The prior for a port hex is the expected p(reward) at that port
                 if hex in goals:
-                    table[context][hex] = port_value[hex]
-                else:
-                    # Every other hex gets the value of the best port it can reach,
-                    # discounted by how many hexes away that port is:
-                    #     prior(hex) = max over goals of  p(goal) * gamma ^ distance(hex, goal)
-                    table[context][hex] = max(
-                        (port_value[goal] * (self.gamma ** get_safe_hex_distance(empty_maze, start_hex=hex, target_hex=goal))
-                         for goal in goals),
-                        default=0.0,
-                    )
+                    table[context][state] = port_value[hex]
+                    continue
+                # Only count the goals this move gets closer to (every goal for a starting state)
+                state_goals = [goal for goal in goals if prev is None or distance[hex][goal] < distance[prev][goal]]
+                # Every other state gets the value of the best port it's heading to,
+                # discounted by how many hexes away that port is:
+                #     prior(state) = max over goals of  p(goal) * gamma ^ distance(hex, goal)
+                table[context][state] = max(
+                    port_value[goal] * self.gamma ** distance[hex][goal] for goal in state_goals
+                )
         return table
 
-    def prior_for_hex(self, context, hex):
-        """Get the prior value of a hex in a context (0 if there are no priors)."""
+    def prior_for_state(self, context, state):
+        """Get the prior value of a state in a context (0 if there are no priors)."""
         if self.prior_table is None:
             return 0.0
-        return self.prior_table[context].get(hex, 0.0)
+        return self.prior_table[context][state]
 
     def set_graph(self, new_maze):
         """
@@ -434,9 +448,7 @@ class BaseHexLearner:
                     del self.V[context][state]
             for state in valid:
                 if state not in self.V[context]:
-                    self.V[context][state] = self.prior_for_hex(
-                        context, self.hex_of_state(state)
-                    )
+                    self.V[context][state] = self.prior_for_state(context, state)
 
         # Let each rule drop whatever it learned about those hexes too
         for rule in self.rules:
@@ -1450,7 +1462,7 @@ class BaseHexLearner:
             hex: (
                 self.V[context][(entry_directions[hex], hex)]
                 if hex in entry_directions
-                else self.prior_for_hex(context, hex)
+                else self.prior_for_state(context, self.state_key(None, hex))
             )
             for hex in self.graph.nodes()
         }
