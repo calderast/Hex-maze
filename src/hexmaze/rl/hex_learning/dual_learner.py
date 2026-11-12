@@ -40,6 +40,11 @@ class KrauszDualLearner(BaseHexLearner):
             Defaults to 0.1
         a_mb (float): Model-based value learning rate. 0.0 turns off the
             model-based update, leaving a pure TD learner. Defaults to 0.1
+        mb_all_start_ports (bool): With goal-conditioned states, if True, the
+            model-based update also goes in the value table for the other start
+            port that could have led to the port the rat reached (not just the
+            table for the port the trial started from). Does nothing with one
+            shared value table. Defaults to False
 
     All other arguments are passed through to BaseHexLearner, including the
     simulation options `reward_probs` and `no_backtrack`.
@@ -54,6 +59,7 @@ class KrauszDualLearner(BaseHexLearner):
         gamma_mb=0.9,
         a_T=0.1,
         a_mb=0.1,
+        mb_all_start_ports=False,
         **kwargs,
     ):
         super().__init__(
@@ -65,5 +71,6 @@ class KrauszDualLearner(BaseHexLearner):
             gamma_mb=gamma_mb,
             a_T=a_T,
             a_mb=a_mb,
+            mb_all_start_ports=mb_all_start_ports,
             **kwargs,
         )

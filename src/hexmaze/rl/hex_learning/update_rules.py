@@ -335,6 +335,12 @@ class ModelBasedRule(UpdateRule):
 
     `m` (the current trial's memory trace) resets to empty every trial.
     `T` (indexed by destination port, aka the trial's path[-1]) persists across trials.
+
+    For a goal-conditioned learner, the value update goes in the value table for the
+    port the trial started from. With `learner.mb_all_start_ports=True`, it also goes
+    in the table for the other start port that could have led to this port. (This only
+    changes which value tables get the update, not T. T is indexed by end port, so it
+    already links states from trips to this port starting at both possible start ports.)
     """
 
     DEFAULT_GAMMA_MB = 0.9
@@ -362,6 +368,12 @@ class ModelBasedRule(UpdateRule):
     def _a_mb(self, learner):
         """Get the model-based value learning rate from the learner (or the default)."""
         return getattr(learner, "a_mb", self.DEFAULT_A_MB)
+
+    def _contexts_to_update(self, learner, context, port):
+        """Get the value tables to update: this trial's, or every table that has this port as a goal."""
+        if getattr(learner, "mb_all_start_ports", False):
+            return [table for table in learner.contexts if table != port]
+        return [context]
 
     def on_trial_start(self, learner, context):
         """Reset the memory trace at the start of each trial, so T only learns
@@ -431,7 +443,8 @@ class ModelBasedRule(UpdateRule):
         """
         # The port the rat reached decides which map T to update.
         # Values are written to `context`, the value table for the port the
-        # trial started from (for a goal-conditioned learner).
+        # trial started from (for a goal-conditioned learner), and with
+        # mb_all_start_ports, to the other start port's table too.
         port = path[-1]
         T_for_port = self.T.setdefault(port, {})
         a_T = self._a_t(learner)
@@ -448,20 +461,23 @@ class ModelBasedRule(UpdateRule):
             T_for_port[state] = (1 - a_T) * T_for_port.get(state, 0.0) + a_T * memory_trace
 
         # Move every state that has recently led to this port toward the reward
-        # just received, in proportion to how strongly T links it to the port:
+        # just received, in proportion to how strongly T links it to the port (in
+        # every value table being updated):
         #     V(state) <- V(state) + a_mb * T(port, state) * (reward - V(state))
+        # Only changes in this trial's table are shown (in the animation and text)
         a_mb = self._a_mb(learner)
         changed = {}
         rows = []
-        for state, T_for_state in T_for_port.items():
-            if T_for_state == 0.0:
-                continue
-            old_value = learner.V[context][state]
-            new_value = old_value + a_mb * T_for_state * (reward - old_value)
-            learner.V[context][state] = new_value
-            if abs(new_value - old_value) >= 0.00005:
-                changed[state] = (old_value, new_value, T_for_state)
-                rows.append((T_for_state, state, old_value, new_value))
+        for table in self._contexts_to_update(learner, context, port):
+            for state, T_for_state in T_for_port.items():
+                if T_for_state == 0.0:
+                    continue
+                old_value = learner.V[table][state]
+                new_value = old_value + a_mb * T_for_state * (reward - old_value)
+                learner.V[table][state] = new_value
+                if table == context and abs(new_value - old_value) >= 0.00005:
+                    changed[state] = (old_value, new_value, T_for_state)
+                    rows.append((T_for_state, state, old_value, new_value))
 
         # Sort by T (highest first), so the text shows the states most strongly
         # linked to this port
@@ -511,6 +527,10 @@ class SWRRule(UpdateRule):
     For a directional learner, a replayed hex only updates the directions of travel
     that head toward the port the trial ended at (see _states_for_hex).
 
+    For a goal-conditioned learner, the update goes in the value table for the port
+    the trial started from. With `learner.swr_all_start_ports=True`, it also goes in
+    the table for the other start port that could have led to this port.
+
     TODO:
     - Yang-Sun / Tim's DA ramp data seems to imply that SWRs bump up hex values
         both on reward and omission (DA ramps decay on omission, but decay less with SWR).
@@ -527,6 +547,12 @@ class SWRRule(UpdateRule):
     def _a_swr(self, learner):
         """Get the learning rate for replayed hexes from the learner (or the default)."""
         return getattr(learner, "a_swr", self.DEFAULT_A_SWR)
+
+    def _contexts_to_update(self, learner, context, port):
+        """Get the value tables to update: this trial's, or every table that has this port as a goal."""
+        if getattr(learner, "swr_all_start_ports", False):
+            return [table for table in learner.contexts if table != port]
+        return [context]
 
     def _states_for_hex(self, learner, hex, port):
         """
@@ -579,7 +605,8 @@ class SWRRule(UpdateRule):
                 trial started from)
 
         Returns:
-            list[UpdateEvent]: One event with every state whose value changed
+            list[UpdateEvent]: One event with every state whose value changed in
+                this trial's value table
         """
         a_swr = self._a_swr(learner)
         port = path[-1]
@@ -592,19 +619,22 @@ class SWRRule(UpdateRule):
             for state in self._states_for_hex(learner, hex, port)
         ))
 
-        # Move each replayed hex a fraction a_swr of the way to the reward:
+        # Move each replayed hex a fraction a_swr of the way to the reward (in
+        # every value table being updated):
         #     V(state) <- V(state) + a_swr * (reward - V(state))
+        # Only changes in this trial's table are shown (in the animation and text)
         changed = {}
         rows = []
-        for state in states:
-            old_value = learner.V[context][state]
-            new_value = old_value + a_swr * (reward - old_value)
-            learner.V[context][state] = new_value
-            # Every replayed hex is updated by the same fraction, so each one
-            # is outlined at full weight in the animation
-            if abs(new_value - old_value) >= 0.00005:
-                changed[state] = (old_value, new_value, 1.0)
-                rows.append((state, old_value, new_value))
+        for table in self._contexts_to_update(learner, context, port):
+            for state in states:
+                old_value = learner.V[table][state]
+                new_value = old_value + a_swr * (reward - old_value)
+                learner.V[table][state] = new_value
+                # Every replayed hex is updated by the same fraction, so each one
+                # is outlined at full weight in the animation
+                if table == context and abs(new_value - old_value) >= 0.00005:
+                    changed[state] = (old_value, new_value, 1.0)
+                    rows.append((state, old_value, new_value))
 
         # This is a function so the text is only built if it actually gets displayed
         def describe(port=port, reward=reward, rows=rows, n=len(states)):

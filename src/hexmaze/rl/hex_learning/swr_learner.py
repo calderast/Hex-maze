@@ -35,6 +35,11 @@ class SWRDualLearner(BaseHexLearner):
             Defaults to 0.0, which is TD(0)
         a_swr (float): Learning rate for replayed hexes. 0.0 means replay has
             no effect on value, leaving a pure TD learner. Defaults to 0.1
+        swr_all_start_ports (bool): With goal-conditioned states, if True, replay
+            also updates the value table for the other start port that could have
+            led to the port the rat reached (not just the table for the port the
+            trial started from). Does nothing with one shared value table.
+            Defaults to False
 
     All other arguments are passed through to BaseHexLearner, including the
     simulation options `reward_probs` and `no_backtrack`.
@@ -50,6 +55,7 @@ class SWRDualLearner(BaseHexLearner):
         gamma=0.95,
         lam=0.0,
         a_swr=0.1,
+        swr_all_start_ports=False,
         **kwargs,
     ):
         super().__init__(
@@ -59,5 +65,6 @@ class SWRDualLearner(BaseHexLearner):
             alpha=alpha,
             lam=lam,
             a_swr=a_swr,
+            swr_all_start_ports=swr_all_start_ports,
             **kwargs,
         )
