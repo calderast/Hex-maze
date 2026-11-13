@@ -147,6 +147,7 @@ Tracking errors in a trajectory (e.g. a jump between two hexes that aren't neigh
 |---|---|
 | `learn(trajectories, rewards, ...)` | Learn from the rat's trajectories. `record="trial"` or `"step"` returns value snapshots |
 | `fit_choices(maze, trajectories, rewards, ...)` | (classmethod) Fit parameters to the rat's choices (see [How fitting works](#how-fitting-works)). Returns a fresh learner with `.choice_nll_`, `.choice_bic_`, `.choices_scored_` |
+| `fit_choices_hierarchical(sessions, ...)` | (classmethod) Fit many sessions at once, hierarchically (see [Hierarchical fitting](#hierarchical-fitting)). Returns a `HierarchicalFit` |
 | `choice_nll(trajectories, rewards, ...)` | NLL of the rat's choices under the current parameters. `record=True` also returns per-choice probabilities |
 | `value_timeseries(trajectories, rewards, sampled_hexes, represented_hexes=None, ...)` | Value of where the rat is (and what it's representing) at every sample, as a DataFrame |
 | `animate_learning(trajectories, rewards, ...)` | Animate learning one update at a time. `save_to=` writes an .mp4 or .gif |
@@ -184,6 +185,65 @@ the same way, see `fit_from_starts` in `rl/fitting.py`):
   (`max_workers`), and `seed` makes the random ones reproducible. `choice_results_` has the result from every
   starting point, so you can check whether they found different fits.
 
+## Hierarchical fitting
+
+`fit_choices_hierarchical(sessions, ...)` fits the same model to many sessions at once, hierarchically, like the Daw
+lab's em package (the EM method from [Huys et al. 2011](https://doi.org/10.1371/journal.pcbi.1002028), see
+`rl/hierarchical.py`). Each session gets its own parameters, but they're all drawn from one group distribution, which
+we fit too. So a parameter a session can't pin down on its own (e.g. a learning rate it would fit at 1) gets pulled
+toward what's typical across sessions, while parameters it pins down well barely move.
+
+```python
+sessions = {
+    "20250802": dict(maze=..., trajectories=..., rewards=...),
+    "20250803": dict(maze=..., trajectories=..., rewards=..., mazes=..., trials_per_block=...),
+    ...
+}
+group_fit = KrauszDualLearner.fit_choices_hierarchical(
+    sessions, lam=0.0, score_at="junctions", directional_states=True, verbose=True,
+)
+group_fit.group_params()      # each parameter's median and 5-95% range across sessions
+group_fit.session_params()    # each session's parameters
+group_fit.learners["20250802"]  # an untrained learner with that session's parameters
+group_fit.ibic                # for comparing models (lower is better)
+```
+
+To let the group mean depend on things we know about each session, pass `covariates`: a DataFrame with one row per
+session (indexed by the same keys as `sessions`) and one column per covariate. A column of text (e.g. rat, or barrier
+vs probability change) gets its own group mean for each category, and a column of numbers (e.g. day, centered) shifts
+the group mean in proportion to it.
+
+```python
+covariates = pd.DataFrame({"rat": [rat for rat, date in sessions]}, index=list(sessions))  # (rat, date) keys
+rat_fit = KrauszDualLearner.fit_choices_hierarchical(sessions, covariates=covariates, lam=0.0, score_at="junctions")
+rat_fit.group_effects               # how each covariate shifts each parameter's group mean (unbounded numbers)
+rat_fit.group_params(rat="IM-1871")  # the group distribution for IM-1871's sessions
+```
+
+How it works:
+- Each parameter is fit as an unbounded number (see [How fitting works](#how-fitting-works)), and across sessions
+  these are normally distributed (with a separate mean and sd for each parameter, or a full covariance with
+  `full_covariance=True`).
+- Starting from a broad group distribution, EM repeats two steps until the group distribution stops changing (by less
+  than 0.1%):
+  1. **E-step**: fit each session given the group distribution (the most likely parameters given both the session's
+     choices and the group), and get the Hessian there, which says how well the session pins down each parameter.
+     Sessions run in parallel.
+  2. **M-step**: set the group mean to the mean of the sessions' fits (or with covariates, regress the sessions' fits
+     on the covariates), and the group spread to their spread plus how unsure each session's fit is.
+- To compare models (or check whether a covariate matters), use the integrated BIC (`ibic`): -log marginal
+  likelihood (how likely all the data is given the group distribution) + (number of group parameters) / 2 *
+  ln(number of sessions). Lower is better. This is the same as
+  em's, which is half the scale of BIC, so don't compare it to `choice_bic_`.
+
+Long fits can take a while, so pass `checkpoint="some_file.pkl"` to save the fit after every EM iteration. If it
+stops partway, running it again with the same file picks up where it left off.
+
+Rats are covariates, not their own level (the same as em): with a `rat` covariate, each rat's group mean is fit only
+from its own sessions, and every rat has the same spread across sessions. `fit_hierarchical` (in `rl/hierarchical.py`)
+is the general version, which takes one NLL function per session, so it works for any model. `tests/test_hierarchical.py`
+checks that it gets the same answers as em.
+
 ## Things to watch out for
 
 - A learner remembers what it has learned and where it is in the session, so call `reset()` before running
@@ -194,6 +254,10 @@ the same way, see `fit_from_starts` in `rl/fitting.py`):
 - `animate_learning` actually updates the learner as it builds frames.
 - `fit_many` runs fits in separate processes, so `warnings.catch_warnings()` around it doesn't hide their warnings
   (each worker process prints its own).
+- To check that a fit recovers known parameters (simulate sessions with `simulate`, then fit them), simulate with
+  `no_backtrack=False`. With `no_backtrack=True` (the default), the simulated agent never goes back to a hex it
+  already visited that trial, but a fit assumes it could have, so the fit won't recover the parameters it was
+  simulated with.
 
 ## Quick start
 

@@ -21,6 +21,7 @@ from .port_learning import (
     HiddenStatePortLearner,
     BayesianHiddenStatePortLearner,
 )
+from .hierarchical import fit_hierarchical, HierarchicalFit
 
 __all__ = [
     "HexMazeTDLearner",
@@ -38,6 +39,8 @@ __all__ = [
     "ModelBasedRule",
     "SWRRule",
     "fit_many",
+    "fit_hierarchical",
+    "HierarchicalFit",
     "RescorlaWagner",
     "BayesianPortLearner",
     "HiddenStatePortLearner",

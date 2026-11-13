@@ -84,6 +84,14 @@ These 3 are also provided for reference:
 - [How the training maze database was generated](./Tutorials/31_Generate_Training_Maze_Database.ipynb)
 - [How the probability change database was generated](./Tutorials/32_Generate_Probability_Change_Database.ipynb)
 
+### Running the tests
+`tests/` has tests that check our work (e.g. that our hierarchical fitting gets the same answers as the Daw lab's em
+package). To run them, from the repo:
+
+```sh
+pytest tests/
+```
+
 ### Step 4: Explore and use the databases!
 This repo provides the following databases of valid maze configurations and barrier change sequences for the hex maze task:
 
@@ -153,8 +161,8 @@ Learns values over individual hexes from the paths the rat runs (and whether eac
 
 Each learner can value moves locally or from the rat's sweeps (retrieval rules), and use either directional or
 goal-conditioned states. All hex learners support fitting to the rat's choices (`.fit_choices()`, or `fit_many` to fit
-many models in parallel), BIC model comparison, value snapshots after every trial or step, value timeseries,
-animations of learning, simulation, configurable priors, and mid-session barrier changes.
+many models in parallel), hierarchical fitting across sessions (`.fit_choices_hierarchical()`), BIC model comparison,
+value snapshots after every trial or step, value timeseries, animations of learning, simulation, configurable priors, and mid-session barrier changes.
 See the hex learning [README](src/hexmaze/rl/hex_learning/README.md) for detailed docs, and the
 [Hex Value Learning](./Tutorials/41_Hex_Value_Learning.ipynb) tutorial to get started.
 
