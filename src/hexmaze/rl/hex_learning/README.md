@@ -237,7 +237,8 @@ How it works:
   em's, which is half the scale of BIC, so don't compare it to `choice_bic_`.
 
 Long fits can take a while, so pass `checkpoint="some_file.pkl"` to save the fit after every EM iteration. If it
-stops partway, running it again with the same file picks up where it left off.
+stops partway, running it again with the same file picks up where it left off (and if it already finished, gives
+back that fit).
 
 Rats are covariates, not their own level (the same as em): with a `rat` covariate, each rat's group mean is fit only
 from its own sessions, and every rat has the same spread across sessions. `fit_hierarchical` (in `rl/hierarchical.py`)

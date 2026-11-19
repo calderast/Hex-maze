@@ -17,6 +17,8 @@ import pandas as pd
 import pytest
 from scipy.special import expit, logit, ndtr
 
+from hexmaze import create_empty_hex_maze
+from hexmaze.rl import HexMazeTDLearner
 from hexmaze.rl.hierarchical import _SessionPosterior, _design_matrix, _fit_session, fit_hierarchical
 
 EM_REFERENCE = Path(__file__).parent / "em_reference"
@@ -161,3 +163,41 @@ def test_checkpoint_picks_up_where_it_left_off(tmp_path):
     assert resumed.n_iterations == uninterrupted.n_iterations
     np.testing.assert_allclose(resumed.group_effects, uninterrupted.group_effects)
     np.testing.assert_allclose(resumed.group_covariance, uninterrupted.group_covariance)
+
+
+def test_checkpoint_of_finished_fit_is_returned(tmp_path):
+    # Running a fit again with its checkpoint gives back the same fit, whether it stopped at
+    # max_iterations or converged (there's nothing left to run either way)
+    subjects = load_subjects("reference_data_5_subjects.csv")
+    arguments = dict(start_values=expit([1.0, 0.0]), kinds=KINDS, n_starts=1, max_workers=1)
+
+    for max_iterations in [3, 100]:
+        checkpoint = tmp_path / f"checkpoint_{max_iterations}.pkl"
+        first = fit_hierarchical(subjects, **arguments, max_iterations=max_iterations, checkpoint=checkpoint)
+        again = fit_hierarchical(subjects, **arguments, max_iterations=max_iterations, checkpoint=checkpoint)
+
+        assert again.n_iterations == first.n_iterations
+        assert again.converged == first.converged
+        assert again.ibic == first.ibic
+        np.testing.assert_allclose(again.group_effects, first.group_effects)
+        assert again.session_values.keys() == first.session_values.keys()
+
+
+def test_fit_choices_hierarchical_runs():
+    # Fit a few short simulated sessions, just to check that the hex learners hook up to EM
+    # (simulated with no_backtrack=False, since a fit assumes the agent could take any move)
+    maze = create_empty_hex_maze()
+    sessions = {}
+    for i in range(3):
+        trials = HexMazeTDLearner(maze, alpha=0.3, gamma=0.9, beta=5.0, reward_probs=[0.9, 0.5, 0.1],
+                                  no_backtrack=False).simulate(start_state=1, n_trials=8)
+        sessions[f"session {i}"] = dict(maze=maze, trajectories=[trial["path"] for trial in trials],
+                                        rewards=[trial["reward"] for trial in trials])
+
+    fit = HexMazeTDLearner.fit_choices_hierarchical(sessions, lam=0.0, n_starts=1, max_iterations=2, max_workers=1)
+
+    assert fit.param_names == ["gamma", "beta", "alpha"]
+    assert set(fit.learners) == set(sessions)
+    for key, learner in fit.learners.items():
+        assert learner.choice_nll_ == fit.session_nll[key]
+        assert learner.choices_scored_ > 0

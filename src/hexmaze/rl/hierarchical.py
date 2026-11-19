@@ -133,6 +133,10 @@ class HierarchicalFit:
             ended with, and how much they changed (to check that EM converged)
         learners (dict): {session key: fitted learner}, filled in by the learners' own
             hierarchical fits (e.g. BaseHexLearner.fit_choices_hierarchical)
+
+    Note session_values, session_nll, log_marginal_likelihood and ibic come from the last
+    E-step, and group_effects and group_covariance come from the M-step after it. Once EM
+    has converged, that last M-step barely changes the group distribution.
     """
 
     param_names: list
@@ -162,10 +166,18 @@ class HierarchicalFit:
         isn't given is at its first category, or 0 for a number covariate. With no
         covariates, this is the same for every session.
         """
+        names = [] if self.covariates is None else list(self.covariates.columns)
+        # Make sure every covariate and category actually exists
+        for name, value in covariate_values.items():
+            if name not in names:
+                raise ValueError(f"There's no covariate called {name!r} (the covariates are {names})")
+            if name in self.categories and value not in self.categories[name]:
+                raise ValueError(f"{value!r} isn't a category of {name!r} (they're {self.categories[name]})")
+
         # Get the value of each covariate (the given one, or the first category, or 0)
-        covariates = {} if self.covariates is None else {
+        covariates = {
             name: covariate_values.get(name, self.categories[name][0] if name in self.categories else 0)
-            for name in self.covariates.columns
+            for name in names
         }
         # Make the design matrix row for a session with these covariates
         row = _design_matrix(pd.DataFrame([covariates]), self.categories)
@@ -296,6 +308,17 @@ def _fit_session(job):
         # The session's NLL alone at the MAP (without the group penalty)
         nll = posterior.nll(values)
 
+    # At a minimum, the Hessian is positive definite (the objective curves up in every
+    # direction). If it isn't (e.g. the MAP is on a flat stretch, or the finite differences
+    # are noisy), its inverse would have negative variances. So clip its eigenvalues to at
+    # least the smallest eigenvalue of inverse(Sigma), i.e. the session is never less sure
+    # of its parameters than the group distribution alone would make it
+    eigenvalues, eigenvectors = np.linalg.eigh(hessian)
+    hessian_clipped = eigenvalues.min() <= 0
+    if hessian_clipped:
+        floor = np.linalg.eigvalsh(posterior.group_precision).min()
+        hessian = eigenvectors @ np.diag(np.maximum(eigenvalues, floor)) @ eigenvectors.T
+
     # log p(data | mu, Sigma) is approximately
     #     -NLL(x) - 0.5 * (x - mu)' inverse(Sigma) (x - mu) - 0.5 * log|Sigma| - 0.5 * log|Hessian|
     # (the integral of a normal centered on the MAP, see the module docstring)
@@ -309,7 +332,7 @@ def _fit_session(job):
     )
     return {
         "values": values, "x": x, "hessian": hessian, "nll": nll,
-        "log_marginal_likelihood": log_marginal_likelihood,
+        "log_marginal_likelihood": log_marginal_likelihood, "hessian_clipped": hessian_clipped,
     }
 
 
@@ -361,7 +384,8 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             None (default) uses one per core, and 1 fits them one at a time
         checkpoint (str, optional): A file to save the fit to after every iteration. If
             the file already exists (e.g. the fit stopped partway), we pick up where it
-            left off instead of starting over. Use a new file for each fit
+            left off instead of starting over (or if it already finished, just return it).
+            Use a new file for each fit (picking up from a different fit's file raises an error)
         verbose (bool): If True, print the log marginal likelihood and how much the group
             parameters changed after each iteration
 
@@ -390,6 +414,13 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
     design = X.to_numpy()
     # n_regressors is the number of columns of X (the intercept plus the covariate columns)
     n_sessions, n_regressors = design.shape
+    # The M-step divides by (number of sessions - number of columns of X), so we need more
+    # sessions than that (e.g. at least 3 sessions for 2 rats)
+    if n_sessions <= n_regressors:
+        raise ValueError(
+            f"{n_sessions} sessions isn't enough to fit a group distribution with {n_regressors} "
+            f"group means per parameter ({list(X.columns)}). We need more sessions than that"
+        )
 
     # Start from a broad group distribution, centered on the starting values (the
     # intercept is the starting values, and every covariate's effect is 0)
@@ -402,11 +433,26 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
     # the session ended up the iteration before)
     session_starts = {key: list(start_values) for key in keys}
 
+    # What this fit is, saved with the checkpoint so we never pick up from a different fit
+    setup = {
+        "sessions": keys, "param_names": param_names, "kinds": list(kinds),
+        "full_covariance": full_covariance, "design matrix columns": list(X.columns),
+    }
+
     # Pick up where a fit that stopped partway left off
-    history = []
+    history, estimates, converged = [], None, False
     if checkpoint is not None and os.path.exists(checkpoint):
         with open(checkpoint, "rb") as f:
-            effects, group_covariance, session_starts, history = pickle.load(f)
+            saved = pickle.load(f)
+        different = [name for name in setup if saved["setup"][name] != setup[name]]
+        if different:
+            raise ValueError(f"{checkpoint} is from a different fit (its {different} don't match this fit's). "
+                             f"Use a new checkpoint file for each fit")
+        effects, group_covariance = saved["effects"], saved["group_covariance"]
+        session_starts, history = saved["session_starts"], saved["history"]
+        # The last E-step, in case there's nothing left to run (the fit already converged,
+        # or already ran max_iterations)
+        estimates, converged = saved["estimates"], saved["converged"]
         if verbose:
             print(f"picking up from {checkpoint} after iteration {len(history)}")
 
@@ -414,12 +460,14 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
         # All the group parameters in one array (the diagonal of Sigma, unless it's full)
         return np.concatenate([effects.ravel(), (covariance if full_covariance else np.diag(covariance)).ravel()])
 
+    # Picking up from a checkpoint starts at the iteration after the last one saved (and
+    # there's nothing left to run if that fit already converged)
+    iterations = [] if converged else range(len(history) + 1, max_iterations + 1)
+
     # Fit the sessions in parallel, with the same processes for every iteration (starting
     # new ones each iteration would be slow)
     with ProcessPoolExecutor(max_workers=max_workers) if max_workers != 1 else nullcontext() as pool:
-        converged = False
-        # (Picking up from a checkpoint starts at the iteration after the last one saved)
-        for iteration in range(len(history) + 1, max_iterations + 1):
+        for iteration in iterations:
             # E-step: fit each session given its group mean
             # Each session's group mean, mu = X @ effects (one row per session)
             group_means = design @ effects
@@ -432,6 +480,10 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
                 for i, key in enumerate(keys)
             ]
             estimates = dict(zip(keys, _run_e_step(jobs, pool)))
+            clipped = [key for key in keys if estimates[key]["hessian_clipped"]]
+            if clipped:
+                warnings.warn(f"Iteration {iteration}: the Hessian wasn't positive definite for sessions {clipped}, "
+                              f"so we clipped its eigenvalues (see _fit_session). Check those sessions' fits")
             # How likely all the data is given the group distribution this iteration started with
             log_marginal_likelihood = sum(estimate["log_marginal_likelihood"] for estimate in estimates.values())
 
@@ -474,19 +526,26 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
                 "group_effects": effects.copy(), "group_sd": np.sqrt(np.diag(group_covariance)),
                 "change": change,
             })
+            converged = change < tolerance
             if checkpoint is not None:
                 # Write to a temporary file first, so stopping partway through writing
                 # can't break the checkpoint
                 with open(f"{checkpoint}.tmp", "wb") as f:
-                    pickle.dump((effects, group_covariance, session_starts, history), f)
+                    pickle.dump({
+                        "setup": setup, "effects": effects, "group_covariance": group_covariance,
+                        "session_starts": session_starts, "history": history, "estimates": estimates,
+                        "converged": converged,
+                    }, f)
                 os.replace(f"{checkpoint}.tmp", checkpoint)
             if verbose:
                 print(f"iteration {iteration}: log marginal likelihood {log_marginal_likelihood:.2f}, "
                       f"change {change:.2g}")
 
-            if change < tolerance:
-                converged = True
+            if converged:
                 break
+
+    # The log marginal likelihood from the last E-step (this run's, or the checkpoint's)
+    log_marginal_likelihood = history[-1]["log_marginal_likelihood"]
 
     # iBIC = -log marginal likelihood + (number of group parameters) / 2 * ln(number of sessions)
     n_params = len(kinds)
@@ -495,8 +554,7 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
     n_group_params = n_regressors * n_params + (n_params * (n_params + 1) // 2 if full_covariance else n_params)
     ibic = -log_marginal_likelihood + n_group_params / 2 * np.log(n_sessions)
 
-    # Each session's parameters are from the last E-step. Once EM has converged, the last
-    # M-step barely changes the group distribution, so these are what it gives
+    # Each session's parameters are from the last E-step (see the HierarchicalFit docstring)
     return HierarchicalFit(
         param_names=param_names,
         kinds=list(kinds),
@@ -508,7 +566,7 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
         session_nll={key: estimates[key]["nll"] for key in keys},
         log_marginal_likelihood=log_marginal_likelihood,
         ibic=ibic,
-        n_iterations=iteration,
+        n_iterations=len(history),
         converged=converged,
         history=history,
     )

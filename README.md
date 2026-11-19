@@ -89,6 +89,7 @@ These 3 are also provided for reference:
 package). To run them, from the repo:
 
 ```sh
+pip install -e ".[test]"  # once, to get pytest
 pytest tests/
 ```
 
