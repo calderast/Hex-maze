@@ -18,7 +18,8 @@ hexmaze/rl/
 │   ├── bayesian.py              # BayesianPortLearner
 │   ├── hidden_state.py          # HiddenStatePortLearner
 │   └── bayesian_hidden_state.py # BayesianHiddenStatePortLearner (in progress)
-└── fitting.py           # fit_from_starts (how every learner fits its parameters), fit_many
+├── fitting.py           # fit_from_starts (how every learner fits its parameters), fit_many
+└── hierarchical.py      # fit_hierarchical (fit many sessions at once, hierarchically)
 ```
 
 ## Port value learning

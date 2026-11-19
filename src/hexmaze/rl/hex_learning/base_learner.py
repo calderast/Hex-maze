@@ -53,6 +53,7 @@ from ...core import get_safe_hex_distance, get_pairwise_distance_matrix, get_cri
 from ...utils import REWARD_PORTS, resolve_port
 from ...plotting import plot_hex_maze
 from ..fitting import bic, fit_from_starts
+from ..hierarchical import fit_hierarchical
 from .retrieval_rules import LocalRetrieval
 
 
@@ -195,7 +196,10 @@ class BaseHexLearner:
                 see every neighbor. Defaults to True, which keeps simulated trials
                 closer in length to the rats' runs (a simulated trial only ends when
                 the agent reaches a port, and an agent allowed to turn around wanders
-                back and forth for a lot longer before getting there).
+                back and forth for a lot longer before getting there). Note a fit
+                assumes the agent could have taken any move, so to check that a fit
+                recovers the parameters sessions were simulated with, simulate with
+                no_backtrack=False.
             retrieval (RetrievalRule): How the agent values each possible move.
                 Defaults to LocalRetrieval, which values a move by the hex it
                 would step into.
@@ -1173,22 +1177,7 @@ class BaseHexLearner:
                   whether different starting points found different fits)
                 - score_at_ : the score_at used to fit
         """
-        # Learner classes like KrauszDualLearner set their own rules, so build one to get
-        # them (BaseHexLearner needs the rules passed in)
-        given = {name: value for name, value in kwargs.items() if value is not None}
-        learner_rules = rules if rules is not None else cls(maze, reward_probs=reward_probs, **given).rules
-
-        # Get the parameters this learner can fit: every learner's, plus each rule's own
-        fit_params = dict(cls.FIT_PARAMS)
-        for rule in learner_rules:
-            fit_params.update(rule.FIT_PARAMS)
-
-        # A parameter passed with a value is fixed, and the rest are fit. Anything else
-        # in kwargs is a constructor argument
-        fixed = {name: value for name, value in given.items() if name in fit_params}
-        free_names = [name for name in fit_params if name not in fixed]
-        constructor_kwargs = {name: value for name, value in kwargs.items() if name not in fit_params}
-
+        fit_params, fixed, free_names, constructor_kwargs = cls._split_fit_kwargs(maze, rules, kwargs)
         fit = _ChoiceFit(
             cls, maze, reward_probs, rules, fixed, free_names, constructor_kwargs,
             data=dict(
@@ -1226,6 +1215,140 @@ class BaseHexLearner:
         fitted.choice_results_ = results
         fitted.score_at_ = score_at
         return fitted
+
+    @classmethod
+    def _split_fit_kwargs(cls, maze, rules, kwargs):
+        """
+        Sort the keyword arguments to a fit into parameters to fix, parameters to fit, and
+        constructor arguments (see fit_choices).
+
+        Returns:
+            tuple: ({name: (first starting value, kind)} for every parameter this learner
+                can fit, {name: value} for the parameters to fix, [names of the parameters
+                to fit], {name: value} for the constructor arguments)
+        """
+        # Learner classes like KrauszDualLearner set their own rules, so build one to get
+        # them (BaseHexLearner needs the rules passed in)
+        given = {name: value for name, value in kwargs.items() if value is not None}
+        learner_rules = rules if rules is not None else cls(maze, **given).rules
+
+        # Get the parameters this learner can fit: every learner's, plus each rule's own
+        fit_params = dict(cls.FIT_PARAMS)
+        for rule in learner_rules:
+            fit_params.update(rule.FIT_PARAMS)
+
+        # A parameter passed with a value is fixed, and the rest are fit. Anything else
+        # in kwargs is a constructor argument
+        fixed = {name: value for name, value in given.items() if name in fit_params}
+        free_names = [name for name in fit_params if name not in fixed]
+        constructor_kwargs = {name: value for name, value in kwargs.items() if name not in fit_params}
+        return fit_params, fixed, free_names, constructor_kwargs
+
+    @classmethod
+    def fit_choices_hierarchical(cls, sessions, rules=None, score_at="steps", covariates=None, full_covariance=False,
+                                 n_starts=8, seed=0, max_iterations=100, tolerance=1e-3,
+                                 max_workers=None, checkpoint=None, verbose=False, **kwargs):
+        """
+        Fit the parameters that make the rat's hex-to-hex choices most likely, for many
+        sessions at once, hierarchically (like the Daw lab's em package, see
+        hierarchical.py).
+
+        Each session gets its own parameters, but they're all drawn from one group
+        distribution, which we fit too. So a parameter a session can't pin down on its
+        own gets pulled toward what's typical across sessions, instead of running off
+        to an extreme. Every session uses the same model: the same learner class, rules,
+        fixed parameters, and constructor arguments.
+
+        To let the group mean depend on things we know about each session (e.g. which rat
+        it is, or whether it's a barrier change session), pass them as covariates.
+
+        Parameters:
+            sessions (dict): {session key: session}, where each session is a dict of what
+                fit_choices takes for one session: maze, trajectories, and rewards, and
+                optionally reward_probs, replayed_hexes, swept_hexes, mazes, and
+                trials_per_block. The key can be anything (e.g. (rat, date))
+            rules (list of UpdateRule or None): The rules to fit with (see fit_choices)
+            score_at ({"steps", "junctions", "choice_points"}): Which of the rat's moves
+                are scored (see choice_nll)
+            covariates (pd.DataFrame, optional): Things we know about each session that
+                the group mean can depend on, with one row per session (indexed by session
+                key) and one column per covariate, e.g. a "rat" column to give each rat its
+                own group mean (see fit_hierarchical). None (default) uses one group mean
+                for every session
+            full_covariance (bool): If True, fit how the parameters covary across sessions
+                too (this needs a lot of sessions). If False (default), each parameter has
+                its own spread across sessions
+            n_starts (int): How many starting points to fit each session from on the first
+                EM iteration (see fit_hierarchical)
+            seed (int): Seed for the random starting points
+            max_iterations (int): The most EM iterations to run
+            tolerance (float): Stop once the group parameters change by less than this
+                fraction between iterations (see fit_hierarchical)
+            max_workers (int or None): How many sessions to fit at once, one process each.
+                None (default) uses one per core
+            checkpoint (str, optional): A file to save the fit to after every EM iteration,
+                so if it stops partway, running it again picks up where it left off (see
+                fit_hierarchical)
+            verbose (bool): If True, print the progress of each EM iteration
+            **kwargs: Values for parameters to fix instead of fit (e.g. lam=0.0), and any
+                other constructor arguments (e.g. directional_states), shared by every
+                session (see fit_choices)
+
+        Returns:
+            HierarchicalFit: The group distribution (group_params()), each session's
+                parameters (session_params()), the log marginal likelihood and iBIC (for
+                comparing models, lower iBIC is better), and in learners, a new, untrained
+                learner for each session with that session's parameters, with:
+                - choice_nll_ : the session's choice NLL at its parameters
+                - choices_scored_ : how many of the rat's choices were scored
+                - score_at_ : the score_at used to fit
+        """
+        # Every session fits the same parameters, so sort them out from the first session
+        first_maze = next(iter(sessions.values()))["maze"]
+        fit_params, fixed, free_names, constructor_kwargs = cls._split_fit_kwargs(first_maze, rules, kwargs)
+
+        # Set up scoring each session
+        fits = {}
+        for key, session in sessions.items():
+            fits[key] = _ChoiceFit(
+                cls, session["maze"], session.get("reward_probs"), rules, fixed, free_names,
+                constructor_kwargs,
+                data={name: session.get(name) for name in [
+                    "trajectories", "rewards", "replayed_hexes", "swept_hexes", "mazes", "trials_per_block",
+                ]},
+                score_at=score_at,
+            )
+
+        # Get how many choices each session scores. This doesn't depend on the parameters,
+        # so score each session once at the starting values
+        start_values = [fit_params[name][0] for name in free_names]
+        n_choices = {}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for key, fit in fits.items():
+                _, choices = fit.build(start_values).choice_nll(**fit.data, record=True, score_at=score_at)
+                n_choices[key] = len(choices)
+
+        result = fit_hierarchical(
+            {key: fit.nll for key, fit in fits.items()},
+            start_values=start_values,
+            kinds=[fit_params[name][1] for name in free_names],
+            param_names=free_names,
+            covariates=covariates,
+            full_covariance=full_covariance,
+            n_starts=n_starts, seed=seed, max_iterations=max_iterations, tolerance=tolerance,
+            max_workers=max_workers, checkpoint=checkpoint, verbose=verbose,
+        )
+
+        # Make a new, untrained learner for each session with that session's parameters
+        for key, fit in fits.items():
+            values = result.session_values[key]
+            learner = fit.build(values)
+            learner.choice_nll_ = result.session_nll[key]
+            learner.choices_scored_ = n_choices[key]
+            learner.score_at_ = score_at
+            result.learners[key] = learner
+        return result
 
     #  Self-generated simulation
 
