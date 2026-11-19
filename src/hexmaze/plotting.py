@@ -394,6 +394,11 @@ def snap_centroids_to_grid(empirical_centroids: dict[int, tuple]) -> dict[int, t
     empirical pixel coordinates, then returns the empirical centroids
     snapped to the ideal hex grid.
 
+    Note that the fit does not include rotation, and handles mirroring only by flipping y
+    when the point of the triangle is at the bottom in pixel coordinates. If the maze has
+    a different orientation (e.g. the point is at the bottom of the video image), the
+    snapped centroids will be wrong, so this warns if any centroid moves more than 1 hex.
+
     Parameters:
         empirical: dict mapping hex id to (x, y) pixel coordinates
 
@@ -421,6 +426,16 @@ def snap_centroids_to_grid(empirical_centroids: dict[int, tuple]) -> dict[int, t
 
     scale = np.sum(empirical_centered * ideal_centered) / np.sum(ideal_centered ** 2)
     shift = empirical_mean - scale * ideal_mean
+
+    # Scale and shift can't correct a rotated or mirrored maze, so warn if the fit is far off.
+    # We measure this using the empirical hex width, as the fitted scale is unreliable in this case
+    hex_width = 2 * get_hex_sizes_from_centroids(empirical_centroids)["avg_hex_radius"]
+    max_error = np.linalg.norm(scale * ideal_points + shift - empirical_points, axis=1).max()
+    if max_error > hex_width:
+        warnings.warn(
+            f"Snapped centroids are up to {max_error / hex_width:.1f} hexes from the originals. "
+            "The maze may be rotated or mirrored relative to the ideal grid."
+        )
 
     # Build empirical coords snapped to ideal grid
     return {hex: (scale * x + shift[0], scale * y + shift[1])
@@ -1440,7 +1455,8 @@ def plot_hex_maze(
         rat_position = hex_coordinates[rat]
 
         # Determine heading angle (0 degrees = facing up by default)
-        heading_angle = 0
+        # An inverted y axis draws the image upside down, so turn it around to still face up
+        heading_angle = 180 if ax.yaxis_inverted() else 0
 
         if rat_to is not None and rat_to in hex_coordinates_copy:
             # Rat faces towards the specified hex
@@ -1554,7 +1570,8 @@ def plot_barrier_change_sequence(
     # If we want all mazes in a row on the same plot, use this
     if same_plot:
         # Set up a 1x(num mazes) plot so we can put each maze in a subplot
-        fig, axs = plt.subplots(1, len(barrier_sequence), figsize=((len(barrier_sequence) * 4, 4)))
+        fig, axs = plt.subplots(1, len(barrier_sequence), figsize=((len(barrier_sequence) * 4, 4)), squeeze=False)
+        axs = axs[0]
 
         # Plot the first maze in the sequence (no barrier changes to show for Maze 1)
         plot_hex_maze(barrier_sequence[0], ax=axs[0], **kwargs)
@@ -1634,16 +1651,14 @@ def plot_hex_maze_comparison(maze_1, maze_2, print_info=True, save_path=None, **
             Defaults to True if show_permanent_barriers=True
         view_angle (int: 1, 2, or 3): The hex that is on the top point of the triangle
             when viewing the hex maze. Defaults to 1
-        highlight_hexes (set[int] or list[set]): A set (or list[set]) of hexes to highlight.
-            Takes precedence over other hex highlights (choice points, etc). Defaults to None.
-        highlight_colors (string or list[string]): Color (or list[colors]) to highlight highlight_hexes.
-            Each color in this list applies to the respective set of hexes in highlight_hexes.
-            Defaults to 'darkorange' for a single group.
+        highlight_colors (string): Color to highlight the hexes different between the mazes.
+            Defaults to 'darkorange'.
 
     Other function behavior to note:
-    - Hexes specified in highlight_hexes takes precedence over all other highlights.
-    - If the same hex is specified multiple times in highlight_hexes, the last time takes precedence.
+    - The hexes different between the mazes take precedence over all other highlights.
     - show_optimal_paths has the lowest precedence (will be overridden by all other highlights).
+    - This function passes highlight_hexes directly to plot_hex_maze to show the differences
+        between the mazes, so highlight_hexes cannot be specified here.
     """
 
     # Get the hexes different on optimal paths between these 2 mazes
@@ -1837,8 +1852,9 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], same_plot=True, sav
             If False, only open hexes are shown. Defaults to False
         show_choice_points (bool): If the choice points should be shown in yellow.
             If False, the choice points are not indicated on the plot. Defaults to False
-        show_optimal_paths (bool): Highlight the hexes on optimal paths between
-            reward ports in light green. Defaults to False
+        show_optimal_paths (bool): Highlight the hexes on optimal paths between reward ports
+            in light green on the compared mazes. The reference maze always shows its optimal
+            paths. Defaults to False
         show_hex_labels (bool): Show the number of each hex on the plot. Defaults to False
         show_stats (bool): Print maze stats (lengths of optimal paths between ports)
             on the graph. Defaults to True
@@ -1877,7 +1893,7 @@ def plot_evaluate_maze_sequence(barrier_sequence: list[set], same_plot=True, sav
         for i, other_maze in enumerate(barrier_sequence):
             if i == ref:
                 # If this maze is the reference for this row, highlight optimal paths
-                plot_hex_maze(maze, ax=row_axs[i], show_optimal_paths=True, **kwargs)
+                plot_hex_maze(maze, ax=row_axs[i], **{**kwargs, "show_optimal_paths": True})
                 row_axs[i].set_title(f"Maze {i+1}")
             else:
                 # Otherwise, get the hexes different on optimal paths between the reference maze and another maze in the sequence
