@@ -584,7 +584,7 @@ def get_pixels_per_cm(
     hex_centroids: Mapping[int, tuple[float, float]],
     maze: Optional[Literal["old_maze", "new_maze"]] = None,
     length_cm: Optional[float] = None,
-    reference: Literal["maze_side", "hex_flat_to_flat", "hex_corner_to_corner", "hex_side"] = None,
+    reference: Optional[Literal["maze_side", "hex_flat_to_flat", "hex_corner_to_corner", "hex_side"]] = None,
     snap_centroids: bool = False,
 ) -> float:
     """
@@ -595,17 +595,18 @@ def get_pixels_per_cm(
     Use this to convert tracked position data from pixels to cm.
 
     Note that a single conversion factor assumes pixel scale is constant across the image.
-    If the camera introduces any distortion, scale varies with image position and no single 
+    If the camera introduces any distortion, scale varies with image position and no single
     factor is exact everywhere. This returns one "good enough" average scale for the maze.
 
     Parameters:
         hex_centroids (dict): Dictionary of hex_id: (x, y) centroid of that hex, in pixels.
-        maze (str): Use the known measurements of one of our mazes
-            "old_maze": hex side length of 7 cm
-            "new_maze": maze side of 121.92 cm (measured as 48 inches)
+        maze (str): Use the known measurements of one of our mazes. Pass either this,
+            or both `length_cm` and `reference`, but not both
+            "old_maze": maze side of 121.92 cm (measured as 48 inches)
+            "new_maze": hex side length of 7 cm
         length_cm (float): The real-world length of `reference`, measured in cm.
-            Not needed if `maze` is specified
-        reference (str): What `length_cm` measures. Not needed if `maze` is specified
+            Use with `reference` instead of `maze`
+        reference (str): What `length_cm` measures. Use with `length_cm` instead of `maze`
             "maze_side": the outer edge of the maze (one long side of the maze bounding box)
             "hex_flat_to_flat": the width of a single hex between opposite flat sides.
                 This is also the distance between the centers of 2 adjacent hexes
@@ -624,7 +625,8 @@ def get_pixels_per_cm(
         float: Pixels per cm. Divide a distance in pixels by this to get cm
 
     Raises:
-        ValueError: If reference or maze is not one of the valid options
+        ValueError: If reference or maze is not one of the valid options, or if the
+            arguments don't specify exactly one of `maze` or (`length_cm` and `reference`)
     """
 
     # The known measurements we have for each of our mazes, in cm
@@ -635,11 +637,21 @@ def get_pixels_per_cm(
 
     # Use known reference lengths based on the maze
     if maze is not None:
+        if length_cm is not None or reference is not None:
+            raise ValueError(
+                "Pass either maze, or both length_cm and reference, not both "
+                f"(got maze={maze!r}, length_cm={length_cm!r}, reference={reference!r})"
+            )
         if maze not in maze_measurements:
             raise ValueError(
                 f'maze must be one of {sorted(maze_measurements)}, got {maze!r}'
             )
         reference, length_cm = maze_measurements[maze]
+    elif length_cm is None or reference is None:
+        raise ValueError(
+            "Pass either maze, or both length_cm and reference "
+            f"(got length_cm={length_cm!r}, reference={reference!r})"
+        )
 
     # Optionally snap hex centroids to the ideal grid (good if centroids were clicked poorly)
     if snap_centroids:
