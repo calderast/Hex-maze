@@ -730,7 +730,7 @@ def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> Union[int, di
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze represented in any valid format
-        hexes (int | list | set): Hex(es) to calculate distance for
+        hexes (int | list | set | frozenset | tuple | np.ndarray): Hex(es) to calculate distance for
         target_group (set): The group of hexes to compute distance to
 
     Returns:
@@ -741,8 +741,8 @@ def distance_to_nearest_hex_in_group(maze, hexes, target_group) -> Union[int, di
     graph = maze_to_graph(maze)
 
     # Make hexes iterable so this works with a single hex too
-    single_hex = not isinstance(hexes, (list, set, tuple))
-    hexes = [hexes] if single_hex else hexes
+    single_hex = not isinstance(hexes, (list, set, frozenset, tuple, np.ndarray))
+    hexes = [hexes] if single_hex else [int(hex) for hex in hexes]
 
     distances = {}
     for hex in hexes:
@@ -1134,8 +1134,7 @@ def classify_hexes_by_region(maze) -> dict[str, set[int]]:
         return regions
 
     # Edge case: a choice point is on a cycle, so removing choice points
-    # doesn't split into 3 components. Use divide_into_thirds (which now
-    # absorbs effective choice points) to get the thirds.
+    # doesn't split into 3 components. Use divide_into_thirds to get the thirds.
     thirds = divide_into_thirds(maze)
     for port, third_hexes in zip([1, 2, 3], thirds):
         regions[f"to_{port}"].update(third_hexes)
@@ -1205,6 +1204,7 @@ def tag_hexes(maze) -> dict[int, set[str]]:
     Given a hex maze, tag each open hex with descriptive labels.
     Each hex gets a set of tags from:
         - 'to_port_1', 'to_port_2', 'to_port_3': which third of the maze it belongs to
+        - 'choice_loop': not in any third of the maze (part of a choice loop)
         - 'optimal', 'non_optimal', 'dead_end': hex classification
         - 'choice_point': critical choice point from any port
         - 'choice_point_1', 'choice_point_2', 'choice_point_3': critical choice point from a specific port
@@ -1311,6 +1311,8 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
     clockwise (right). If the rat turns back the way it came (exit_hex ==
     entry_hex), the exit is classified as 'back'.
 
+    Expects adjacent hexes. Use get_relative_hex_direction for hexes that may not be adjacent.
+
     Parameters:
         entry_hex (int): The hex the rat came from
         junction_hex (int): The junction hex the rat is currently at
@@ -1320,8 +1322,8 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
         str: 'left' if exit is counterclockwise of the heading, 'right' if
             clockwise, 'back' if the rat is turning around (exit == entry)
 
-    See also: get_relative_hex_direction, the same function named for the general
-        case, where the 3 hexes need not be a junction and its neighbors.
+    See also: get_relative_hex_direction, the general version of this function, where
+        the 3 hexes need not be a junction and its neighbors (so they may be in a line).
     """
     if exit_hex == entry_hex:
         return "back"
@@ -1345,16 +1347,17 @@ def get_hex_exit_direction(entry_hex: int, junction_hex: int, exit_hex: int) -> 
 
 def get_relative_hex_direction(from_hex: int, at_hex: int, to_hex: int) -> str:
     """
-    Classify one hex as 'left', 'right', or 'back' of another, relative to the
-    direction of travel.
+    Classify one hex as 'left', 'right', 'ahead', or 'back' of another, relative
+    to the direction of travel.
 
     Left and right only mean something once we know which way the rat is facing,
     so this takes 3 hexes rather than 2: the hex the rat came from, the hex it is
     at now (which sets the heading), and the hex we are asking about.
 
-    The same function as get_hex_exit_direction, named for the general case. None
-    of the 3 hexes have to be adjacent or at a junction, so this also answers
-    questions like "is the reward port to the rat's left right now".
+    The general version of get_hex_exit_direction. None of the 3 hexes have to be
+    adjacent or at a junction, so this also answers questions like "is the reward
+    port to the rat's left right now". Hexes that are not adjacent can be in a line
+    with the rat's heading, which is when a hex is 'ahead' or directly 'back'.
 
     Parameters:
         from_hex (int): The hex the rat came from
@@ -1363,8 +1366,27 @@ def get_relative_hex_direction(from_hex: int, at_hex: int, to_hex: int) -> str:
 
     Returns:
         str: 'left' if to_hex is counterclockwise of the heading, 'right' if
-            clockwise, 'back' if to_hex is the hex the rat came from
+            clockwise, 'ahead' if it is straight ahead, 'back' if it is straight
+            behind (including the hex the rat came from)
     """
+    centroids = get_standard_hex_centroids()
+    from_x, from_y = centroids[from_hex]
+    at_x, at_y = centroids[at_hex]
+    to_x, to_y = centroids[to_hex]
+
+    # Heading vector: direction the rat was traveling (from -> at)
+    heading_vec_x = at_x - from_x
+    heading_vec_y = at_y - from_y
+    # Target vector: direction from the rat to the hex we are asking about (at -> to)
+    to_vec_x = to_x - at_x
+    to_vec_y = to_y - at_y
+
+    # A 2D cross product of 0 means the 3 hexes are in a line, so to_hex is ahead or behind
+    cross = heading_vec_x * to_vec_y - heading_vec_y * to_vec_x
+    if math.isclose(cross, 0, abs_tol=1e-9):
+        dot = heading_vec_x * to_vec_x + heading_vec_y * to_vec_y
+        return "ahead" if dot > 0 else "back"
+
     return get_hex_exit_direction(from_hex, at_hex, to_hex)
 
 
@@ -1469,10 +1491,11 @@ def is_valid_maze(maze, complain=False) -> bool:
     Given a possible hex maze configuration, check if it is valid using the following criteria:
     - there are no unreachable hexes (this also ensures all reward ports are reachable)
     - path lengths between reward ports are between 15-25 hexes
+    - the longest and shortest paths between reward ports differ by at least 4 hexes
     - all critical choice points are >=6 hexes away from a reward port
     - there are a maximum of 3 critical choice points
     - no straight paths >MAX_STRAIGHT_PATH_TO_PORT hexes to reward port (including port hex)
-    - no straight paths >STRAIGHT_PATHS_INSIDE_MAZE in middle of maze
+    - no straight paths >MAX_STRAIGHT_PATH_INSIDE_MAZE hexes in middle of maze
 
     Parameters:
         maze (list, set, frozenset, np.ndarray, str, nx.Graph):
@@ -1556,7 +1579,7 @@ def is_valid_training_maze(maze, complain=False) -> bool:
             print("BAD MAZE: At least one (non-barrier) hex is unreachable")
         return False
 
-    # Make sure path lengths are equal and between 15-21 hexes
+    # Make sure path lengths are equal and between 15-23 hexes
     reward_path_lengths = get_reward_path_lengths(graph)
     if min(reward_path_lengths) <= 13:
         if complain:
@@ -1607,7 +1630,7 @@ def generate_good_maze(num_barriers=9, training_maze=False) -> set:
         test_maze = start_maze.copy()
 
         # Randomly select some barriers (generally 9 for normal maze, 5/6 for a training maze)
-        barriers = set(np.random.choice(POSSIBLE_BARRIERS, size=num_barriers, replace=False))
+        barriers = {int(b) for b in np.random.choice(POSSIBLE_BARRIERS, size=num_barriers, replace=False)}
 
         # Add the barriers to the empty maze
         for barrier in barriers:

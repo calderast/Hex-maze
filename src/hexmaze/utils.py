@@ -66,8 +66,9 @@ def string_to_set(string: str) -> set[int]:
     Returns:
         set[int]: A set of ints representing where barriers are placed in the maze
     """
-    string = string.strip("{}[]()")  # strip just in case, to handle more variable inputs
-    return set(map(int, string.split(",")))
+    string = string.strip("{}[]() ")  # strip just in case, to handle more variable inputs
+    # An empty string is a maze with no barriers
+    return set(map(int, string.split(","))) if string else set()
 
 
 def add_edges_to_node(graph: nx.Graph, node: int, edges: list[int]):
@@ -330,7 +331,13 @@ def reflect_hex(original_hex: int, axis=1) -> int:
 
     Returns:
         int: The corresponding hex if the maze was reflected across the specified axis
+
+    Raises:
+        ValueError: If axis is not 1, 2, or 3
     """
+    if axis not in (1, 2, 3):
+        raise ValueError(f"axis must be 1, 2, or 3, got {axis!r}")
+
     # Lists of corresponding hexes reflected across axis 1, 2, or 3
     reflections_ax1 = [
         # 1-49 are hexes
@@ -354,7 +361,7 @@ def reflect_hex(original_hex: int, axis=1) -> int:
         # 50-64 are permanent barriers
         [64, 50], [59, 52], [63, 51], [58, 54], [62, 53], [61, 56]]
     # Choose the reflection list for the axis we care about
-    hex_reflections = {1: reflections_ax1, 2: reflections_ax2, 3: reflections_ax3}.get(axis, None)
+    hex_reflections = {1: reflections_ax1, 2: reflections_ax2, 3: reflections_ax3}[axis]
 
     for lst in hex_reflections:
         if original_hex in lst:

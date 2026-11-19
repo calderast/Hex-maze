@@ -166,8 +166,8 @@ def min_hex_diff_between_paths(paths_1: list[list], paths_2: list[list]) -> int:
     if have_common_path(paths_1, paths_2):
         return 0
 
-    # Max possible number of different hexes between paths
-    num_different_hexes = 25
+    # Start with no limit, as very different paths can differ by many hexes
+    num_different_hexes = math.inf
 
     for path_a in paths_1:
         for path_b in paths_2:
@@ -208,8 +208,8 @@ def hexes_different_between_paths(paths_1: list[list], paths_2: list[list]) -> t
     if have_common_path(paths_1, paths_2):
         return hexes_on_path_1_not_path_2, hexes_on_path_2_not_path_1
 
-    # Max possible number of different hexes between paths
-    num_different_hexes = 25
+    # Start with no limit, as very different paths can differ by many hexes
+    num_different_hexes = math.inf
 
     # Find the most similar path between the path lists, and get the different hexes on it
     for path_a in paths_1:
@@ -1212,8 +1212,8 @@ def get_next_barrier_sets(df: pd.DataFrame, original_barriers, criteria_type="AL
         original_barriers (list, set, frozenset, np.ndarray, str, nx.Graph):
             The hex maze to start from, represented in any valid format
         criteria_type (str):
-            'ANY': (default) Accept new barrier sets that meet EITHER of these criteria
-            'ALL': Accept new barrier sets that meet BOTH of these criteria
+            'ANY': Accept new barrier sets that meet EITHER of these criteria
+            'ALL': (default) Accept new barrier sets that meet BOTH of these criteria
             'JOSE': Meets both of the above criteria, AND optimal path lengths are 17, 19, 21,
                 AND only 1 choice point
 
@@ -1269,7 +1269,8 @@ def get_best_next_barrier_set(df: pd.DataFrame, original_barriers) -> set:
             The hex maze to start from, represented in any valid format
 
     Returns:
-        set: The "best" potential next barrier set (maximally different from the original barrier set)
+        set: The "best" potential next barrier set (maximally different from the original barrier set),
+            or None if no potential next barrier set differs on optimal paths
     """
     # Convert all valid maze representations to a set of ints representing barrier hexes
     original_barriers = maze_to_barrier_set(original_barriers)
@@ -1281,7 +1282,9 @@ def get_best_next_barrier_set(df: pd.DataFrame, original_barriers) -> set:
     if not potential_next_barriers:
         return None
 
+    # The next barrier set must differ on optimal paths, so if none do, we return None
     max_hex_diff = 0
+    best_next_barriers = None
     # Check how different each next barrier set is from our original barrier set
     for barriers in potential_next_barriers:
         hex_diff = num_hexes_different_on_optimal_paths(original_barriers, barriers)
