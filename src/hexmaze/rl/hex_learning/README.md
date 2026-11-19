@@ -202,10 +202,10 @@ sessions = {
 group_fit = KrauszDualLearner.fit_choices_hierarchical(
     sessions, lam=0.0, score_at="junctions", directional_states=True, verbose=True,
 )
-group_fit.group_params()      # each parameter's median and 5-95% range across sessions
-group_fit.session_params()    # each session's parameters
+group_fit.group_params()        # each parameter's median and 5-95% range across sessions
+group_fit.session_params()      # each session's parameters
 group_fit.learners["20250802"]  # an untrained learner with that session's parameters
-group_fit.ibic                # for comparing models (lower is better)
+group_fit.ibic                  # for comparing models (lower is better)
 ```
 
 To let the group mean depend on things we know about each session, pass `covariates`: a DataFrame with one row per
@@ -216,7 +216,7 @@ the group mean in proportion to it.
 ```python
 covariates = pd.DataFrame({"rat": [rat for rat, date in sessions]}, index=list(sessions))  # (rat, date) keys
 rat_fit = KrauszDualLearner.fit_choices_hierarchical(sessions, covariates=covariates, lam=0.0, score_at="junctions")
-rat_fit.group_effects               # how each covariate shifts each parameter's group mean (unbounded numbers)
+rat_fit.group_effects                # how each covariate shifts each parameter's group mean (unbounded numbers)
 rat_fit.group_params(rat="IM-1871")  # the group distribution for IM-1871's sessions
 ```
 
@@ -231,19 +231,19 @@ How it works:
      Sessions run in parallel.
   2. **M-step**: set the group mean to the mean of the sessions' fits (or with covariates, regress the sessions' fits
      on the covariates), and the group spread to their spread plus how unsure each session's fit is.
-- To compare models (or check whether a covariate matters), use the integrated BIC (`ibic`): -log marginal
-  likelihood (how likely all the data is given the group distribution) + (number of group parameters) / 2 *
-  ln(number of sessions). Lower is better. This is the same as
-  em's, which is half the scale of BIC, so don't compare it to `choice_bic_`.
+- To compare models (or check whether a covariate matters), use the integrated BIC (`ibic`, lower is better):
+  -log marginal likelihood + (number of group parameters) / 2 * ln(number of sessions), the same as em's. This is
+  half the scale of BIC, so don't compare it to `choice_bic_`.
 
 Long fits can take a while, so pass `checkpoint="some_file.pkl"` to save the fit after every EM iteration. If it
 stops partway, running it again with the same file picks up where it left off (and if it already finished, gives
 back that fit).
 
-Rats are covariates, not their own level (the same as em): with a `rat` covariate, each rat's group mean is fit only
-from its own sessions, and every rat has the same spread across sessions. `fit_hierarchical` (in `rl/hierarchical.py`)
-is the general version, which takes one NLL function per session, so it works for any model. `tests/test_hierarchical.py`
-checks that it gets the same answers as em.
+Rats are covariates, not their own level (the same as em). So with a `rat` covariate, each rat gets its own group
+mean, but every rat has the same spread across sessions.
+
+`fit_hierarchical` (in `rl/hierarchical.py`) is the general version: it takes one NLL function per session, so it
+works for any model. `tests/test_hierarchical.py` checks that it gets the same answers as em.
 
 ## Things to watch out for
 
@@ -255,10 +255,8 @@ checks that it gets the same answers as em.
 - `animate_learning` actually updates the learner as it builds frames.
 - `fit_many` runs fits in separate processes, so `warnings.catch_warnings()` around it doesn't hide their warnings
   (each worker process prints its own).
-- To check that a fit recovers known parameters (simulate sessions with `simulate`, then fit them), simulate with
-  `no_backtrack=False`. With `no_backtrack=True` (the default), the simulated agent never goes back to a hex it
-  already visited that trial, but a fit assumes it could have, so the fit won't recover the parameters it was
-  simulated with.
+- To check that a fit recovers the parameters you simulated with, simulate with `no_backtrack=False`. With the
+  default (`True`), the agent never goes back to a hex it already visited that trial, but a fit assumes it could.
 
 ## Quick start
 
