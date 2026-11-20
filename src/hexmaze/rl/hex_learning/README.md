@@ -4,7 +4,7 @@ Learns a value for each hex of the maze from the paths the rat runs, and turns t
 
 **NOTE: hex learning agents are still in progress**
 
-Start with the tutorial: [41_Hex_Value_Learning](../../../../Tutorials/41_Hex_Value_Learning.ipynb).
+Start with the tutorial: [50_Hex_Value_Learning](../../../../Tutorials/50_Hex_Value_Learning.ipynb).
 It covers fitting a model to a real session, looking at the learned hex values (and how they change
 after each trial), and animating learning, plus how to fit a session with barrier changes, get the value of every
 hex after each trial, get the value of where the rat is at every step, and compare models.

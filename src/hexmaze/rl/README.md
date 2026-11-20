@@ -63,7 +63,7 @@ Learns values over individual hexes from maze trajectories (the hex-by-hex path 
 and whether each trial was rewarded.
 
 See the full hex learning [README](hex_learning/README.md) for detailed docs, and the
-[41_Hex_Value_Learning](../../../Tutorials/41_Hex_Value_Learning.ipynb) tutorial for a walkthrough on real data.
+[50_Hex_Value_Learning](../../../Tutorials/50_Hex_Value_Learning.ipynb) tutorial for a walkthrough on real data.
 
 A learner is a `BaseHexLearner` with a list of **update rules** (how experience changes hex values) and one
 **retrieval rule** (how the agent values each possible move).
@@ -111,7 +111,7 @@ from hexmaze.rl import RescorlaWagner, BayesianPortLearner, HiddenStatePortLearn
 ### Hex learning (trajectory-based)
 
 # trajectories, rewards, mazes, trials_per_block loaded from a session
-# (see Tutorials/41_Hex_Value_Learning.ipynb)
+# (see Tutorials/50_Hex_Value_Learning.ipynb)
 session_data = dict(trajectories=trajectories, rewards=rewards,
                     mazes=mazes, trials_per_block=trials_per_block)
 

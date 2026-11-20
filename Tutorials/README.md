@@ -29,9 +29,11 @@ You can ignore these unless you plan to generate a new database using different 
 These notebooks cover reinforcement learning models of the rat's behavior. Note the RL module is still in progress.
 
 Port values (reward expectation at each port, from port choices and reward outcomes):
-- [Port Value Models](./40_Port_Value_Models.ipynb): various RL models fit to port choices and rewards
+- [Port Value Learning](./40_Port_Value_Learning.ipynb): How to fit a model to a session and get each port's value at the start of every trial (start here)
+- [Port Value Models](./41_Port_Value_Models.ipynb): The equations for each model, which one best explains the rat's choices, and the port values each one learns
+- [Port Value Models Extended](./42_Port_Value_Models_Extended.ipynb): Fitting to rewards vs choices, cross-evaluation, uncertainty in the port values, what each parameter does, and other methods
 
 Hex values (a value for each hex, learned from the paths the rat runs):
-- [Hex Value Learning](./41_Hex_Value_Learning.ipynb): How to fit a model to a session, look at the learned hex values (and how they change after each trial), and animate learning
+- [Hex Value Learning](./50_Hex_Value_Learning.ipynb): How to fit a model to a session, look at the learned hex values (and how they change after each trial), and animate learning
 
 See the hex learning [README](../src/hexmaze/rl/hex_learning/README.md) for full docs.

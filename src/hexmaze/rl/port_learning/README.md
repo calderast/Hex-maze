@@ -12,8 +12,8 @@ port_learning/
 ```
 
 Start with [Port Value Learning](../../../../Tutorials/40_Port_Value_Learning.ipynb) to fit a model to a session and get
-each port's value per trial. See [Port Value Models](../../../../Tutorials/40_Port_Value_Models.ipynb) for each model's
-equations and comparing models, and [Port Value Models Extended](../../../../Tutorials/40_Port_Value_Models_Extended.ipynb)
+each port's value per trial. See [Port Value Models](../../../../Tutorials/41_Port_Value_Models.ipynb) for each model's
+equations and comparing models, and [Port Value Models Extended](../../../../Tutorials/42_Port_Value_Models_Extended.ipynb)
 for fitting to rewards, uncertainty, and what each parameter does.
 
 ## Models
