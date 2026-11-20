@@ -4,14 +4,17 @@ Learns value (expected reward probability) for each port (1/2/3 or A/B/C) from p
 
 ```text
 port_learning/
+├── base.py                  # PortLearner (what every port learner shares) and port_values_per_trial
 ├── rescorla_wagner.py       # RescorlaWagner
 ├── bayesian.py              # BayesianPortLearner
 ├── hidden_state.py          # HiddenStatePortLearner
 └── bayesian_hidden_state.py # BayesianHiddenStatePortLearner (in progress)
 ```
 
-See [Tutorial 40 — Port Value Models](../../../../Tutorials/40_Port_Value_Models.ipynb) for fitted
-examples, parameter explorations, and confidence intervals.
+Start with [Port Value Learning](../../../../Tutorials/40_Port_Value_Learning.ipynb) to fit a model to a session and get
+each port's value per trial. See [Port Value Models](../../../../Tutorials/41_Port_Value_Models.ipynb) for each model's
+equations and comparing models, and [Port Value Models Extended](../../../../Tutorials/42_Port_Value_Models_Extended.ipynb)
+for fitting to rewards, uncertainty, and what each parameter does.
 
 ## Models
 
@@ -100,26 +103,52 @@ happen simultaneously.
 
 ## Common Interface
 
-All port learners share these methods:
+All port learners share these methods (from `PortLearner` in `base.py`, so each learner only defines how it updates
+and what it thinks each port is worth):
 
 | Method | Description |
 |---|---|
-| `update(port, reward)` | Update after one port visit. Returns prediction error (RW) or surprise (Bayesian/HS) |
+| `update(port, reward, start_port=None)` | Update after one port visit. Returns prediction error (RW) or surprise (Bayesian/HS) |
 | `learn(ports, rewards)` | Run updates on a full sequence. Returns list of errors/surprises |
+| `expected_value(port, start_port=None)` | What the learner currently thinks a port is worth |
 | `get_values()` | Current port values as `{1: v1, 2: v2, 3: v3}` |
 | `get_history()` | Full trial-by-trial record (values, errors/surprise, model internals at each step) |
-| `choice_probabilities(available_ports)` | Softmax probabilities over current port values |
+| `choice_probabilities(available_ports, start_port=None)` | Softmax probabilities over current port values |
 | `reset()` | Re-initialize to starting state, keeping parameters |
 | `reward_nll(ports, rewards)` | Negative log-likelihood of a reward sequence under current parameters |
 | `choice_nll(ports, rewards)` | Negative log-likelihood of a port choice sequence under current parameters |
-| `fit_rewards(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL (see below). Returns fitted instance with `.reward_nll_`, `.reward_bic_` attributes |
-| `fit_choices(ports, rewards)` | (classmethod) Fit free parameters by minimizing NLL (see below). Returns fitted instance with `.choice_nll_`, `.choice_bic_` attributes |
+| `fit_rewards(ports, rewards)` | (classmethod) Fit free parameters by minimizing reward NLL (see below). Returns fitted instance with `.reward_nll_`, `.reward_bic_` attributes |
+| `fit_choices(ports, rewards)` | (classmethod) Fit free parameters and `beta` by minimizing choice NLL (see below). Returns fitted instance with `.choice_nll_`, `.choice_bic_` attributes |
+
+`start_port` is the port the rat just left (None on the first trial). Only learners with `per_start_port` use it.
+`learn`, `reward_nll`, `choice_nll` and `port_values_per_trial` fill it in for you.
+
+Fixed settings go to the fits as keyword arguments, e.g. `fit_choices(ports, rewards, per_start_port=True)` or
+`HiddenStatePortLearner.fit_rewards(ports, rewards, reward_set=(0.8, 0.5, 0.2))`.
 
 **Shared parameters:**
 
 - **`beta`**: softmax inverse temperature for `choice_probabilities` (set at init).
   Higher beta means more reliably choosing the higher-valued port (beta=0 is random)
 - **`decay`**: per-trial decay toward initial values (0 = no forgetting)
+- **`per_start_port`** (`RescorlaWagner` and `BayesianPortLearner` only): if True, keep a separate value table for each
+  start port (the port the rat just left), so what the rat learns on a trip from port A only changes its choices on
+  later trips from port A (fully model free). The session's first trial doesn't start at a port, so its outcome goes in
+  every table that has the reached port as an option. `fit_choices` and `fit_rewards` take it too, and
+  `choice_probabilities` takes a `start_port`.
+
+## Port Values Per Trial
+
+`port_values_per_trial(model, ports, rewards)` runs any port learner (e.g. one from `fit_choices`) on a session and
+returns a DataFrame with one row per trial: the start port, port and reward, each port's value at the start of the
+trial (the values the rat chose with), and the model's probability of choosing each port. With `per_start_port`, the
+values are from the start port's table, and there's also a column for every table's values (`B from A`, ...). See
+[Port Value Learning](../../../../Tutorials/40_Port_Value_Learning.ipynb).
+
+```python
+fit = RescorlaWagner.fit_choices(ports, rewards)
+values = port_values_per_trial(fit, ports, rewards)
+```
 
 ## Model-Specific Methods
 
@@ -127,7 +156,6 @@ All port learners share these methods:
 
 | Method | Description |
 |---|---|
-| `expected_value(port)` | Posterior mean for a port |
 | `confidence_interval(port, ci=0.95)` | Credible interval `(lower, upper)` from Beta posterior |
 | `get_posteriors()` | Raw Beta parameters as `{port: {"a": float, "b": float}}` |
 
@@ -135,7 +163,6 @@ All port learners share these methods:
 
 | Method | Description |
 |---|---|
-| `expected_value(port)` | Belief-weighted expected reward probability |
 | `expected_value_std(port)` | SD of expected reward from belief spread: `√(Σ belief[i] · (pᵢ − μ)²)` |
 | `get_stds()` | SD for all ports as `{port: std}` |
 | `get_state_posteriors()` | Belief over each permutation: list of `{"assignment": {port: p}, "probability": float}` |

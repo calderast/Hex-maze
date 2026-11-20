@@ -7,13 +7,13 @@ and updates via Bayes' rule after each observation.
 
     belief[i]  ∝  belief[i] × P(reward | assignment i)
 
-Unlike Rescorla-Wagner and Bayesian, ports are not learned independently (e.g. a reward at port 
-A also gives information about ports B and C under the assumption that there is one high, 
+Unlike Rescorla-Wagner and Bayesian, ports are not learned independently (e.g. a reward at port
+A also gives information about ports B and C under the assumption that there is one high,
 one medium, and one low probability port)
 
 An optional decay parameter allows the model to expect that assignments can change
 (e.g., a probability change session). Decay blends the probabilities of being in each state back
-towards uniform (this can also be though of as a state "transition probability")
+towards uniform (this can also be thought of as a state "transition probability")
 
 An optional alpha parameter controls how strongly each observation updates the belief.
 alpha=1 is the full Bayesian update; alpha<1 blends the updated belief back with the current
@@ -23,14 +23,15 @@ Note: the reward_set is treated as fixed and known ([0.9, 0.5, 0.1]).
 See BayesianHiddenStatePortLearner for a version that also learns the reward probabilities.
 """
 
-import numpy as np
 from itertools import permutations
 
+import numpy as np
+
 from ...utils import REWARD_PORTS, resolve_port
-from ..fitting import bic, fit_from_starts
+from .base import PortLearner
 
 
-class HiddenStatePortLearner:
+class HiddenStatePortLearner(PortLearner):
     """
     Hidden state model for port reward learning.
 
@@ -39,15 +40,19 @@ class HiddenStatePortLearner:
 
     Maintains a posterior over all possible states and updates
     via Bayes' rule after each observation. Optionally allows for
-    decay (blend the probabilites of being in each state back towards
+    decay (blend the probabilities of being in each state back towards
     uniform) at each trial.
 
     A learning rate alpha blends the Bayes-updated belief with the current
     belief: belief = (1-alpha)*belief + alpha*bayes_updated. alpha=1 is the
     standard full Bayesian update; alpha<1 makes each update more conservative.
 
-    Reward ports can be specified as 1, 2, 3 or "A", "B", "C".
+    There's one belief for every start port, so the start_port arguments aren't used.
     """
+
+    # alpha starts at 0.9 (almost a full Bayesian update), since a parameter fit as its logit
+    # can't start at exactly 1
+    FIT_PARAMS = {"alpha": (0.9, "unit"), "decay": (0.05, "unit")}
 
     def __init__(self, reward_set=(0.9, 0.5, 0.1), decay=0.0, alpha=1.0, beta=1.0):
         """
@@ -66,62 +71,50 @@ class HiddenStatePortLearner:
         self.beta = beta
 
         # All possible assignments: each is a dict {1: p, 2: p, 3: p}
-        self.states = []
-        for perm in permutations(reward_set):
-            self.states.append({1: perm[0], 2: perm[1], 3: perm[2]})
-
-        n = len(self.states)
-        self.belief = np.ones(n) / n  # uniform prior (1/6 chance of being in each state)
-        self.history = []
+        # e.g. {1: 0.9, 2: 0.5, 3: 0.1}, {1: 0.9, 2: 0.1, 3: 0.5}, ...
+        self.states = [dict(zip(REWARD_PORTS, perm)) for perm in permutations(reward_set)]
+        self.reset()
 
     def reset(self):
-        """Reset beliefs to uniform prior and clear history."""
+        """Reset beliefs to uniform (1/6 chance of being in each state) and clear history."""
         self.belief = np.ones(len(self.states)) / len(self.states)
         self.history = []
 
-    def update(self, port, reward):
+    def update(self, port, reward, start_port=None):
         """
         Update beliefs after observing reward at a port.
 
         Parameters:
             port (int or str): Which port was visited (1/2/3 or A/B/C).
-            reward (int or float): Reward received (0 or 1).
+            reward (int): Reward received (0 or 1).
+            start_port: Not used (there's one belief for every start port).
 
         Returns:
             float: Surprise: -log(p(reward | current beliefs)).
         """
-        # Handle ports specified as 1/2/3 or A/B/C
+        # Use 1/2/3 so we can look the port up in each state
         port = resolve_port(port)
 
-        if reward not in (0, 1, 0.0, 1.0):
-            raise ValueError(f"reward must be 0 or 1, got {reward}")
-
-        # Update belief (what state we think we are in) toward uniform before updating
+        # Blend belief (what state we think we are in) toward uniform before updating
         # Models the possibility that the reward probabilities have changed since the last trial
         # This is essentially the same as decay in bayesian and rescorla-wagner
-        if self.decay > 0:
-            n = len(self.states)
-            self.belief = (1 - self.decay) * self.belief + \
-                          self.decay * np.ones(n) / n
+        # (uniform belief is 1 / number of states for every state)
+        self.belief = (1 - self.decay) * self.belief + self.decay / len(self.states)
 
         # Likelihood of this reward under each state (state=permutation of reward probs)
-        # Each state s defines the reward probabilites of each port as s[port]
+        # Each state s defines the reward probabilities of each port as s[port]
         # If a reward was received, the likelihood is s[port]
         # If no reward, the likelihood is 1 - s[port]
         # e.g. if state s assigns p=0.9 to port A: reward likelihood = 0.9, omission likelihood = 0.1
-        likelihoods = np.array([
-            s[port] if reward else (1 - s[port])
-            for s in self.states
-        ])
+        likelihoods = np.array([s[port] if reward else 1 - s[port] for s in self.states])
 
         # Compute surprise before updating so it reflects the pre-update prediction.
-        # probability_of_observation is the model's overall predicted probability of the 
-        # observed reward/omission, averaged across all states weighted by current belief
-        probability_of_observation = np.dot(self.belief, likelihoods)
-
-        # surprise = -log(p(observed outcome)), aka Shannon "self information". 
+        # The model's overall predicted probability of the observed reward/omission is
+        # averaged across all states, weighted by current belief
+        # surprise = -log(p(observed outcome)), aka Shannon "self information".
         # (Shannon entropy is the expected surprise across all possible outcomes)
-        surprise = -np.log(max(probability_of_observation, 1e-10))
+        p_outcome = np.dot(self.belief, likelihoods)
+        surprise = -np.log(max(p_outcome, 1e-10))
 
         # Bayes update: multiply each state's belief by how likely it made this observation,
         # then renormalize so beliefs sum to 1.
@@ -144,272 +137,37 @@ class HiddenStatePortLearner:
             "expected_values": self.get_values(),
             "expected_value_stds": self.get_stds(),
         })
-
         return surprise
 
-    def learn(self, ports, rewards):
-        """
-        Run updates on a sequence of port visits and rewards.
-
-        Parameters:
-            ports (list of int or str): Sequence of ports visited (1/2/3 or A/B/C).
-            rewards (list of int or float): Reward received at each port (0 or 1).
-
-        Returns:
-            list of float: Surprise values for each trial.
-        """
-        surprises = []
-        for port, reward in zip(ports, rewards):
-            # Do belief update for port visit (returns surprise)
-            surprises.append(self.update(port, reward))
-        return surprises
-
-    def expected_value(self, port):
-        """Return the expected reward probability for a port, averaged across all states."""
+    def expected_value(self, port, start_port=None):
+        """Get the expected reward probability for a port, averaged across all states
+        (start_port isn't used)."""
         port = resolve_port(port)
         # sum of p(reward) in each state * likelihood of being in that state
-        return sum(
-            self.belief[i] * self.states[i][port]
-            for i in range(len(self.states))
-        )
+        return float(np.dot(self.belief, [s[port] for s in self.states]))
 
     def expected_value_std(self, port):
         """
         Standard deviation of the expected reward for a port, based on the spread of
-        the belief distribution over different states. Reflects how much the possible 
+        the belief distribution over different states. Reflects how much the possible
         states disagree about a port's reward probability.
         """
         port = resolve_port(port)
-        ev = self.expected_value(port)
-        # Variance: Var[X] = E[(X - μ)^2]
-        # Here Var[X] = Σ P(X=x) · (x − μ)^2
-        # X = reward probability of this port, which takes value p_i = states[i][port] with probability belief[i]
-        # μ = expected_value(port)
-        variance = sum(
-            self.belief[i] * (self.states[i][port] - ev) ** 2
-            for i in range(len(self.states))
-        )
-        # sqrt(variance) gives standard deviation
+        # Var[X] = Σ P(X=x) · (x − μ)^2, where X is this port's reward probability, which is
+        # states[i][port] with probability belief[i], and μ is its expected value
+        mean = self.expected_value(port)
+        variance = np.dot(self.belief, [(s[port] - mean) ** 2 for s in self.states])
         return float(np.sqrt(variance))
 
-    def get_values(self):
-        """Return expected reward probabilities as {port: value}."""
-        return {port: self.expected_value(port) for port in REWARD_PORTS}
-
     def get_stds(self):
-        """Return standard deviation of expected reward for each port as {port: std}."""
+        """Get the standard deviation of expected reward for each port as {port: std}."""
         return {port: self.expected_value_std(port) for port in REWARD_PORTS}
 
     def get_state_posteriors(self):
         """
-        Return belief over each state.
+        Get the belief over each state.
 
         Returns:
             list of dict: Each entry has "assignment" ({1: p, 2: p, 3: p}) and "probability".
         """
-        return [
-            {"assignment": dict(s), "probability": float(self.belief[i])}
-            for i, s in enumerate(self.states)
-        ]
-
-    def choice_probabilities(self, available_ports=None):
-        """
-        Softmax choice probabilities over expected values.
-
-        Parameters:
-            available_ports (list of int or str, optional): Which ports to choose among
-                (1/2/3 or A/B/C). Defaults to all 3.
-
-        Returns:
-            dict of {int: float}: {port: probability}
-        """
-        if available_ports is None:
-            available_ports = REWARD_PORTS
-        else:
-            available_ports = [resolve_port(p) for p in available_ports]
-
-        # Get expected reward probability for each port
-        q_vals = np.array([self.expected_value(p) for p in available_ports])
-
-        # Higher beta (inverse temperature) = more likely to choose the highest-value port
-        # Lower beta = choices are more random
-        q_vals_scaled = self.beta * q_vals
-
-        # Subtract the max before exp for numerical stability (doesn't change the output)
-        q_vals_scaled -= q_vals_scaled.max()
-        exp_v = np.exp(q_vals_scaled)
-        # Normalize so choice probabilities sum to 1
-        port_choice_probs = exp_v / exp_v.sum()
-        return dict(zip(available_ports, port_choice_probs.tolist()))
-
-    def reward_nll(self, ports, rewards):
-        """
-        Compute the negative log-likelihood of a reward sequence under this
-        model's current parameters.
-
-        The belief-weighted average reward probability at each trial is used as the
-        predicted reward probability, so the likelihood of each trial is
-        Bernoulli(expected_value(port)).
-
-        Runs the model from scratch with the current params
-        (self.reward_set, self.alpha, self.decay).
-
-        Parameters:
-            ports (list of int or str): Port sequence.
-            rewards (list of int or float): Reward sequence.
-
-        Returns:
-            float: Total negative log-likelihood.
-        """
-        # Create a fresh instance with the same parameters so we don't modify the current model
-        model = HiddenStatePortLearner(reward_set=self.reward_set,
-                                       alpha=self.alpha,
-                                       decay=self.decay)
-        total = 0.0
-        for port, reward in zip(ports, rewards):
-            # Clip away from 0 and 1 so log doesn't blow up (just in case)
-            q = np.clip(model.expected_value(port), 1e-10, 1 - 1e-10)
-            # Bernoulli log-likelihood of reward at this port given the expected value
-            # reward * log(q) + (1-reward) * log(1-q)
-            total -= reward * np.log(q) + (1 - reward) * np.log(1 - q)
-            # Now update beliefs based on this reward
-            model.update(port, reward)
-        return total
-
-    def choice_nll(self, ports, rewards):
-        """
-        Compute the negative log-likelihood of the rat's port CHOICES under
-        this model's current parameters.
-
-        On each trial the rat chooses between the 2 ports it didn't just visit
-        (first trial: all 3 ports available). The choice probability comes from
-        softmax over expected values with self.beta (inverse temperature).
-
-        This is different from nll(), which scores how well the model predicts
-        REWARDS. choice_nll() scores how well the model predicts which PORT
-        the rat chose.
-
-        Parameters:
-            ports (list of int or str): Port the rat chose on each trial.
-            rewards (list of int or float): Reward received on each trial.
-
-        Returns:
-            float: Total negative log-likelihood of the choice sequence.
-        """
-        model = HiddenStatePortLearner(reward_set=self.reward_set,
-                                       alpha=self.alpha, decay=self.decay, beta=self.beta)
-        total = 0.0
-        prev_port = None
-        for port, reward in zip(ports, rewards):
-            # First trial: all 3 ports available. After that: exclude previous port.
-            if prev_port is None:
-                available = REWARD_PORTS
-            else:
-                available = [p for p in REWARD_PORTS if p != prev_port]
-
-            # Softmax probability of the rat's actual choice BEFORE updating
-            probs = model.choice_probabilities(available_ports=available)
-            p_choice = probs[resolve_port(port)]
-            total -= np.log(max(p_choice, 1e-10))
-
-            # Update model with this trial's outcome
-            model.update(port, reward)
-            prev_port = resolve_port(port)
-        return total
-
-    @classmethod
-    def fit_choices(cls, ports, rewards, reward_set=(0.9, 0.5, 0.1), n_starts=8, seed=0):
-        """
-        Fit alpha, decay, and beta (inverse temperature) to maximize the likelihood of the
-        rat's port choices (not rewards).
-
-        See fit_from_starts (in rl/fitting.py) for how the fit works.
-
-        Parameters:
-            ports (list of int or str): Port the rat chose on each trial.
-            rewards (list of int or float): Reward received on each trial.
-            reward_set (tuple of float): The assumed set of reward probabilities.
-                Defaults to (0.9, 0.5, 0.1).
-            n_starts (int): How many starting points to fit from (default 8).
-            seed (int): Seed for the random starting points, so fits are reproducible.
-
-        Returns:
-            HiddenStatePortLearner: Fitted instance with attributes:
-                - choice_nll_    : choice NLL at optimum
-                - choice_bic_    : BIC (3 params: alpha, decay, beta)
-                - choice_result_ : raw scipy OptimizeResult for the best starting point
-                - choice_results_: the OptimizeResult from every starting point
-        """
-        def _obj(params):
-            alpha, decay, beta = params
-            return cls(reward_set=reward_set, alpha=alpha, decay=decay,
-                       beta=beta).choice_nll(ports, rewards)
-
-        # alpha and decay are between 0 and 1, and beta is above 0
-        # (alpha starts at 0.9, since a parameter fit as its logit can't start at exactly 1)
-        values, result, results = fit_from_starts(
-            _obj, start_values=[0.9, 0.05, 1.0], kinds=["unit", "unit", "positive"],
-            n_starts=n_starts, seed=seed,
-        )
-
-        fitted = cls(reward_set=reward_set, alpha=values[0],
-                     decay=values[1], beta=values[2])
-        fitted.choice_nll_ = result.fun
-        fitted.choice_bic_ = bic(result.fun, len(values), len(rewards))
-        fitted.choice_result_ = result
-        fitted.choice_results_ = results
-        return fitted
-
-
-    @classmethod
-    def fit_rewards(cls, ports, rewards, reward_set=(0.9, 0.5, 0.1), n_starts=8, seed=0):
-        """
-        Fit alpha and decay to maximise the likelihood of a reward sequence.
-        The reward_set is treated as fixed and known.
-
-        See fit_from_starts (in rl/fitting.py) for how the fit works.
-
-        Parameters:
-            ports (list of int or str): Port sequence.
-            rewards (list of int or float): Reward sequence.
-            reward_set (tuple of float): The assumed set of reward probabilities.
-                Defaults to (0.9, 0.5, 0.1).
-            n_starts (int): How many starting points to fit from (default 8).
-            seed (int): Seed for the random starting points, so fits are reproducible.
-
-        Returns:
-            HiddenStatePortLearner: Fitted instance with attributes:
-                - reward_nll_    : NLL at optimum
-                - reward_bic_    : BIC (2 params)
-                - reward_result_ : raw scipy OptimizeResult for the best starting point
-                - reward_results_: the OptimizeResult from every starting point
-        """
-        # Objective: construct a fresh model for each candidate parameter set and compute NLL
-        def _obj(params):
-            alpha, decay = params
-            return cls(reward_set=reward_set,
-                       alpha=alpha,
-                       decay=decay).reward_nll(ports, rewards)
-
-        # First starting point: alpha=0.9 (almost a full Bayesian update, since a parameter
-        # fit as its logit can't start at exactly 1), decay=0.05. Both are between 0 and 1
-        values, result, results = fit_from_starts(
-            _obj, start_values=[0.9, 0.05], kinds=["unit", "unit"], n_starts=n_starts, seed=seed,
-        )
-
-        # Fitted = model with the best fit alpha and decay
-        fitted = cls(reward_set=reward_set, alpha=values[0], decay=values[1])
-        fitted.reward_nll_ = result.fun
-        # Compute Bayesian Information Criterion (BIC) as a metric for how good this model is
-        # BIC = k*ln(n) + 2*NLL, where k = number of free parameters and n = number of trials
-        # The k*ln(n) term penalises model complexity, so models with different
-        # numbers of parameters can be compared on the same scale (lower is better)
-        # This model has k=2 (alpha, decay)
-        fitted.reward_bic_ = bic(result.fun, len(values), len(rewards))
-        fitted.reward_result_ = result
-        fitted.reward_results_ = results
-        return fitted
-
-    def get_history(self):
-        """Return the full learning history."""
-        return list(self.history)
+        return [{"assignment": dict(s), "probability": float(b)} for s, b in zip(self.states, self.belief)]
