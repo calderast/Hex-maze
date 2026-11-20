@@ -27,7 +27,8 @@ hexmaze/rl/
 Learns values over reward ports (1/2/3 or A/B/C) from binary reward outcomes (0 or 1).
 
 See the full port learning [README](port_learning/README.md) for detailed docs on all models,
-methods, and code examples.
+methods, and code examples, and the [40_Port_Value_Learning](../../../Tutorials/40_Port_Value_Learning.ipynb)
+tutorial to fit a model to a session and get each port's value per trial.
 
 | Model | Key idea | Free parameters |
 | --- | --- | --- |
@@ -43,14 +44,17 @@ All port learners share the same interface:
 
 | Method | Description |
 | --- | --- |
-| `update(port, reward)` | Update after one port visit. Returns prediction error (RW) or surprise |
+| `update(port, reward, start_port=None)` | Update after one port visit. Returns prediction error (RW) or surprise |
 | `learn(ports, rewards)` | Run updates on a full sequence. Returns list of errors/surprises |
+| `expected_value(port, start_port=None)` | What the learner currently thinks a port is worth |
 | `get_values()` | Current port values as `{port: value}` |
 | `get_history()` | Full trial-by-trial record |
-| `choice_probabilities(available_ports)` | Softmax probabilities over port values |
+| `choice_probabilities(available_ports, start_port=None)` | Softmax probabilities over port values |
 | `reset()` | Re-initialize to starting state |
-| `nll(ports, rewards)` | Negative log-likelihood of a sequence |
-| `fit(ports, rewards)` | (classmethod) Fit free parameters via MLE, returns instance with `.nll_`, `.bic_` |
+| `reward_nll(ports, rewards)` / `choice_nll(ports, rewards)` | Negative log-likelihood of the rewards / the rat's choices |
+| `fit_rewards(ports, rewards)` / `fit_choices(ports, rewards)` | (classmethod) Fit free parameters (plus `beta` for choices), returns instance with `.reward_nll_`, `.reward_bic_` / `.choice_nll_`, `.choice_bic_` |
+
+`port_values_per_trial(model, ports, rewards)` gives each port's value at the start of every trial as a DataFrame.
 
 
 ## Hex value learning

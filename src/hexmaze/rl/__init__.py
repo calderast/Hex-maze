@@ -20,6 +20,7 @@ from .port_learning import (
     BayesianPortLearner,
     HiddenStatePortLearner,
     BayesianHiddenStatePortLearner,
+    port_values_per_trial,
 )
 from .hierarchical import fit_hierarchical, HierarchicalFit
 
@@ -45,4 +46,5 @@ __all__ = [
     "BayesianPortLearner",
     "HiddenStatePortLearner",
     "BayesianHiddenStatePortLearner",
+    "port_values_per_trial",
 ]
