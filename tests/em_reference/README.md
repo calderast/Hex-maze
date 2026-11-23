@@ -16,5 +16,8 @@ temperature, and the probit of a learning rate). Each data file has one row per 
 | `reference_estep.txt` | Each of the 5 subjects fit given a group mean of [0.8, 0.1] and a diagonal covariance of [2.0, 1.5]: subject, the 2 fitted parameters, the posterior covariance (h11, h12, h22), and NLL - log N(x; mu, Sigma) |
 | `reference_data_40_subjects.csv` | 40 subjects (em-jax's `reference_data_full.csv`) |
 | `reference_covariate_40_subjects.csv` | A covariate for each of the 40 subjects (em-jax's `reference_cov.csv`) |
-| `reference_fit.txt` | em's fit of the 40 subjects, with an intercept and the covariate, and a diagonal covariance: `betas` (the effects, intercept then covariate, for each parameter), `sigma` (the diagonal of the covariance), `lml` (-log marginal likelihood), and each subject's fit (`x`). It also has `ses`, `pvalues`, and `ilaplace`, which we don't check |
+| `reference_fit.txt` | em's fit of the 40 subjects, with an intercept and the covariate, and a diagonal covariance: `betas` (the effects, intercept then covariate, for each parameter), `sigma` (the diagonal of the covariance), `lml` (-log marginal likelihood), and each subject's fit (`x`). It also has `ses` and `pvalues` (the standard errors and p-values of the effects, which we check), and `ilaplace`, which we don't |
 | `reference_fit_full_cov.txt` | The same, with a full covariance (`sigma` is the covariance's 1,1, 1,2, and 2,2 entries) |
+| `reference_data_loocv_10_subjects.csv` | 10 subjects (em-jax's `reference_data_loocv.csv`) |
+| `reference_covariate_loocv_10_subjects.csv` | A covariate for each of the 10 subjects (em-jax's `reference_cov_loocv.csv`) |
+| `reference_loocv.txt` | em's fit of the 10 subjects with an intercept and the covariate (`betas`, `sigma`, each subject's `x`), and each subject's held-out score from em's `loocv` (`liks`: -log p(the subject's data given the fit without it)) |

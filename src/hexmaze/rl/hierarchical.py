@@ -84,6 +84,19 @@ every group's iBIC. Note this iBIC is half the scale of BIC (bic in fitting.py),
 compare the two. (Huys et al. 2011 use -2 * log marginal likelihood, and the total number
 of choices instead of the number of sessions.)
 
+To compare models on sessions they weren't fit to, use cross_validate=True (em: loocv).
+For each session, we refit its group distribution on the group's other sessions (starting
+from the full fit), then score the held-out session by -log p(its data | that group
+distribution), averaged over the parameters that group distribution gives the session
+(not just its best fitting ones), with the same Laplace approximation as the E-step. So
+it's how well the model predicts a new session. Lower is better, and to compare models,
+add up every session's held-out NLL. Unlike iBIC, there's no penalty for the number of
+parameters, since a model with too many parameters already predicts held-out sessions
+worse. Dividing by the number of choices scored gives the held-out NLL per choice, and
+exp(-held-out NLL per choice) is roughly the geometric mean probability the model gave
+the rat's choices. This refits each group once per
+session, but every refit starts from the full fit and runs in parallel.
+
 To test whether a group effect is different from 0 (e.g. whether a covariate matters),
 use group_effect_tests (em: emerrors):
 - The information matrix over the group parameters (the effects and Sigma) says how well
@@ -215,6 +228,9 @@ class HierarchicalFit:
             ended with, and how much they changed (to check that EM converged)
         learners (dict): {session key: fitted learner}, filled in by the learners' own
             hierarchical fits (e.g. BaseHexLearner.fit_choices_hierarchical)
+        held_out_nll (dict or None): With cross_validate, {session key: -log p(the
+            session's data | the group distribution fit without it)} (lower is better, see
+            the module docstring). None without cross_validate
 
     Note session_values, session_nll, log_marginal_likelihood and ibic come from the last
     E-step, and group_effects and group_covariance come from the M-step after it. Once EM
@@ -236,6 +252,7 @@ class HierarchicalFit:
     converged: bool
     history: list
     learners: dict = field(default_factory=dict)
+    held_out_nll: dict = None
 
     @property
     def group_sd(self):
@@ -542,9 +559,197 @@ def _group_effect_tests(design, effects, covariance, maps, posterior_covariances
     return standard_errors, t_values, p_values
 
 
+def _check_design_matrix(X, group):
+    """Make sure we can fit a group distribution with this design matrix (for this group)."""
+    n_sessions, n_regressors = X.shape
+    in_group = "" if group is None else f" in group {group!r}"
+    # The M-step divides by (number of sessions - number of columns of X), so we need more
+    # sessions than that (e.g. at least 3 sessions for 2 rats)
+    if n_sessions <= n_regressors:
+        raise ValueError(
+            f"{n_sessions} sessions{in_group} isn't enough to fit a group distribution with {n_regressors} "
+            f"group means per parameter ({list(X.columns)}). We need more sessions than that"
+        )
+    # Each covariate has to tell us something the others don't (e.g. a number covariate
+    # that's the same for every session in a group can't be told apart from the intercept)
+    if np.linalg.matrix_rank(X.to_numpy()) < n_regressors:
+        raise ValueError(
+            f"The covariates{in_group} can't be told apart ({list(X.columns)}), e.g. a covariate is the same "
+            f"for every session. Leave it out (for this group)"
+        )
+
+
+def _run_em(session_nlls, kinds, group_keys, design_matrices, fits, session_starts, setup, n_starts, seed,
+            max_iterations, tolerance, full_covariance, pool, checkpoint, verbose):
+    """
+    Run EM for every group until each one converges (or we hit max_iterations), picking up
+    from the checkpoint if there is one. This updates fits and session_starts.
+
+    Parameters:
+        session_nlls (dict): {session key: its NLL function}
+        kinds (list of str): "unit" or "positive" for each parameter
+        group_keys (dict): {group: [its session keys, in order]}
+        design_matrices (dict): {group: X (pd.DataFrame, one row per session in group_keys)}
+        fits (dict): {group: where its EM is at: its effects, group_covariance, history,
+            estimates (its last E-step), and whether it's converged}
+        session_starts (dict): {session key: the parameter values to start its next fit from}
+        setup (dict): What this fit is, saved with the checkpoint so we never pick up from a
+            different fit
+        pool (ProcessPoolExecutor or None): The processes to fit sessions in
+        (the rest are the same as in fit_hierarchical)
+    """
+    keys = list(session_nlls)
+    # How many EM iterations we've run
+    iteration = 0
+
+    # Pick up where a fit that stopped partway left off
+    if checkpoint is not None and os.path.exists(checkpoint):
+        with open(checkpoint, "rb") as f:
+            saved = pickle.load(f)
+        different = [name for name in setup if saved["setup"].get(name) != setup[name]]
+        if different:
+            raise ValueError(f"{checkpoint} is from a different fit (its {different} don't match this fit's). "
+                             f"Use a new checkpoint file for each fit")
+        fits.update(saved["fits"])
+        session_starts.update(saved["session_starts"])
+        iteration = saved["iteration"]
+        if verbose:
+            print(f"picking up from {checkpoint} after iteration {iteration}")
+
+    def packed(effects, covariance):
+        # All the group parameters in one array (the diagonal of Sigma, unless it's full)
+        return np.concatenate([effects.ravel(), (covariance if full_covariance else np.diag(covariance)).ravel()])
+
+    while iteration < max_iterations:
+        # The groups that haven't converged yet (once a group converges, we stop fitting it)
+        fitting = [group for group in group_keys if not fits[group]["converged"]]
+        if not fitting:
+            break
+        iteration += 1
+
+        # E-step: fit each session given its group mean, for every group at once
+        # One job per session: what to minimize, where to start, how many starting
+        # points (n_starts on the first iteration, then just 1), and a different seed for
+        # each session's random starting points
+        jobs, job_keys = [], []
+        for group in fitting:
+            # Each session's group mean, mu = X @ effects (one row per session)
+            group_means = design_matrices[group].to_numpy() @ fits[group]["effects"]
+            for key, group_mean in zip(group_keys[group], group_means):
+                posterior = _SessionPosterior(session_nlls[key], kinds, group_mean, fits[group]["group_covariance"])
+                n_session_starts = n_starts if iteration == 1 else 1
+                jobs.append((posterior, session_starts[key], n_session_starts, seed + keys.index(key)))
+                job_keys.append(key)
+        estimates = dict(zip(job_keys, _run_e_step(jobs, pool)))
+        clipped = [key for key in job_keys if estimates[key]["hessian_clipped"]]
+        if clipped:
+            warnings.warn(f"Iteration {iteration}: the Hessian wasn't positive definite for sessions {clipped}, "
+                          f"so we clipped its eigenvalues (see _fit_session). Check those sessions' fits")
+
+        for group in fitting:
+            fit = fits[group]
+            fit["estimates"] = {key: estimates[key] for key in group_keys[group]}
+            # How likely this group's data is given the group distribution this iteration started with
+            log_marginal_likelihood = sum(
+                estimate["log_marginal_likelihood"] for estimate in fit["estimates"].values()
+            )
+
+            # M-step
+            effects, group_covariance = _m_step(
+                design_matrices[group].to_numpy(),
+                np.array([estimates[key]["x"] for key in group_keys[group]]),
+                [np.linalg.inv(estimates[key]["hessian"]) for key in group_keys[group]],
+                full_covariance,
+            )
+
+            # How much the group parameters changed: relative change, or absolute change for
+            # ones under 0.01 (so ones near 0 can still converge). This is em's stopping rule
+            old, new = packed(fit["effects"], fit["group_covariance"]), packed(effects, group_covariance)
+            change = np.max(np.abs(new - old) / np.maximum(np.abs(old), 0.01))
+
+            # The next iteration uses the new group distribution
+            fit["effects"], fit["group_covariance"] = effects, group_covariance
+            # Keep a record of every iteration (to check that EM converged)
+            fit["history"].append({
+                "iteration": iteration, "log_marginal_likelihood": log_marginal_likelihood,
+                "group_effects": effects.copy(), "group_sd": np.sqrt(np.diag(group_covariance)),
+                "change": change,
+            })
+            fit["converged"] = change < tolerance
+            if verbose:
+                print(f"iteration {iteration}{'' if group is None else f', {group}'}: "
+                      f"log marginal likelihood {log_marginal_likelihood:.2f}, change {change:.2g}")
+
+        # The next iteration starts each session from where it ended up this iteration
+        session_starts.update({key: estimates[key]["values"] for key in job_keys})
+        if checkpoint is not None:
+            # Write to a temporary file first, so stopping partway through writing
+            # can't break the checkpoint
+            with open(f"{checkpoint}.tmp", "wb") as f:
+                pickle.dump({"setup": setup, "fits": fits, "session_starts": session_starts,
+                             "iteration": iteration}, f)
+            os.replace(f"{checkpoint}.tmp", checkpoint)
+
+
+def _held_out_nlls(session_nlls, kinds, group_keys, design_matrices, fits, setup, seed, max_iterations,
+                   tolerance, full_covariance, pool, checkpoint, verbose):
+    """
+    Get how well each session is predicted by the group distribution fit without it
+    (leave-one-session-out cross validation, em: loocv).
+
+    For each session, we refit its group's distribution on the group's other sessions,
+    starting from the full fit (each session starts from its parameters in the full fit,
+    the same as em). Every one of these refits runs as its own group, so they all run in
+    parallel. Then we score the held-out session by -log p(its data | that group
+    distribution), integrating over its parameters with the same Laplace approximation as
+    the E-step (em: heldoutsubject_laplace).
+
+    Returns:
+        dict: {session key: its held-out NLL} (lower is better)
+    """
+    held_out_keys, held_out_groups, held_out_nlls, held_out_designs, held_out_fits, starts = {}, {}, {}, {}, {}, {}
+    for group, keys in group_keys.items():
+        for held_out in keys:
+            held_out_groups[held_out] = group
+            # The group's other sessions, keyed (held-out session, session), since each
+            # session is in every one of its group's refits except its own
+            held_out_keys[held_out] = [(held_out, key) for key in keys if key != held_out]
+            for key in keys:
+                if key != held_out:
+                    held_out_nlls[(held_out, key)] = session_nlls[key]
+                    starts[(held_out, key)] = fits[group]["estimates"][key]["values"]
+            # The group's design matrix without the held-out session's row
+            X = design_matrices[group].drop(index=[held_out])
+            X.index = held_out_keys[held_out]
+            _check_design_matrix(X, held_out)
+            held_out_designs[held_out] = X
+            # Start from the full fit's group distribution
+            held_out_fits[held_out] = {
+                "effects": fits[group]["effects"].copy(), "group_covariance": fits[group]["group_covariance"].copy(),
+                "history": [], "estimates": None, "converged": False,
+            }
+
+    # Refit each group without each of its sessions (one starting point each, since we start
+    # from the full fit)
+    _run_em(held_out_nlls, kinds, held_out_keys, held_out_designs, held_out_fits, starts,
+            {**setup, "cross validation": True}, 1, seed, max_iterations, tolerance, full_covariance, pool,
+            checkpoint, verbose)
+
+    # Score each held-out session given its refit group distribution
+    jobs = []
+    for held_out, group in held_out_groups.items():
+        # The held-out session's group mean, mu = X @ effects (with its row of the full design matrix)
+        group_mean = design_matrices[group].loc[[held_out]].to_numpy()[0] @ held_out_fits[held_out]["effects"]
+        posterior = _SessionPosterior(session_nlls[held_out], kinds, group_mean,
+                                      held_out_fits[held_out]["group_covariance"])
+        jobs.append((posterior, fits[group]["estimates"][held_out]["values"], 1, seed))
+    estimates = _run_e_step(jobs, pool)
+    return {held_out: -estimate["log_marginal_likelihood"] for held_out, estimate in zip(held_out_groups, estimates)}
+
+
 def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covariates=None, groups=None,
-                     full_covariance=False, n_starts=8, seed=0, max_iterations=100, tolerance=1e-3, max_workers=None,
-                     checkpoint=None, verbose=False):
+                     full_covariance=False, cross_validate=False, n_starts=8, seed=0, max_iterations=100,
+                     tolerance=1e-3, max_workers=None, checkpoint=None, verbose=False):
     """
     Fit the same model to many sessions hierarchically, with EM (see the module docstring).
 
@@ -576,6 +781,10 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             sessions (so they can be correlated). If False (default), each parameter has
             its own spread, and they're independent. A full covariance needs a lot of
             sessions to fit
+        cross_validate (bool): If True, also get how well each session is predicted by the
+            group distribution fit without it (leave-one-session-out cross validation, see
+            the module docstring). This refits each group once per session, so it takes
+            longer. False (default) skips it
         n_starts (int): How many starting points to fit each session from on the first
             iteration (see fit_from_starts). After that, each session starts from where it
             ended up on the iteration before, which is much faster
@@ -590,15 +799,18 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
         checkpoint (str, optional): A file to save the fit to after every iteration. If
             the file already exists (e.g. the fit stopped partway), we pick up where it
             left off instead of starting over (or if it already finished, just return it).
-            Use a new file for each fit (picking up from a different fit's file raises an error)
+            Use a new file for each fit (picking up from a different fit's file raises an
+            error). The cross validation saves to its own file next to it (e.g.
+            fit_cross_validation.pkl for fit.pkl)
         verbose (bool): If True, print the log marginal likelihood and how much the group
             parameters changed after each iteration
 
     Returns:
         HierarchicalFit: The group distribution, each session's parameters, the log
-            marginal likelihood and iBIC, and the tests of the group effects. With groups,
-            {group: HierarchicalFit} instead, one for each group (to compare models across
-            every group, add up their iBICs)
+            marginal likelihood and iBIC, the tests of the group effects, and (with
+            cross_validate) each session's held-out NLL. With groups, {group:
+            HierarchicalFit} instead, one for each group (to compare models across every
+            group, add up their iBICs or held-out NLLs)
     """
     keys = list(session_nlls)
     param_names = list(param_names) if param_names is not None else [f"param {i}" for i in range(len(kinds))]
@@ -614,23 +826,7 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
     design_matrices, categories = {}, {}
     for group in group_names:
         design_matrices[group], categories[group] = _sessions_design_matrix(covariates, group_keys[group])
-        # The M-step divides by (number of sessions - number of columns of X), so we need more
-        # sessions than that (e.g. at least 3 sessions for 2 rats)
-        n_sessions, n_regressors = design_matrices[group].shape
-        if n_sessions <= n_regressors:
-            raise ValueError(
-                f"{n_sessions} sessions{'' if group is None else f' in group {group!r}'} isn't enough to fit a "
-                f"group distribution with {n_regressors} group means per parameter "
-                f"({list(design_matrices[group].columns)}). We need more sessions than that"
-            )
-        # Each covariate has to tell us something the others don't (e.g. a number covariate
-        # that's the same for every session in a group can't be told apart from the intercept)
-        if np.linalg.matrix_rank(design_matrices[group].to_numpy()) < n_regressors:
-            raise ValueError(
-                f"The covariates{'' if group is None else f' in group {group!r}'} can't be told apart "
-                f"({list(design_matrices[group].columns)}), e.g. a covariate is the same for every session. "
-                f"Leave it out (for this group)"
-            )
+        _check_design_matrix(design_matrices[group], group)
 
     # Start each group from a broad group distribution, centered on the starting values (the
     # intercept is the starting values, and every covariate's effect is 0). Each group keeps:
@@ -649,8 +845,6 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
     # Where to start fitting each session from (after the first iteration, this is where
     # the session ended up the iteration before)
     session_starts = {key: list(start_values) for key in keys}
-    # How many EM iterations we've run
-    iteration = 0
 
     # What this fit is, saved with the checkpoint so we never pick up from a different fit
     setup = {
@@ -659,94 +853,20 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
         "design matrix columns": {group: list(X.columns) for group, X in design_matrices.items()},
     }
 
-    # Pick up where a fit that stopped partway left off
-    if checkpoint is not None and os.path.exists(checkpoint):
-        with open(checkpoint, "rb") as f:
-            saved = pickle.load(f)
-        different = [name for name in setup if saved["setup"].get(name) != setup[name]]
-        if different:
-            raise ValueError(f"{checkpoint} is from a different fit (its {different} don't match this fit's). "
-                             f"Use a new checkpoint file for each fit")
-        fits, session_starts, iteration = saved["fits"], saved["session_starts"], saved["iteration"]
-        if verbose:
-            print(f"picking up from {checkpoint} after iteration {iteration}")
-
-    def packed(effects, covariance):
-        # All the group parameters in one array (the diagonal of Sigma, unless it's full)
-        return np.concatenate([effects.ravel(), (covariance if full_covariance else np.diag(covariance)).ravel()])
-
     # Fit the sessions in parallel, with the same processes for every iteration (starting
     # new ones each iteration would be slow)
+    held_out_nll = {}
     with ProcessPoolExecutor(max_workers=max_workers) if max_workers != 1 else nullcontext() as pool:
-        while iteration < max_iterations:
-            # The groups that haven't converged yet (once a group converges, we stop fitting it)
-            fitting = [group for group in group_names if not fits[group]["converged"]]
-            if not fitting:
-                break
-            iteration += 1
-
-            # E-step: fit each session given its group mean, for every group at once
-            # One job per session: what to minimize, where to start, how many starting
-            # points (n_starts on the first iteration, then just 1), and a different seed for
-            # each session's random starting points
-            jobs, job_keys = [], []
-            for group in fitting:
-                # Each session's group mean, mu = X @ effects (one row per session)
-                group_means = design_matrices[group].to_numpy() @ fits[group]["effects"]
-                for key, group_mean in zip(group_keys[group], group_means):
-                    posterior = _SessionPosterior(session_nlls[key], kinds, group_mean, fits[group]["group_covariance"])
-                    n_session_starts = n_starts if iteration == 1 else 1
-                    jobs.append((posterior, session_starts[key], n_session_starts, seed + keys.index(key)))
-                    job_keys.append(key)
-            estimates = dict(zip(job_keys, _run_e_step(jobs, pool)))
-            clipped = [key for key in job_keys if estimates[key]["hessian_clipped"]]
-            if clipped:
-                warnings.warn(f"Iteration {iteration}: the Hessian wasn't positive definite for sessions {clipped}, "
-                              f"so we clipped its eigenvalues (see _fit_session). Check those sessions' fits")
-
-            for group in fitting:
-                fit = fits[group]
-                fit["estimates"] = {key: estimates[key] for key in group_keys[group]}
-                # How likely this group's data is given the group distribution this iteration started with
-                log_marginal_likelihood = sum(
-                    estimate["log_marginal_likelihood"] for estimate in fit["estimates"].values()
-                )
-
-                # M-step
-                effects, group_covariance = _m_step(
-                    design_matrices[group].to_numpy(),
-                    np.array([estimates[key]["x"] for key in group_keys[group]]),
-                    [np.linalg.inv(estimates[key]["hessian"]) for key in group_keys[group]],
-                    full_covariance,
-                )
-
-                # How much the group parameters changed: relative change, or absolute change for
-                # ones under 0.01 (so ones near 0 can still converge). This is em's stopping rule
-                old, new = packed(fit["effects"], fit["group_covariance"]), packed(effects, group_covariance)
-                change = np.max(np.abs(new - old) / np.maximum(np.abs(old), 0.01))
-
-                # The next iteration uses the new group distribution
-                fit["effects"], fit["group_covariance"] = effects, group_covariance
-                # Keep a record of every iteration (to check that EM converged)
-                fit["history"].append({
-                    "iteration": iteration, "log_marginal_likelihood": log_marginal_likelihood,
-                    "group_effects": effects.copy(), "group_sd": np.sqrt(np.diag(group_covariance)),
-                    "change": change,
-                })
-                fit["converged"] = change < tolerance
-                if verbose:
-                    print(f"iteration {iteration}{'' if group is None else f', {group}'}: "
-                          f"log marginal likelihood {log_marginal_likelihood:.2f}, change {change:.2g}")
-
-            # The next iteration starts each session from where it ended up this iteration
-            session_starts.update({key: estimates[key]["values"] for key in job_keys})
-            if checkpoint is not None:
-                # Write to a temporary file first, so stopping partway through writing
-                # can't break the checkpoint
-                with open(f"{checkpoint}.tmp", "wb") as f:
-                    pickle.dump({"setup": setup, "fits": fits, "session_starts": session_starts,
-                                 "iteration": iteration}, f)
-                os.replace(f"{checkpoint}.tmp", checkpoint)
+        _run_em(session_nlls, kinds, group_keys, design_matrices, fits, session_starts, setup, n_starts, seed,
+                max_iterations, tolerance, full_covariance, pool, checkpoint, verbose)
+        if cross_validate:
+            if verbose:
+                print("cross validating")
+            root, extension = os.path.splitext(str(checkpoint)) if checkpoint is not None else (None, None)
+            held_out_nll = _held_out_nlls(
+                session_nlls, kinds, group_keys, design_matrices, fits, setup, seed, max_iterations, tolerance,
+                full_covariance, pool, None if checkpoint is None else f"{root}_cross_validation{extension}", verbose,
+            )
 
     results = {}
     for group in group_names:
@@ -793,5 +913,6 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             n_iterations=len(fit["history"]),
             converged=fit["converged"],
             history=fit["history"],
+            held_out_nll={key: held_out_nll[key] for key in group_keys[group]} if cross_validate else None,
         )
     return results[None] if groups is None else results
