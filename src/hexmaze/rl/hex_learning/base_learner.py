@@ -1245,8 +1245,8 @@ class BaseHexLearner:
         return fit_params, fixed, free_names, constructor_kwargs
 
     @classmethod
-    def fit_choices_hierarchical(cls, sessions, rules=None, score_at="steps", covariates=None, full_covariance=False,
-                                 n_starts=8, seed=0, max_iterations=100, tolerance=1e-3,
+    def fit_choices_hierarchical(cls, sessions, rules=None, score_at="steps", covariates=None, groups=None,
+                                 full_covariance=False, n_starts=8, seed=0, max_iterations=100, tolerance=1e-3,
                                  max_workers=None, checkpoint=None, verbose=False, **kwargs):
         """
         Fit the parameters that make the rat's hex-to-hex choices most likely, for many
@@ -1275,6 +1275,10 @@ class BaseHexLearner:
                 key) and one column per covariate, e.g. a "rat" column to give each rat its
                 own group mean (see fit_hierarchical). None (default) uses one group mean
                 for every session
+            groups (dict or pd.Series, optional): {session key: its group}, e.g. its rat, to
+                give each group its own group distribution (its own group mean and spread,
+                like Krausz et al. 2023 do for each rat, see fit_hierarchical). None (default)
+                fits one group distribution for every session
             full_covariance (bool): If True, fit how the parameters covary across sessions
                 too (this needs a lot of sessions). If False (default), each parameter has
                 its own spread across sessions
@@ -1302,6 +1306,7 @@ class BaseHexLearner:
                 - choice_nll_ : the session's choice NLL at its parameters
                 - choices_scored_ : how many of the rat's choices were scored
                 - score_at_ : the score_at used to fit
+                With groups, {group: HierarchicalFit} instead, one for each group
         """
         # Every session fits the same parameters, so sort them out from the first session
         first_maze = next(iter(sessions.values()))["maze"]
@@ -1335,19 +1340,21 @@ class BaseHexLearner:
             kinds=[fit_params[name][1] for name in free_names],
             param_names=free_names,
             covariates=covariates,
+            groups=groups,
             full_covariance=full_covariance,
             n_starts=n_starts, seed=seed, max_iterations=max_iterations, tolerance=tolerance,
             max_workers=max_workers, checkpoint=checkpoint, verbose=verbose,
         )
 
         # Make a new, untrained learner for each session with that session's parameters
-        for key, fit in fits.items():
-            values = result.session_values[key]
-            learner = fit.build(values)
-            learner.choice_nll_ = result.session_nll[key]
-            learner.choices_scored_ = n_choices[key]
-            learner.score_at_ = score_at
-            result.learners[key] = learner
+        # (in its group's fit, with groups)
+        for group_result in ([result] if groups is None else result.values()):
+            for key, values in group_result.session_values.items():
+                learner = fits[key].build(values)
+                learner.choice_nll_ = group_result.session_nll[key]
+                learner.choices_scored_ = n_choices[key]
+                learner.score_at_ = score_at
+                group_result.learners[key] = learner
         return result
 
     #  Self-generated simulation

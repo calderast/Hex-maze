@@ -2,13 +2,7 @@
 hierarchical.py
 
 Fit the same model to many sessions at once, hierarchically. Each session gets its own
-parameters, but they're all drawn from one group distribution, which we fit too.
-
-This is the expectation-maximization (EM) method with a Laplace approximation from
-Huys et al. 2011 ("Disentangling the roles of approach, activation and valence in
-instrumental and pavlovian responding"), the same thing the Daw lab's em package does
-(https://github.com/ndawlab/em). tests/test_hierarchical.py checks that we get the same
-answers as em on its own reference data.
+parameters, but they're all drawn from a group distribution, which we fit too.
 
 Why fit hierarchically: when we fit every session on its own, a parameter that one
 session can't pin down can run off to an extreme (e.g. a learning rate of 1). Fitting
@@ -17,38 +11,93 @@ How much depends on how well that session pins them down: a session with a lot o
 information about a parameter barely moves, and one with very little gets pulled most
 of the way to the group.
 
+Where this comes from:
+- The method is EM with a Laplace approximation from Huys et al. 2011 ("Disentangling
+  the roles of approach, activation and valence in instrumental and pavlovian
+  responding").
+- We replicate the Daw lab's em package (https://github.com/ndawlab/em, the Julia version,
+  in src/emcore.jl). Each piece that replicates em says which em function it matches
+  (e.g. "em: mstep!"), and tests/test_hierarchical.py checks that we get the same answers
+  as em on em's own reference data.
+- Krausz et al. 2023 ("Dual credit assignment processes underlie dopamine signals in a
+  complex spatial environment") fit their models this way. From their methods, the pieces
+  we match are:
+    "Session-level parameters were themselves modeled as arising from a distinct
+    population-level Gaussian distribution over sessions for each rat"
+        -> groups (each rat gets its own group mean and its own spread)
+    "an expectation-maximization algorithm with a Laplace approximation to the
+    session-level marginal likelihoods"
+        -> the EM below
+    "For hypothesis testing on population-level parameters ... we computed an estimate of
+    the information matrix over the population-level parameters, taking account of the
+    so-called 'missing information' due to optimization in the E-step"
+        -> group_effect_tests
+  They approximated the missing information with the Hessian of a single Newton-Raphson
+  step. We use em's current version instead (Louis's 1982 formula with the Laplace
+  approximation), which gets the missing information straight from each session's
+  posterior covariance from the E-step, and which we can check against em's reference
+  answers.
+
 How it works:
 - Each parameter is fit as an unbounded number, the same as in fit_from_starts (the
   logit of a parameter between 0 and 1, and the log of a parameter above 0). Across
   sessions, these are normally distributed with covariance Sigma (diagonal by default,
   so each parameter has its own spread).
-- The group mean can depend on things we know about each session (covariates, e.g. which
-  rat it is, or whether it's a barrier change session): each session's group mean is
-  mu = X @ effects, where X is the session's row of the design matrix (a 1 for the
-  intercept, then its covariates). With no covariates, every session has the same mean.
+- The group mean can depend on things we know about each session (covariates, e.g.
+  whether it's a barrier change session): each session's group mean is mu = X @ effects,
+  where X is the session's row of the design matrix (a 1 for the intercept, then its
+  covariates). With no covariates, every session has the same mean.
 - Starting from a broad group distribution, we repeat:
-    1. E-step: for each session, find the parameters that minimize
+    1. E-step (em: estep!): for each session, find the parameters that minimize
        NLL - log N(x; mu, Sigma), i.e. the best fit given the group distribution
        (the MAP), and the Hessian there. The Hessian says how well the session pins
        down its parameters: its posterior is approximately normal, centered on the
        MAP with covariance inverse(Hessian) (the Laplace approximation).
-    2. M-step: regress the sessions' MAPs on X to get the effects (with no covariates,
-       this is just the mean of the MAPs). Sigma is the spread of the MAPs around their
-       group means plus the sessions' posterior covariances, divided by
+    2. M-step (em: mstep!): regress the sessions' MAPs on X to get the effects (with no
+       covariates, this is just the mean of the MAPs). Sigma is the spread of the MAPs
+       around their group means plus the sessions' posterior covariances, divided by
        (number of sessions - number of columns of X).
-  until the effects and Sigma stop changing (by less than 0.1%).
+  until the effects and Sigma stop changing (by less than 0.1%, em's stopping rule).
 
-To compare models, use the integrated BIC (iBIC), the same way em does:
+Where we're different from em (we still get em's answers on its reference data):
+- We take the Hessian with finite differences (em uses automatic differentiation).
+- If a session's Hessian isn't positive definite, we clip its eigenvalues (see
+  _fit_session). em uses inverse(Sigma) instead.
+- We start from a group sd of 10 (em starts at 1), and fit each session from several
+  starting points on the first iteration.
+- groups (em fits one group distribution).
+
+Each rat its own group distribution (Krausz et al. 2023): pass groups ({session key: its
+rat}) and each rat gets its own group mean and its own spread. This is the same as
+calling fit_hierarchical once per rat, but every rat's sessions are fit in the same
+E-step, so they all run in parallel. Each rat stops once its own group distribution
+stops changing. (A rat covariate is different: it gives each rat its own group mean, but
+one spread for every rat.)
+
+To compare models, use the integrated BIC (iBIC, em: ibic):
     iBIC = -log marginal likelihood + (number of group parameters) / 2 * ln(number of sessions)
 where the log marginal likelihood (how likely the data is given the group distribution,
 integrating over each session's parameters) comes from the same Laplace approximation.
 Lower is better. The group parameters are the effects and Sigma (so with no covariates
-and a diagonal Sigma, a mean and a spread for each fitted parameter). To check whether a covariate matters, compare the
-iBIC with and without it.
+and a diagonal Sigma, a mean and a spread for each fitted parameter). With groups, add up
+every group's iBIC. Note this iBIC is half the scale of BIC (bic in fitting.py), so don't
+compare the two. (Huys et al. 2011 use -2 * log marginal likelihood, and the total number
+of choices instead of the number of sessions.)
 
-Note this iBIC is half the scale of BIC (bic in fitting.py), so don't compare the two.
-(Huys et al. 2011 use -2 * log marginal likelihood, and the total number of choices
-instead of the number of sessions.)
+To test whether a group effect is different from 0 (e.g. whether a covariate matters),
+use group_effect_tests (em: emerrors):
+- The information matrix over the group parameters (the effects and Sigma) says how well
+  the data pins them down. If we knew every session's parameters exactly, it would be
+  the standard one for a normal distribution (the "complete information").
+- But we only know each session's parameters up to its posterior covariance from the
+  E-step, so we take away the information we're missing because of that (the "missing
+  information").
+- The standard errors are the square roots of the diagonal of its inverse, and the
+  p-values are from a t test with (number of sessions - number of columns of X) degrees
+  of freedom.
+These are tests on unbounded numbers, so the intercept's test is whether the group mean
+is 0 in unbounded numbers (e.g. a median of 0.5 for a parameter between 0 and 1), which
+usually isn't what we want to know. The covariates' tests are the useful ones.
 """
 
 import os
@@ -60,6 +109,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+from scipy.stats import t as t_distribution
 
 from .fitting import _FROM_UNBOUNDED, _from_unbounded, _to_unbounded, fit_from_starts
 
@@ -102,6 +152,33 @@ def _design_matrix(covariates, categories):
     return pd.DataFrame(columns, index=covariates.index)
 
 
+def _sessions_design_matrix(covariates, keys):
+    """
+    Get the design matrix X for these sessions (see _design_matrix), and the categories of
+    each category covariate.
+
+    Parameters:
+        covariates (pd.DataFrame or None): One row per session, one column per covariate
+        keys (list): The sessions, in order
+
+    Returns:
+        tuple: X (pd.DataFrame, one row per session in keys), and {covariate: [its
+            categories, in order]} for the category covariates
+    """
+    if covariates is None:
+        # No covariates, so X is just the intercept (every session has the same group mean)
+        return pd.DataFrame({"intercept": np.ones(len(keys))}, index=keys), {}
+    # Put the covariate rows in the same order as the sessions
+    covariates = covariates.loc[keys]
+    # Every text column is a category covariate. Sort its categories, so the first one
+    # (the one the intercept is) is always the same
+    categories = {
+        name: sorted(values.unique()) for name, values in covariates.items()
+        if not pd.api.types.is_numeric_dtype(values)
+    }
+    return _design_matrix(covariates, categories), categories
+
+
 @dataclass
 class HierarchicalFit:
     """
@@ -119,7 +196,12 @@ class HierarchicalFit:
             column of the design matrix, one column per parameter. With no covariates,
             this is just the group mean (the intercept)
         group_covariance (np.ndarray): Sigma, the covariance of the group distribution
-        covariates (pd.DataFrame or None): The covariates the fit was given
+        group_effect_tests (pd.DataFrame): Whether each group effect is different from 0
+            (see the module docstring). One row per effect (indexed by the column of the
+            design matrix and the parameter), with its estimate (the same as in
+            group_effects), standard error, t value, and p-value
+        covariates (pd.DataFrame or None): The covariates the fit was given (for this fit's
+            sessions)
         categories (dict): {covariate: [its categories, in order]} for the category covariates
         session_values (dict): {session key: [the session's parameter values]}, in normal units
         session_nll (dict): {session key: the session's NLL at its parameter values}
@@ -143,6 +225,7 @@ class HierarchicalFit:
     kinds: list
     group_effects: pd.DataFrame
     group_covariance: np.ndarray
+    group_effect_tests: pd.DataFrame
     covariates: pd.DataFrame
     categories: dict
     session_values: dict
@@ -228,7 +311,8 @@ class HierarchicalFit:
 class _SessionPosterior:
     """
     One session's NLL - log N(x; mu, Sigma) (leaving out the constant
-    0.5 * log|2 pi Sigma|), the thing the E-step minimizes for that session.
+    0.5 * log|2 pi Sigma|), the thing the E-step minimizes for that session
+    (em: gaussianprior).
 
     __call__ takes parameter values (for fit_from_starts), and of_unbounded takes the
     optimizer's unbounded numbers (for the Hessian). This is a class instead of a
@@ -286,7 +370,8 @@ def _hessian(f, x, step=_HESSIAN_STEP):
 def _fit_session(job):
     """
     Run the E-step for one session: find its MAP given the group distribution, the
-    Hessian there, and its log marginal likelihood (Laplace approximation).
+    Hessian there, and its log marginal likelihood (Laplace approximation). This is
+    em's estep! for one session.
 
     This is at module level so each session can run in its own process.
     """
@@ -312,7 +397,8 @@ def _fit_session(job):
     # direction). If it isn't (e.g. the MAP is on a flat stretch, or the finite differences
     # are noisy), its inverse would have negative variances. So clip its eigenvalues to at
     # least the smallest eigenvalue of inverse(Sigma), i.e. the session is never less sure
-    # of its parameters than the group distribution alone would make it
+    # of its parameters than the group distribution alone would make it. (This is
+    # different from em, which uses inverse(Sigma) itself as the Hessian then)
     eigenvalues, eigenvectors = np.linalg.eigh(hessian)
     hessian_clipped = eigenvalues.min() <= 0
     if hessian_clipped:
@@ -321,7 +407,7 @@ def _fit_session(job):
 
     # log p(data | mu, Sigma) is approximately
     #     -NLL(x) - 0.5 * (x - mu)' inverse(Sigma) (x - mu) - 0.5 * log|Sigma| - 0.5 * log|Hessian|
-    # (the integral of a normal centered on the MAP, see the module docstring)
+    # (the integral of a normal centered on the MAP, em: lml for one session)
     log_marginal_likelihood = (
         # How well the MAP fits the data, and how close it is to the group mean
         -nll - posterior.penalty(x)
@@ -343,9 +429,122 @@ def _run_e_step(jobs, pool):
     return list(pool.map(_fit_session, jobs))
 
 
-def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covariates=None, full_covariance=False,
-                     n_starts=8, seed=0, max_iterations=100, tolerance=1e-3, max_workers=None, checkpoint=None,
-                     verbose=False):
+def _m_step(design, maps, posterior_covariances, full_covariance):
+    """
+    Run the M-step for one group (em: mstep!): the effects are the regression of the
+    sessions' MAPs on X (with no covariates, the mean of the MAPs). The group covariance is
+    the spread of the MAPs around their group means plus each session's posterior
+    covariance, over (number of sessions - number of columns of X) since we estimated the
+    effects from them too.
+
+    Parameters:
+        design (np.ndarray): X, one row per session
+        maps (np.ndarray): Each session's MAP (unbounded numbers), one row per session
+        posterior_covariances (list of np.ndarray): How unsure each session's MAP is
+            (inverse(Hessian), the Laplace approximation)
+        full_covariance (bool): Whether to fit how the parameters covary (if not, keep only
+            the diagonal of the covariance)
+
+    Returns:
+        tuple: The new effects (one row per column of X, one column per parameter) and the
+            new group covariance
+    """
+    n_sessions, n_regressors = design.shape
+    # Least squares regression of the MAPs on X: the effects that best predict each
+    # session's MAP from its covariates
+    effects = np.linalg.lstsq(design, maps, rcond=None)[0]
+    # How far each session's MAP is from its new group mean
+    residuals = maps - design @ effects
+    # Sigma = (spread of the MAPs around their group means + how unsure each MAP is),
+    # averaged over sessions
+    covariance = (residuals.T @ residuals + np.sum(posterior_covariances, axis=0)) / (n_sessions - n_regressors)
+    # Keep only the diagonal (each parameter's own spread), unless we're fitting how
+    # parameters covary too
+    if not full_covariance:
+        covariance = np.diag(np.diag(covariance))
+    return effects, covariance
+
+
+def _group_effect_tests(design, effects, covariance, maps, posterior_covariances, full_covariance):
+    """
+    Get the standard error, t value and p-value of each group effect, from the information
+    matrix over the group parameters, corrected for the missing information (see the module
+    docstring).
+
+    This is em's emerrors (with groupinformation, informationmatrixsigma and
+    missing_information), and it's what Krausz et al. 2023 used for "hypothesis testing on
+    population-level parameters".
+
+    Parameters:
+        design (np.ndarray): X, one row per session
+        effects (np.ndarray): The group effects, one row per column of X, one column per parameter
+        covariance (np.ndarray): Sigma, the group covariance
+        maps (np.ndarray): Each session's MAP (unbounded numbers), one row per session
+        posterior_covariances (list of np.ndarray): Each session's posterior covariance
+        full_covariance (bool): Whether every entry of Sigma was fit, or just its diagonal
+
+    Returns:
+        tuple of np.ndarray: The standard error, t value and p-value of each effect, in
+            the order of effects.ravel() (each column of X, then each parameter)
+    """
+    n_sessions, n_regressors = design.shape
+    n_params = effects.shape[1]
+    precision = np.linalg.inv(covariance)
+
+    # The entries of Sigma we fit: the diagonal, or the diagonal and everything above it.
+    # sigma_directions[k] is how Sigma changes when the k-th of them goes up by 1 (an
+    # off-diagonal entry is in Sigma twice, at [i, j] and [j, i])
+    pairs = [(i, j) for i in range(n_params) for j in range(i, n_params) if full_covariance or i == j]
+    sigma_directions = []
+    for i, j in pairs:
+        direction = np.zeros((n_params, n_params))
+        direction[i, j] = direction[j, i] = 1.0
+        sigma_directions.append(direction)
+    n_effects = n_regressors * n_params
+
+    # The complete information (as if we knew every session's parameters exactly, em:
+    # groupinformation). The effects and Sigma don't share any information, so it's 2 blocks:
+    complete = np.zeros((n_effects + len(pairs),) * 2)
+    # For the effects, the inverse of the regression's covariance, inverse(X'X) kron Sigma
+    complete[:n_effects, :n_effects] = np.linalg.inv(np.kron(np.linalg.inv(design.T @ design), covariance))
+    # For Sigma, (n - number of columns of X) / 2 * trace(inverse(Sigma) dSigma_k inverse(Sigma) dSigma_l)
+    # (n - number of columns of X to match the M-step). em: informationmatrixsigma, which
+    # writes out each case of this trace
+    for k, direction_k in enumerate(sigma_directions):
+        for l, direction_l in enumerate(sigma_directions):
+            complete[n_effects + k, n_effects + l] = (n_sessions - n_regressors) / 2 * np.trace(
+                precision @ direction_k @ precision @ direction_l
+            )
+
+    # The missing information (Louis's formula, em: missing_information): for each session,
+    # J V J', where V is its posterior covariance and J is how the gradient of its
+    # log N(x; mu, Sigma) with respect to each group parameter changes with x
+    missing = np.zeros_like(complete)
+    for row, x, posterior_covariance in zip(design, maps, posterior_covariances):
+        residual = x - row @ effects
+        J = np.vstack(
+            # One row for each effect (each column of X, then each parameter)
+            [row[r] * precision[:, p] for r in range(n_regressors) for p in range(n_params)]
+            # One row for each entry of Sigma we fit
+            + [precision @ direction @ precision @ residual for direction in sigma_directions]
+        )
+        missing += J @ posterior_covariance @ J.T
+
+    # The effects' covariance is their block of the inverse of the information matrix
+    effect_covariance = np.linalg.inv(complete - missing)[:n_effects, :n_effects]
+    # A negative variance means the information matrix isn't positive definite (e.g. EM
+    # hasn't converged), so there's no standard error
+    variances = np.diag(effect_covariance)
+    standard_errors = np.sqrt(np.where(variances > 0, variances, np.nan))
+    t_values = effects.ravel() / standard_errors
+    # Two sided, with (number of sessions - number of columns of X) degrees of freedom (em: emerrors)
+    p_values = 2 * t_distribution.sf(np.abs(t_values), n_sessions - n_regressors)
+    return standard_errors, t_values, p_values
+
+
+def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covariates=None, groups=None,
+                     full_covariance=False, n_starts=8, seed=0, max_iterations=100, tolerance=1e-3, max_workers=None,
+                     checkpoint=None, verbose=False):
     """
     Fit the same model to many sessions hierarchically, with EM (see the module docstring).
 
@@ -368,6 +567,11 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             shifts the group mean in proportion to it (so center it, e.g. day - mean day, to
             make the intercept the average session). None (default) uses one group mean
             for every session
+        groups (dict or pd.Series, optional): {session key: its group} (e.g. its rat), to fit
+            a separate group distribution for each group (see the module docstring). The
+            covariates then work within each group (e.g. a session_type covariate gives each
+            rat its own barrier vs probability effect). None (default) fits one group
+            distribution for every session
         full_covariance (bool): If True, fit the full covariance of the parameters across
             sessions (so they can be correlated). If False (default), each parameter has
             its own spread, and they're independent. A full covariance needs a lot of
@@ -379,7 +583,8 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
         max_iterations (int): The most EM iterations to run
         tolerance (float): Stop once no group parameter (each effect and entry of Sigma)
             changes by more than this fraction between iterations (or by more than this,
-            for ones under 0.01). The default 1e-3 is em's
+            for ones under 0.01). The default 1e-3 is em's. With groups, each group stops
+            on its own
         max_workers (int or None): How many sessions to fit at once, one process each.
             None (default) uses one per core, and 1 fits them one at a time
         checkpoint (str, optional): A file to save the fit to after every iteration. If
@@ -390,183 +595,195 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             parameters changed after each iteration
 
     Returns:
-        HierarchicalFit: The group distribution, each session's parameters, and the
-            log marginal likelihood and iBIC
+        HierarchicalFit: The group distribution, each session's parameters, the log
+            marginal likelihood and iBIC, and the tests of the group effects. With groups,
+            {group: HierarchicalFit} instead, one for each group (to compare models across
+            every group, add up their iBICs)
     """
     keys = list(session_nlls)
     param_names = list(param_names) if param_names is not None else [f"param {i}" for i in range(len(kinds))]
 
-    # The design matrix X: one row per session, an intercept column, then the covariates
-    if covariates is None:
-        # No covariates, so X is just the intercept (every session has the same group mean)
-        categories = {}
-        X = pd.DataFrame({"intercept": np.ones(len(keys))}, index=keys)
-    else:
-        # Put the covariate rows in the same order as the sessions
-        covariates = covariates.loc[keys]
-        # Every text column is a category covariate. Sort its categories, so the first one
-        # (the one the intercept is) is always the same
-        categories = {
-            name: sorted(values.unique()) for name, values in covariates.items()
-            if not pd.api.types.is_numeric_dtype(values)
-        }
-        X = _design_matrix(covariates, categories)
-    design = X.to_numpy()
-    # n_regressors is the number of columns of X (the intercept plus the covariate columns)
-    n_sessions, n_regressors = design.shape
-    # The M-step divides by (number of sessions - number of columns of X), so we need more
-    # sessions than that (e.g. at least 3 sessions for 2 rats)
-    if n_sessions <= n_regressors:
-        raise ValueError(
-            f"{n_sessions} sessions isn't enough to fit a group distribution with {n_regressors} "
-            f"group means per parameter ({list(X.columns)}). We need more sessions than that"
-        )
+    # Which group each session is in (e.g. its rat, so each rat gets its own group distribution,
+    # like Krausz et al. 2023). With no groups, every session is in one group (None), like em
+    group_of = {key: None if groups is None else groups[key] for key in keys}
+    group_names = [None] if groups is None else sorted(set(group_of.values()))
+    # The sessions in each group, in order
+    group_keys = {group: [key for key in keys if group_of[key] == group] for group in group_names}
 
-    # Start from a broad group distribution, centered on the starting values (the
-    # intercept is the starting values, and every covariate's effect is 0)
-    # effects has one row per column of X and one column per parameter
-    effects = np.zeros((n_regressors, len(kinds)))
-    effects[0] = _to_unbounded(start_values, kinds)
-    # Sigma starts diagonal, with an sd of _INITIAL_GROUP_SD for every parameter
-    group_covariance = np.eye(len(kinds)) * _INITIAL_GROUP_SD**2
+    # The design matrix X for each group: one row per session, an intercept column, then the covariates
+    design_matrices, categories = {}, {}
+    for group in group_names:
+        design_matrices[group], categories[group] = _sessions_design_matrix(covariates, group_keys[group])
+        # The M-step divides by (number of sessions - number of columns of X), so we need more
+        # sessions than that (e.g. at least 3 sessions for 2 rats)
+        n_sessions, n_regressors = design_matrices[group].shape
+        if n_sessions <= n_regressors:
+            raise ValueError(
+                f"{n_sessions} sessions{'' if group is None else f' in group {group!r}'} isn't enough to fit a "
+                f"group distribution with {n_regressors} group means per parameter "
+                f"({list(design_matrices[group].columns)}). We need more sessions than that"
+            )
+
+    # Start each group from a broad group distribution, centered on the starting values (the
+    # intercept is the starting values, and every covariate's effect is 0). Each group keeps:
+    # effects (one row per column of X, one column per parameter), Sigma, a record of every
+    # iteration, its last E-step, and whether it's converged
+    fits = {}
+    for group in group_names:
+        effects = np.zeros((design_matrices[group].shape[1], len(kinds)))
+        effects[0] = _to_unbounded(start_values, kinds)
+        fits[group] = {
+            "effects": effects,
+            # Sigma starts diagonal, with an sd of _INITIAL_GROUP_SD for every parameter
+            "group_covariance": np.eye(len(kinds)) * _INITIAL_GROUP_SD**2,
+            "history": [], "estimates": None, "converged": False,
+        }
     # Where to start fitting each session from (after the first iteration, this is where
     # the session ended up the iteration before)
     session_starts = {key: list(start_values) for key in keys}
+    # How many EM iterations we've run
+    iteration = 0
 
     # What this fit is, saved with the checkpoint so we never pick up from a different fit
     setup = {
-        "sessions": keys, "param_names": param_names, "kinds": list(kinds),
-        "full_covariance": full_covariance, "design matrix columns": list(X.columns),
+        "sessions": keys, "param_names": param_names, "kinds": list(kinds), "groups": group_of,
+        "full_covariance": full_covariance,
+        "design matrix columns": {group: list(X.columns) for group, X in design_matrices.items()},
     }
 
     # Pick up where a fit that stopped partway left off
-    history, estimates, converged = [], None, False
     if checkpoint is not None and os.path.exists(checkpoint):
         with open(checkpoint, "rb") as f:
             saved = pickle.load(f)
-        different = [name for name in setup if saved["setup"][name] != setup[name]]
+        different = [name for name in setup if saved["setup"].get(name) != setup[name]]
         if different:
             raise ValueError(f"{checkpoint} is from a different fit (its {different} don't match this fit's). "
                              f"Use a new checkpoint file for each fit")
-        effects, group_covariance = saved["effects"], saved["group_covariance"]
-        session_starts, history = saved["session_starts"], saved["history"]
-        # The last E-step, in case there's nothing left to run (the fit already converged,
-        # or already ran max_iterations)
-        estimates, converged = saved["estimates"], saved["converged"]
+        fits, session_starts, iteration = saved["fits"], saved["session_starts"], saved["iteration"]
         if verbose:
-            print(f"picking up from {checkpoint} after iteration {len(history)}")
+            print(f"picking up from {checkpoint} after iteration {iteration}")
 
     def packed(effects, covariance):
         # All the group parameters in one array (the diagonal of Sigma, unless it's full)
         return np.concatenate([effects.ravel(), (covariance if full_covariance else np.diag(covariance)).ravel()])
 
-    # Picking up from a checkpoint starts at the iteration after the last one saved (and
-    # there's nothing left to run if that fit already converged)
-    iterations = [] if converged else range(len(history) + 1, max_iterations + 1)
-
     # Fit the sessions in parallel, with the same processes for every iteration (starting
     # new ones each iteration would be slow)
     with ProcessPoolExecutor(max_workers=max_workers) if max_workers != 1 else nullcontext() as pool:
-        for iteration in iterations:
-            # E-step: fit each session given its group mean
-            # Each session's group mean, mu = X @ effects (one row per session)
-            group_means = design @ effects
+        while iteration < max_iterations:
+            # The groups that haven't converged yet (once a group converges, we stop fitting it)
+            fitting = [group for group in group_names if not fits[group]["converged"]]
+            if not fitting:
+                break
+            iteration += 1
+
+            # E-step: fit each session given its group mean, for every group at once
             # One job per session: what to minimize, where to start, how many starting
             # points (n_starts on the first iteration, then just 1), and a different seed for
             # each session's random starting points
-            jobs = [
-                (_SessionPosterior(session_nlls[key], kinds, group_means[i], group_covariance),
-                 session_starts[key], n_starts if iteration == 1 else 1, seed + i)
-                for i, key in enumerate(keys)
-            ]
-            estimates = dict(zip(keys, _run_e_step(jobs, pool)))
-            clipped = [key for key in keys if estimates[key]["hessian_clipped"]]
+            jobs, job_keys = [], []
+            for group in fitting:
+                # Each session's group mean, mu = X @ effects (one row per session)
+                group_means = design_matrices[group].to_numpy() @ fits[group]["effects"]
+                for key, group_mean in zip(group_keys[group], group_means):
+                    posterior = _SessionPosterior(session_nlls[key], kinds, group_mean, fits[group]["group_covariance"])
+                    n_session_starts = n_starts if iteration == 1 else 1
+                    jobs.append((posterior, session_starts[key], n_session_starts, seed + keys.index(key)))
+                    job_keys.append(key)
+            estimates = dict(zip(job_keys, _run_e_step(jobs, pool)))
+            clipped = [key for key in job_keys if estimates[key]["hessian_clipped"]]
             if clipped:
                 warnings.warn(f"Iteration {iteration}: the Hessian wasn't positive definite for sessions {clipped}, "
                               f"so we clipped its eigenvalues (see _fit_session). Check those sessions' fits")
-            # How likely all the data is given the group distribution this iteration started with
-            log_marginal_likelihood = sum(estimate["log_marginal_likelihood"] for estimate in estimates.values())
 
-            # M-step: the effects are the regression of the sessions' MAPs on X (with no
-            # covariates, the mean of the MAPs). The group covariance is the spread of the MAPs
-            # around their group means plus each session's posterior covariance, over
-            # (number of sessions - number of columns of X) since we estimated the effects
-            # from them too
-            # Each session's MAP (unbounded numbers), one row per session
-            maps = np.array([estimates[key]["x"] for key in keys])
-            # How unsure each session's MAP is: inverse(Hessian) (the Laplace approximation)
-            posterior_covariances = [np.linalg.inv(estimates[key]["hessian"]) for key in keys]
-            # Least squares regression of the MAPs on X: the effects that best predict each
-            # session's MAP from its covariates
-            new_effects = np.linalg.lstsq(design, maps, rcond=None)[0]
-            # How far each session's MAP is from its new group mean
-            residuals = maps - design @ new_effects
-            # Sigma = (spread of the MAPs around their group means + how unsure each MAP is),
-            # averaged over sessions
-            new_covariance = (
-                (residuals.T @ residuals + np.sum(posterior_covariances, axis=0)) / (n_sessions - n_regressors)
-            )
-            # Keep only the diagonal (each parameter's own spread), unless we're fitting
-            # how parameters covary too
-            if not full_covariance:
-                new_covariance = np.diag(np.diag(new_covariance))
+            for group in fitting:
+                fit = fits[group]
+                fit["estimates"] = {key: estimates[key] for key in group_keys[group]}
+                # How likely this group's data is given the group distribution this iteration started with
+                log_marginal_likelihood = sum(
+                    estimate["log_marginal_likelihood"] for estimate in fit["estimates"].values()
+                )
 
-            # How much the group parameters changed: relative change, or absolute change for
-            # ones under 0.01 (so ones near 0 can still converge)
-            old, new = packed(effects, group_covariance), packed(new_effects, new_covariance)
-            change = np.max(np.abs(new - old) / np.maximum(np.abs(old), 0.01))
+                # M-step
+                effects, group_covariance = _m_step(
+                    design_matrices[group].to_numpy(),
+                    np.array([estimates[key]["x"] for key in group_keys[group]]),
+                    [np.linalg.inv(estimates[key]["hessian"]) for key in group_keys[group]],
+                    full_covariance,
+                )
 
-            # The next iteration uses the new group distribution
-            effects, group_covariance = new_effects, new_covariance
-            # and starts each session from where it ended up this iteration
-            session_starts = {key: estimates[key]["values"] for key in keys}
-            # Keep a record of every iteration (to check that EM converged)
-            history.append({
-                "iteration": iteration, "log_marginal_likelihood": log_marginal_likelihood,
-                "group_effects": effects.copy(), "group_sd": np.sqrt(np.diag(group_covariance)),
-                "change": change,
-            })
-            converged = change < tolerance
+                # How much the group parameters changed: relative change, or absolute change for
+                # ones under 0.01 (so ones near 0 can still converge). This is em's stopping rule
+                old, new = packed(fit["effects"], fit["group_covariance"]), packed(effects, group_covariance)
+                change = np.max(np.abs(new - old) / np.maximum(np.abs(old), 0.01))
+
+                # The next iteration uses the new group distribution
+                fit["effects"], fit["group_covariance"] = effects, group_covariance
+                # Keep a record of every iteration (to check that EM converged)
+                fit["history"].append({
+                    "iteration": iteration, "log_marginal_likelihood": log_marginal_likelihood,
+                    "group_effects": effects.copy(), "group_sd": np.sqrt(np.diag(group_covariance)),
+                    "change": change,
+                })
+                fit["converged"] = change < tolerance
+                if verbose:
+                    print(f"iteration {iteration}{'' if group is None else f', {group}'}: "
+                          f"log marginal likelihood {log_marginal_likelihood:.2f}, change {change:.2g}")
+
+            # The next iteration starts each session from where it ended up this iteration
+            session_starts.update({key: estimates[key]["values"] for key in job_keys})
             if checkpoint is not None:
                 # Write to a temporary file first, so stopping partway through writing
                 # can't break the checkpoint
                 with open(f"{checkpoint}.tmp", "wb") as f:
-                    pickle.dump({
-                        "setup": setup, "effects": effects, "group_covariance": group_covariance,
-                        "session_starts": session_starts, "history": history, "estimates": estimates,
-                        "converged": converged,
-                    }, f)
+                    pickle.dump({"setup": setup, "fits": fits, "session_starts": session_starts,
+                                 "iteration": iteration}, f)
                 os.replace(f"{checkpoint}.tmp", checkpoint)
-            if verbose:
-                print(f"iteration {iteration}: log marginal likelihood {log_marginal_likelihood:.2f}, "
-                      f"change {change:.2g}")
 
-            if converged:
-                break
+    results = {}
+    for group in group_names:
+        fit = fits[group]
+        X = design_matrices[group]
+        n_sessions, n_regressors = X.shape
+        estimates = fit["estimates"]
+        maps = np.array([estimates[key]["x"] for key in group_keys[group]])
+        posterior_covariances = [np.linalg.inv(estimates[key]["hessian"]) for key in group_keys[group]]
 
-    # The log marginal likelihood from the last E-step (this run's, or the checkpoint's)
-    log_marginal_likelihood = history[-1]["log_marginal_likelihood"]
+        # The log marginal likelihood from the last E-step (this run's, or the checkpoint's)
+        log_marginal_likelihood = fit["history"][-1]["log_marginal_likelihood"]
 
-    # iBIC = -log marginal likelihood + (number of group parameters) / 2 * ln(number of sessions)
-    n_params = len(kinds)
-    # The group parameters are every effect, plus every entry of Sigma we fit (the
-    # diagonal, or with a full covariance, the diagonal and everything above it)
-    n_group_params = n_regressors * n_params + (n_params * (n_params + 1) // 2 if full_covariance else n_params)
-    ibic = -log_marginal_likelihood + n_group_params / 2 * np.log(n_sessions)
+        # iBIC = -log marginal likelihood + (number of group parameters) / 2 * ln(number of sessions)
+        # (em: ibic)
+        n_params = len(kinds)
+        # The group parameters are every effect, plus every entry of Sigma we fit (the
+        # diagonal, or with a full covariance, the diagonal and everything above it)
+        n_group_params = n_regressors * n_params + (n_params * (n_params + 1) // 2 if full_covariance else n_params)
+        ibic = -log_marginal_likelihood + n_group_params / 2 * np.log(n_sessions)
 
-    # Each session's parameters are from the last E-step (see the HierarchicalFit docstring)
-    return HierarchicalFit(
-        param_names=param_names,
-        kinds=list(kinds),
-        group_effects=pd.DataFrame(effects, index=X.columns, columns=param_names),
-        group_covariance=group_covariance,
-        covariates=covariates,
-        categories=categories,
-        session_values={key: estimates[key]["values"] for key in keys},
-        session_nll={key: estimates[key]["nll"] for key in keys},
-        log_marginal_likelihood=log_marginal_likelihood,
-        ibic=ibic,
-        n_iterations=len(history),
-        converged=converged,
-        history=history,
-    )
+        # Test whether each group effect is different from 0
+        standard_errors, t_values, p_values = _group_effect_tests(
+            X.to_numpy(), fit["effects"], fit["group_covariance"], maps, posterior_covariances, full_covariance,
+        )
+        group_effect_tests = pd.DataFrame(
+            {"estimate": fit["effects"].ravel(), "se": standard_errors, "t": t_values, "p": p_values},
+            index=pd.MultiIndex.from_product([X.columns, param_names], names=["effect", "parameter"]),
+        )
+
+        # Each session's parameters are from the last E-step (see the HierarchicalFit docstring)
+        results[group] = HierarchicalFit(
+            param_names=param_names,
+            kinds=list(kinds),
+            group_effects=pd.DataFrame(fit["effects"], index=X.columns, columns=param_names),
+            group_covariance=fit["group_covariance"],
+            group_effect_tests=group_effect_tests,
+            covariates=None if covariates is None else covariates.loc[group_keys[group]],
+            categories=categories[group],
+            session_values={key: estimates[key]["values"] for key in group_keys[group]},
+            session_nll={key: estimates[key]["nll"] for key in group_keys[group]},
+            log_marginal_likelihood=log_marginal_likelihood,
+            ibic=ibic,
+            n_iterations=len(fit["history"]),
+            converged=fit["converged"],
+            history=fit["history"],
+        )
+    return results[None] if groups is None else results
