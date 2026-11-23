@@ -1256,7 +1256,8 @@ class BaseHexLearner:
 
     @classmethod
     def fit_choices_hierarchical(cls, sessions, rules=None, score_at="steps", covariates=None, groups=None,
-                                 full_covariance=False, n_starts=8, seed=0, max_iterations=100, tolerance=1e-3,
+                                 full_covariance=False, cross_validate=False, n_starts=8, seed=0, max_iterations=100,
+                                 tolerance=1e-3,
                                  max_workers=None, checkpoint=None, verbose=False, **kwargs):
         """
         Fit the parameters that make the rat's hex-to-hex choices most likely, for many
@@ -1292,6 +1293,10 @@ class BaseHexLearner:
             full_covariance (bool): If True, fit how the parameters covary across sessions
                 too (this needs a lot of sessions). If False (default), each parameter has
                 its own spread across sessions
+            cross_validate (bool): If True, also get how well each session's choices are
+                predicted by the group distribution fit without it, in held_out_nll
+                (leave-one-session-out cross validation, like em's loocv, see
+                fit_hierarchical). This refits once per session, so it takes longer
             n_starts (int): How many starting points to fit each session from on the first
                 EM iteration (see fit_hierarchical)
             seed (int): Seed for the random starting points
@@ -1352,6 +1357,7 @@ class BaseHexLearner:
             covariates=covariates,
             groups=groups,
             full_covariance=full_covariance,
+            cross_validate=cross_validate,
             n_starts=n_starts, seed=seed, max_iterations=max_iterations, tolerance=tolerance,
             max_workers=max_workers, checkpoint=checkpoint, verbose=verbose,
         )

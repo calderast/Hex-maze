@@ -10,9 +10,11 @@ same data here, and check we get em's answers:
     test_em_matches_em                      the whole fit: effects, Sigma, log marginal likelihood, and the
                                             standard errors and p-values of the effects (em: emerrors)
     test_em_with_full_covariance_matches_em the same with a full covariance
+    test_cross_validation_matches_em        each subject's held-out NLL, fit without it (em: loocv)
 
 What we added on top of em (em has nothing to check these against):
-    test_groups_match_fitting_each_group_on_its_own   each rat its own group distribution (Krausz et al. 2023)
+    test_groups_match_fitting_each_group_on_its_own   each rat its own group distribution (Krausz et al. 2023),
+                                                      and cross validating within each rat
     test_category_covariates                          text covariates (e.g. session type)
     test_checkpoint_*                                 picking up a fit that stopped partway
     test_fit_choices_hierarchical_with_groups         the hex learners hooking up to EM, with groups
@@ -154,13 +156,30 @@ def test_em_with_full_covariance_matches_em():
     np.testing.assert_allclose(fit.group_effect_tests["p"], reference["pvalues"], rtol=1e-2)
 
 
+def test_cross_validation_matches_em():
+    # Leave each subject out, refit without it, and score it given that fit (em-jax's
+    # loocv test, with its tolerance)
+    subjects = load_subjects("reference_data_loocv_10_subjects.csv")
+    covariates = pd.read_csv(EM_REFERENCE / "reference_covariate_loocv_10_subjects.csv").set_index("sub")
+    reference = load_reference_fit("reference_loocv.txt")
+
+    fit = fit_hierarchical(subjects, start_values=expit([1.0, 0.0]), kinds=KINDS, covariates=covariates,
+                           cross_validate=True, n_starts=1, tolerance=1e-4, max_iterations=200, max_workers=1)
+
+    np.testing.assert_allclose(fit.group_effects.to_numpy().ravel(), reference["betas"], atol=1e-3)
+    np.testing.assert_allclose([fit.held_out_nll[subject] for subject in sorted(subjects)], reference["liks"],
+                               atol=0.1)
+
+
 def test_groups_match_fitting_each_group_on_its_own():
     # Fitting with groups gives each group the same fit as fitting just its sessions (with a
-    # covariate, so the covariates have to work within each group too)
+    # covariate, so the covariates have to work within each group too), and cross validating
+    # with groups only leaves sessions out of their own group
     subjects = load_subjects("reference_data_40_subjects.csv")
     covariates = pd.read_csv(EM_REFERENCE / "reference_covariate_40_subjects.csv").set_index("sub")
     groups = {subject: "first half" if subject <= 20 else "second half" for subject in subjects}
-    arguments = dict(start_values=expit([1.0, 0.0]), kinds=KINDS, covariates=covariates, n_starts=1, max_workers=1)
+    arguments = dict(start_values=expit([1.0, 0.0]), kinds=KINDS, covariates=covariates, cross_validate=True,
+                     n_starts=1, max_workers=1)
 
     fits = fit_hierarchical(subjects, **arguments, groups=groups)
 
@@ -177,6 +196,7 @@ def test_groups_match_fitting_each_group_on_its_own():
         np.testing.assert_allclose(fit.group_covariance, alone.group_covariance)
         np.testing.assert_allclose(fit.group_effect_tests, alone.group_effect_tests)
         assert fit.ibic == pytest.approx(alone.ibic)
+        assert fit.held_out_nll == pytest.approx(alone.held_out_nll)
 
 
 def test_category_covariates():

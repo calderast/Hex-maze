@@ -251,6 +251,18 @@ rat_fits["IM-1871"].group_params()          # IM-1871's group distribution
 sum(fit.ibic for fit in rat_fits.values())  # for comparing models across every rat
 ```
 
+To compare models on sessions they weren't fit to, pass `cross_validate=True` (leave-one-session-out cross
+validation, like em's `loocv`). Each session is held out in turn: its rat's group distribution is refit on the rat's
+other sessions, and the held-out session is scored by how likely its choices are under that group distribution
+(`held_out_nll`, lower is better). It's how well the model predicts a new session, so unlike iBIC it doesn't need a
+penalty for the number of parameters. It refits once per session, but each refit starts from the full fit, and they
+all run in parallel.
+
+```python
+rat_fits = KrauszDualLearner.fit_choices_hierarchical(sessions, groups=..., cross_validate=True, ...)
+held_out = sum(sum(fit.held_out_nll.values()) for fit in rat_fits.values())  # lower is better
+```
+
 How it works:
 - Each parameter is fit as an unbounded number (see [How fitting works](#how-fitting-works)), and across sessions
   these are normally distributed (with a separate mean and sd for each parameter, or a full covariance with
