@@ -623,6 +623,14 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
                 f"group distribution with {n_regressors} group means per parameter "
                 f"({list(design_matrices[group].columns)}). We need more sessions than that"
             )
+        # Each covariate has to tell us something the others don't (e.g. a number covariate
+        # that's the same for every session in a group can't be told apart from the intercept)
+        if np.linalg.matrix_rank(design_matrices[group].to_numpy()) < n_regressors:
+            raise ValueError(
+                f"The covariates{'' if group is None else f' in group {group!r}'} can't be told apart "
+                f"({list(design_matrices[group].columns)}), e.g. a covariate is the same for every session. "
+                f"Leave it out (for this group)"
+            )
 
     # Start each group from a broad group distribution, centered on the starting values (the
     # intercept is the starting values, and every covariate's effect is 0). Each group keeps:
