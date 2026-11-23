@@ -218,6 +218,21 @@ covariates = pd.DataFrame({"rat": [rat for rat, date in sessions]}, index=list(s
 rat_fit = KrauszDualLearner.fit_choices_hierarchical(sessions, covariates=covariates, lam=0.0, score_at="junctions")
 rat_fit.group_effects                # how each covariate shifts each parameter's group mean (unbounded numbers)
 rat_fit.group_params(rat="IM-1871")  # the group distribution for IM-1871's sessions
+rat_fit.group_effect_tests           # each effect's standard error, t value and p-value (is it different from 0?)
+```
+
+To give each rat its own group distribution (its own group mean and its own spread, the way Krausz et al. 2023 fit
+each rat), pass `groups`: {session key: its group}. This gives back one fit per group. It's the same as fitting each
+rat on its own, but every rat's sessions run in parallel. Covariates then work within each rat (e.g. a session type
+covariate gives each rat its own barrier vs probability effect). Each rat needs more sessions than it has group means
+per parameter, and a rat with only a few sessions won't pin down its spread well.
+
+```python
+rat_fits = KrauszDualLearner.fit_choices_hierarchical(
+    sessions, groups={key: key[0] for key in sessions}, lam=0.0, score_at="junctions",  # (rat, date) keys
+)
+rat_fits["IM-1871"].group_params()          # IM-1871's group distribution
+sum(fit.ibic for fit in rat_fits.values())  # for comparing models across every rat
 ```
 
 How it works:
@@ -234,13 +249,15 @@ How it works:
 - To compare models (or check whether a covariate matters), use the integrated BIC (`ibic`, lower is better):
   -log marginal likelihood + (number of group parameters) / 2 * ln(number of sessions), the same as em's. This is
   half the scale of BIC, so don't compare it to `choice_bic_`.
+- To test whether a group effect is different from 0, use `group_effect_tests`, the same as em's `emerrors`. The
+  standard errors come from the information matrix over the group parameters, corrected for not knowing each
+  session's parameters exactly (the "missing information"), and the p-values are from a t test. These are in unbounded
+  numbers, so the intercept's test (is the group mean 0, e.g. a median of 0.5 for a learning rate) usually isn't
+  useful, but the covariates' tests are.
 
 Long fits can take a while, so pass `checkpoint="some_file.pkl"` to save the fit after every EM iteration. If it
 stops partway, running it again with the same file picks up where it left off (and if it already finished, gives
 back that fit).
-
-Rats are covariates, not their own level (the same as em). So with a `rat` covariate, each rat gets its own group
-mean, but every rat has the same spread across sessions.
 
 `fit_hierarchical` (in `rl/hierarchical.py`) is the general version: it takes one NLL function per session, so it
 works for any model. `tests/test_hierarchical.py` checks that it gets the same answers as em.
