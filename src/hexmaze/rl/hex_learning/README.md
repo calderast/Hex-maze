@@ -107,6 +107,20 @@ the sweeps the rat made at each hex of each trial's path.
 
 A move with no sweeps down it gets the value of the hex it steps into.
 
+By default, a choice only uses what the rat represented while at the hex it's choosing from. To also use what it
+represented on the way there, set `sweep_window` (and pass in the sweeps as recorded):
+
+```python
+fit = HexMazeTDLearner.fit_choices(maze, trajectories, rewards, swept_hexes=swept_hexes,
+                                   retrieval=BestSweptRetrieval(), sweep_window=3, ...)  # this hex and the 2 before it
+```
+
+`sweep_window` is a number of hexes, or `"trial"` for every hex of the trial so far. The fitted learner keeps it, so
+`choice_nll` and `animate_learning` use the same window. `pool_sweeps` does the pooling, if you want the pooled
+sweeps themselves.
+
+Every window scores the same choices, so the NLLs of fits with different windows can be compared directly.
+
 ## State space
 
 Use exactly one of these:
@@ -126,6 +140,8 @@ Use exactly one of these:
   higher-valued move (beta=0 is random).
 - **`reward_probs`**: `[pA, pB, pC]`, only used to sample rewards in `simulate`.
 - **`no_backtrack`**: if True (default), the simulated agent avoids revisiting hexes in a trial. Only affects `simulate`.
+- **`sweep_window`**: which sweeps a choice uses (see [Retrieval rules](#retrieval-rules)). None (default) is just the hex
+  the rat is choosing from, a number is that many hexes back along the path, and `"trial"` is the whole trial so far.
 
 ## Data format
 

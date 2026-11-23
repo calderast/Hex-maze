@@ -54,7 +54,7 @@ from ...utils import REWARD_PORTS, resolve_port
 from ...plotting import plot_hex_maze
 from ..fitting import bic, fit_from_starts
 from ..hierarchical import fit_hierarchical
-from .retrieval_rules import LocalRetrieval
+from .retrieval_rules import LocalRetrieval, pool_sweeps
 
 
 class _ChoiceFit:
@@ -164,6 +164,7 @@ class BaseHexLearner:
         priors=None,
         no_backtrack=True,
         retrieval=None,
+        sweep_window=None,
         reward_probs=None,
         **rule_kwargs,
     ):
@@ -203,6 +204,11 @@ class BaseHexLearner:
             retrieval (RetrievalRule): How the agent values each possible move.
                 Defaults to LocalRetrieval, which values a move by the hex it
                 would step into.
+            sweep_window (int, "trial", or None): Which sweeps a choice uses (for retrieval
+                rules that use sweeps). None (default) uses only what the rat represented at
+                the hex it's choosing from. A number of hexes (e.g. 3 is that hex and the 2
+                before it on the path) or "trial" (every hex of the trial so far) also uses
+                what it represented on the way there (see pool_sweeps)
             reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A,
                 2/B, 3/C. Read when simulating only, to sample whether a reward is delivered.
             **rule_kwargs: Parameters for the update rules (e.g. alpha=, lam= for
@@ -231,6 +237,7 @@ class BaseHexLearner:
         self.reward_probs = {} if reward_probs is None else {i + 1: reward_probs[i] for i in range(3)}
         self.no_backtrack = no_backtrack
         self.retrieval = LocalRetrieval() if retrieval is None else retrieval
+        self.sweep_window = sweep_window
 
         for key, value in rule_kwargs.items():
             setattr(self, key, value)
@@ -1048,6 +1055,9 @@ class BaseHexLearner:
         # If no sweeps are given, the rat doesn't represent anything beyond its current location
         if swept_hexes is None:
             swept_hexes = [None] * len(trajectories)
+        # Add what the rat represented on the way to each hex (see sweep_window)
+        elif self.sweep_window is not None:
+            swept_hexes = pool_sweeps(swept_hexes, self.sweep_window)
 
         maze_schedule = self.maze_schedule(trajectories, mazes, trials_per_block)
 
@@ -1796,6 +1806,9 @@ class BaseHexLearner:
         # If no sweeps are given, the rat doesn't represent anything beyond its current location
         if swept_hexes is None:
             swept_hexes = [None] * len(trajectories)
+        # Add what the rat represented on the way to each hex (see sweep_window)
+        elif self.sweep_window is not None:
+            swept_hexes = pool_sweeps(swept_hexes, self.sweep_window)
 
         maze_schedule = self.maze_schedule(trajectories, mazes, trials_per_block)
 
