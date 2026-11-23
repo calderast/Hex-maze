@@ -77,21 +77,40 @@ class _ChoiceFit:
         self.data = data
         self.score_at = score_at
 
-    def build(self, free_values):
-        """Build a fresh learner with these values for the free parameters."""
+        # Pooling the sweeps (see sweep_window) doesn't depend on the parameters, so pool
+        # them once here instead of on every NLL. The learners we score with then use the
+        # pooled sweeps as they are (sweep_window=None)
+        self.scoring_data, self.scoring_kwargs = data, kwargs
+        if kwargs.get("sweep_window") is not None and data.get("swept_hexes") is not None:
+            self.scoring_data = {**data, "swept_hexes": pool_sweeps(data["swept_hexes"], kwargs["sweep_window"])}
+            self.scoring_kwargs = {**kwargs, "sweep_window": None}
+
+    def build(self, free_values, kwargs=None):
+        """Build a fresh learner with these values for the free parameters (and these
+        constructor arguments, instead of the fit's)."""
+        kwargs = self.kwargs if kwargs is None else kwargs
         params = dict(self.fixed)
         params.update(zip(self.free_names, free_values))
         if self.rules is None:
             # The class builds its own fresh rules on every call
-            return self.cls(self.maze, reward_probs=self.reward_probs, **params, **self.kwargs)
+            return self.cls(self.maze, reward_probs=self.reward_probs, **params, **kwargs)
         return self.cls(
             self.maze, rules=copy.deepcopy(self.rules), reward_probs=self.reward_probs,
-            **params, **self.kwargs,
+            **params, **kwargs,
         )
 
     def nll(self, free_values):
         """Get the choice NLL with these values for the free parameters."""
-        return self.build(free_values).choice_nll(**self.data, score_at=self.score_at)
+        return self.build(free_values, self.scoring_kwargs).choice_nll(**self.scoring_data, score_at=self.score_at)
+
+
+class _DopamineFit(_ChoiceFit):
+    """Everything fit_dopamine_hierarchical needs to score a set of parameters (the same
+    as _ChoiceFit, but scoring the dopamine instead of the choices)."""
+
+    def nll(self, free_values):
+        """Get the dopamine NLL with these values for the free parameters."""
+        return self.build(free_values).dopamine_nll(**self.data)
 
 
 # Map each outline color name to a colormap used to shade a changed hex's outline by
@@ -158,6 +177,10 @@ class BaseHexLearner:
     # rule adds its own (see UpdateRule.FIT_PARAMS and ChoiceRule.FIT_PARAMS)
     FIT_PARAMS = {"gamma": (0.9, "unit"), "beta": (2.0, "positive")}
 
+    # The parameters of the dopamine regression, DA = da_intercept + da_slope * V(state) +
+    # noise with sd da_sd (see dopamine_nll), fit in place of beta when we fit to dopamine
+    DOPAMINE_PARAMS = {"da_intercept": (0.0, "real"), "da_slope": (1.0, "real"), "da_sd": (1.0, "positive")}
+
     def __init__(
         self,
         maze,
@@ -172,6 +195,9 @@ class BaseHexLearner:
         sweep_window=None,
         choice_rules=None,
         reward_probs=None,
+        da_intercept=0.0,
+        da_slope=1.0,
+        da_sd=1.0,
         **rule_kwargs,
     ):
         """
@@ -221,6 +247,9 @@ class BaseHexLearner:
                 none
             reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A,
                 2/B, 3/C. Read when simulating only, to sample whether a reward is delivered.
+            da_intercept, da_slope, da_sd (float): The dopamine regression, DA = da_intercept +
+                da_slope * V(state) + noise with sd da_sd (see dopamine_nll). Only used to
+                score dopamine
             **rule_kwargs: Parameters for the update rules (e.g. alpha=, lam= for
                 TDLambdaRule; gamma_mb=, a_T=, a_mb= for ModelBasedRule), set as plain
                 attributes on this instance.
@@ -251,6 +280,9 @@ class BaseHexLearner:
         # Each learner gets its own copy of its choice rules, since they remember what the
         # rat did (so two learners built from the same rules don't share a memory)
         self.choice_rules = [copy.deepcopy(rule) for rule in choice_rules or []]
+        self.da_intercept = da_intercept
+        self.da_slope = da_slope
+        self.da_sd = da_sd
 
         for key, value in rule_kwargs.items():
             setattr(self, key, value)
@@ -261,6 +293,7 @@ class BaseHexLearner:
         self.prior_table = None  # {context: {hex: value}} or None
         self._hex_distances = None
         self._choice_points = {}
+        self._entry_directions = {}
         self.V = {}
         self.reset()
 
@@ -460,6 +493,7 @@ class BaseHexLearner:
         # Clear the cached distances and choice points (they were for the old maze)
         self._hex_distances = None
         self._choice_points = {}
+        self._entry_directions = {}
 
         # Get the states that exist in the new maze. Drop values for hexes that
         # are now barriers (so if that hex opens up again later, the agent has to
@@ -1149,6 +1183,101 @@ class BaseHexLearner:
         total = float(np.sum(neg_log_likelihoods))
         return (total, choices) if record else total
 
+    def dopamine_values(self, trajectories, rewards, replayed_hexes=None, mazes=None, trials_per_block=None):
+        """
+        Get the value of the state the rat is in at each hex of each trial, from when it
+        was there (learning from each move as we go, like choice_nll).
+
+        Each value is read right before the rat leaves that hex, so before the move out of
+        it updates anything. The trial's last hex (the port it ran to) has no move out of
+        it, so it gets NaN, and so does any hex skipped as a tracking error.
+
+        Parameters:
+            trajectories, rewards, replayed_hexes, mazes, trials_per_block: The session (see
+                choice_nll)
+
+        Returns:
+            list[list[float]]: For each trial, one value per hex of its path
+        """
+        # If no replay is given, no hexes are replayed on any trial
+        if replayed_hexes is None:
+            replayed_hexes = [[] for _ in trajectories]
+        maze_schedule = self.maze_schedule(trajectories, mazes, trials_per_block)
+
+        values = []
+        for path, reward, trial_replay, trial_maze in zip(trajectories, rewards, replayed_hexes, maze_schedule):
+            # If there's a barrier change, swap in the new maze before this trial
+            if trial_maze is not None:
+                self.set_graph(trial_maze)
+
+            trial_values = [np.nan] * len(path)
+            values.append(trial_values)
+            if len(path) < 2:
+                continue
+            context = self.resolve_context(path)
+
+            def read_value(step):
+                """Get the value of the state the rat is in at path[step], before it leaves."""
+                prev_hex = path[step - 1] if step > 0 else None
+                trial_values[step] = self.V[context][self.state_key(prev_hex, path[step])]
+
+            self.learn_path(path, reward, context, trial_replay, before_step=read_value)
+        return values
+
+    def dopamine_nll(self, trajectories, rewards, dopamine, replayed_hexes=None, mazes=None,
+                     trials_per_block=None, record=False):
+        """
+        Get the negative log-likelihood of the rat's dopamine, using this learner's current
+        parameters (like Krausz et al. 2023's dopamine regression).
+
+        The dopamine at each hex is modeled as a linear function of the value of the state
+        the rat is in there (see dopamine_values), plus normally distributed noise:
+
+            DA = da_intercept + da_slope * V(state) + noise,   noise ~ Normal(0, da_sd^2)
+
+        Only hexes with both a dopamine value and a model value are scored, so set the
+        dopamine to NaN at any hex to leave out (e.g. the ports). To fit one group
+        distribution of da_intercept and da_slope across sessions, the dopamine should be
+        in the same units in every session (e.g. z-scored within each session).
+
+        Parameters:
+            trajectories, rewards, replayed_hexes, mazes, trials_per_block: The session (see
+                choice_nll)
+            dopamine (list of list of float): The dopamine at each hex of each trial, one
+                list per trial with one value per hex of its path (NaN to leave a hex out)
+            record (bool): If True, also return a list of per-hex records, one per scored
+                hex, in trajectory order: {"trial": index into trajectories, "step": index
+                into the trial's path, "hex", "value": V(state), "dopamine", "predicted":
+                da_intercept + da_slope * value}
+
+        Returns:
+            float, or (float, list of dict) if record=True: Total negative log-likelihood of
+                the scored hexes' dopamine, and (if record=True) the per-hex records
+        """
+        values = self.dopamine_values(trajectories, rewards, replayed_hexes, mazes, trials_per_block)
+        value = np.concatenate([np.asarray(trial_values, dtype=float) for trial_values in values])
+        measured = np.concatenate([np.asarray(trial_dopamine, dtype=float) for trial_dopamine in dopamine])
+
+        # Score the hexes with both a dopamine value and a model value
+        scored = np.isfinite(value) & np.isfinite(measured)
+        predicted = self.da_intercept + self.da_slope * value[scored]
+        residuals = measured[scored] - predicted
+        # -log of the normal density of each residual, summed
+        total = float(
+            scored.sum() / 2 * np.log(2 * np.pi * self.da_sd**2) + np.sum(residuals**2) / (2 * self.da_sd**2)
+        )
+        if not record:
+            return total
+
+        # Which trial and step of its path each hex is, in the same order as value
+        positions = [(trial, step) for trial, path in enumerate(trajectories) for step in range(len(path))]
+        hexes = [
+            {"trial": trial, "step": step, "hex": trajectories[trial][step], "value": value[index],
+             "dopamine": measured[index], "predicted": self.da_intercept + self.da_slope * value[index]}
+            for index, (trial, step) in enumerate(positions) if scored[index]
+        ]
+        return total, hexes
+
     @classmethod
     def fit_choices(cls, maze, trajectories, rewards, reward_probs=None, replayed_hexes=None,
                     swept_hexes=None, mazes=None, trials_per_block=None, rules=None,
@@ -1243,10 +1372,11 @@ class BaseHexLearner:
         return fitted
 
     @classmethod
-    def _split_fit_kwargs(cls, maze, rules, kwargs):
+    def _split_fit_kwargs(cls, maze, rules, kwargs, fit_to="choices"):
         """
         Sort the keyword arguments to a fit into parameters to fix, parameters to fit, and
-        constructor arguments (see fit_choices).
+        constructor arguments (see fit_choices). Fitting to "dopamine" instead of "choices"
+        swaps beta (which only affects choices) for the dopamine regression's parameters.
 
         Returns:
             tuple: ({name: (first starting value, kind)} for every parameter this learner
@@ -1263,10 +1393,18 @@ class BaseHexLearner:
             learner_rules, choice_rules = rules, list(kwargs.get("choice_rules") or [])
 
         # Get the parameters this learner can fit: every learner's, plus each update rule's
-        # and choice rule's own
+        # own, plus (fitting to choices) each choice rule's own
         fit_params = dict(cls.FIT_PARAMS)
-        for rule in learner_rules + choice_rules:
+        for rule in learner_rules:
             fit_params.update(rule.FIT_PARAMS)
+        if fit_to == "choices":
+            for rule in choice_rules:
+                fit_params.update(rule.FIT_PARAMS)
+        else:
+            # beta and the choice rules only affect choices, not dopamine, so fit the
+            # dopamine regression instead (PersistenceLearner has no beta to drop)
+            fit_params.pop("beta", None)
+            fit_params.update(cls.DOPAMINE_PARAMS)
 
         # A parameter passed with a value is fixed, and the rest are fit. Anything else
         # in kwargs is a constructor argument
@@ -1278,7 +1416,7 @@ class BaseHexLearner:
     @classmethod
     def fit_choices_hierarchical(cls, sessions, rules=None, score_at="steps", covariates=None, groups=None,
                                  full_covariance=False, cross_validate=False, n_starts=8, seed=0, max_iterations=100,
-                                 tolerance=1e-3,
+                                 tolerance=1e-3, cross_validation_max_iterations=None,
                                  max_workers=None, checkpoint=None, verbose=False, **kwargs):
         """
         Fit the parameters that make the rat's hex-to-hex choices most likely, for many
@@ -1324,6 +1462,9 @@ class BaseHexLearner:
             max_iterations (int): The most EM iterations to run
             tolerance (float): Stop once the group parameters change by less than this
                 fraction between iterations (see fit_hierarchical)
+            cross_validation_max_iterations (int or None): The most EM iterations to run for
+                each cross validation refit (see fit_hierarchical). None (default) uses
+                max_iterations
             max_workers (int or None): How many sessions to fit at once, one process each.
                 None (default) uses one per core
             checkpoint (str, optional): A file to save the fit to after every EM iteration,
@@ -1380,6 +1521,7 @@ class BaseHexLearner:
             full_covariance=full_covariance,
             cross_validate=cross_validate,
             n_starts=n_starts, seed=seed, max_iterations=max_iterations, tolerance=tolerance,
+            cross_validation_max_iterations=cross_validation_max_iterations,
             max_workers=max_workers, checkpoint=checkpoint, verbose=verbose,
         )
 
@@ -1391,6 +1533,80 @@ class BaseHexLearner:
                 learner.choice_nll_ = group_result.session_nll[key]
                 learner.choices_scored_ = n_choices[key]
                 learner.score_at_ = score_at
+                group_result.learners[key] = learner
+        return result
+
+    @classmethod
+    def fit_dopamine_hierarchical(cls, sessions, rules=None, covariates=None, groups=None, full_covariance=False,
+                                  cross_validate=False, n_starts=8, seed=0, max_iterations=100, tolerance=1e-3,
+                                  cross_validation_max_iterations=None,
+                                  max_workers=None, checkpoint=None, verbose=False, **kwargs):
+        """
+        Fit the parameters that make the rat's dopamine most likely, for many sessions at
+        once, hierarchically (like fit_choices_hierarchical, but fit to the dopamine at each
+        hex instead of the choices, like Krausz et al. 2023's dopamine regression).
+
+        Each session fits the learner's parameters (except beta, which only affects choices)
+        plus the dopamine regression, DA = da_intercept + da_slope * V(state) + noise with sd
+        da_sd (see dopamine_nll). These all get group distributions, the same as the
+        learning parameters.
+
+        Parameters:
+            sessions (dict): {session key: session}, where each session is a dict with maze,
+                trajectories, rewards, and dopamine (see dopamine_nll), and optionally
+                reward_probs, replayed_hexes, mazes, and trials_per_block
+            (the rest are the same as fit_choices_hierarchical, and **kwargs can also fix
+            da_intercept, da_slope, or da_sd)
+
+        Returns:
+            HierarchicalFit: The same as fit_choices_hierarchical, with in learners a new,
+                untrained learner for each session with that session's parameters, with:
+                - dopamine_nll_ : the session's dopamine NLL at its parameters
+                - hexes_scored_ : how many hexes' dopamine was scored
+                With groups, {group: HierarchicalFit} instead, one for each group
+        """
+        # Every session fits the same parameters, so sort them out from the first session
+        first_maze = next(iter(sessions.values()))["maze"]
+        fit_params, fixed, free_names, constructor_kwargs = cls._split_fit_kwargs(
+            first_maze, rules, kwargs, fit_to="dopamine",
+        )
+
+        # Set up scoring each session
+        fits = {}
+        for key, session in sessions.items():
+            fits[key] = _DopamineFit(
+                cls, session["maze"], session.get("reward_probs"), rules, fixed, free_names,
+                constructor_kwargs,
+                data={name: session.get(name) for name in [
+                    "trajectories", "rewards", "dopamine", "replayed_hexes", "mazes", "trials_per_block",
+                ]},
+                score_at=None,
+            )
+
+        start_values = [fit_params[name][0] for name in free_names]
+        result = fit_hierarchical(
+            {key: fit.nll for key, fit in fits.items()},
+            start_values=start_values,
+            kinds=[fit_params[name][1] for name in free_names],
+            param_names=free_names,
+            covariates=covariates,
+            groups=groups,
+            full_covariance=full_covariance,
+            cross_validate=cross_validate,
+            n_starts=n_starts, seed=seed, max_iterations=max_iterations, tolerance=tolerance,
+            cross_validation_max_iterations=cross_validation_max_iterations,
+            max_workers=max_workers, checkpoint=checkpoint, verbose=verbose,
+        )
+
+        # Make a new, untrained learner for each session with that session's parameters
+        # (in its group's fit, with groups). Which hexes are scored doesn't depend on the
+        # parameters, so count them at each session's own
+        for group_result in ([result] if groups is None else result.values()):
+            for key, values in group_result.session_values.items():
+                _, hexes = fits[key].build(values).dopamine_nll(**fits[key].data, record=True)
+                learner = fits[key].build(values)
+                learner.dopamine_nll_ = group_result.session_nll[key]
+                learner.hexes_scored_ = len(hexes)
                 group_result.learners[key] = learner
         return result
 
@@ -1566,9 +1782,14 @@ class BaseHexLearner:
         from (or None, e.g. at the port a trial starts from), and we don't walk back
         through it, so hexes you can only reach by turning around aren't included.
 
+        This is computed the first time it's needed for each origin and prev_hex, and
+        cached until the maze changes (so don't change the dict it returns).
+
         Returns:
             dict: {hex: the hex you'd enter it from}
         """
+        if (origin, prev_hex) in self._entry_directions:
+            return self._entry_directions[(origin, prev_hex)]
         entry_from = {origin: prev_hex}
         visited = {origin} | ({prev_hex} if prev_hex is not None else set())
         frontier = [origin]
@@ -1581,6 +1802,7 @@ class BaseHexLearner:
                         entry_from[neighbor] = hex
                         next_frontier.append(neighbor)
             frontier = next_frontier
+        self._entry_directions[(origin, prev_hex)] = entry_from
         return entry_from
 
     def resolve_snapshot_entry_directions(self, path, step_index):
@@ -1602,8 +1824,13 @@ class BaseHexLearner:
         cur_hex = path[step_index]
         prev_hex = path[step_index - 1] if step_index > 0 else None
         ahead = self.bfs_entry_directions(cur_hex, prev_hex)
-        # A hex entered more than once this trial keeps its most recent direction
-        experienced = {path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)}
+        # A hex entered more than once this trial keeps its most recent direction. A jump
+        # between hexes that aren't neighbors (a tracking error) isn't a direction we have
+        # a value for, so that hex keeps the direction from walking out
+        experienced = {
+            path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)
+            if i == 0 or self.graph.has_edge(path[i - 1], path[i])
+        }
         return {**start_directions, **ahead, **experienced}
 
     def plot_entry_directions(self, path, step_index, ax=None, **plot_kwargs):
