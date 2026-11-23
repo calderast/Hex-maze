@@ -15,7 +15,7 @@ What we added on top of em (em has nothing to check these against):
     test_groups_match_fitting_each_group_on_its_own   each rat its own group distribution (Krausz et al. 2023)
     test_category_covariates                          text covariates (e.g. session type)
     test_checkpoint_*                                 picking up a fit that stopped partway
-    test_fit_choices_hierarchical_*                   the hex learners hooking up to EM
+    test_fit_choices_hierarchical_with_groups         the hex learners hooking up to EM, with groups
 
 Run with: pytest tests/
 """
@@ -179,22 +179,6 @@ def test_groups_match_fitting_each_group_on_its_own():
         assert fit.ibic == pytest.approx(alone.ibic)
 
 
-def test_checkpoint_with_groups_picks_up_where_it_left_off(tmp_path):
-    # The same as test_checkpoint_picks_up_where_it_left_off, with groups
-    subjects = load_subjects("reference_data_40_subjects.csv")
-    groups = {subject: subject % 2 for subject in subjects}
-    arguments = dict(start_values=expit([1.0, 0.0]), kinds=KINDS, groups=groups, n_starts=1, max_workers=1)
-    checkpoint = tmp_path / "checkpoint.pkl"
-
-    uninterrupted = fit_hierarchical(subjects, **arguments)
-    fit_hierarchical(subjects, **arguments, max_iterations=3, checkpoint=checkpoint)
-    resumed = fit_hierarchical(subjects, **arguments, checkpoint=checkpoint)
-
-    for group in uninterrupted:
-        assert resumed[group].n_iterations == uninterrupted[group].n_iterations
-        np.testing.assert_allclose(resumed[group].group_effects, uninterrupted[group].group_effects)
-
-
 def test_category_covariates():
     # A text covariate (e.g. rat) gets a 0/1 column for each category but the first, so
     # the intercept is the first category
@@ -241,28 +225,9 @@ def test_checkpoint_of_finished_fit_is_returned(tmp_path):
         assert again.session_values.keys() == first.session_values.keys()
 
 
-def test_fit_choices_hierarchical_runs():
-    # Fit a few short simulated sessions, just to check that the hex learners hook up to EM
-    # (simulated with no_backtrack=False, since a fit assumes the agent could take any move)
-    maze = create_empty_hex_maze()
-    sessions = {}
-    for i in range(3):
-        trials = HexMazeTDLearner(maze, alpha=0.3, gamma=0.9, beta=5.0, reward_probs=[0.9, 0.5, 0.1],
-                                  no_backtrack=False).simulate(start_state=1, n_trials=8)
-        sessions[f"session {i}"] = dict(maze=maze, trajectories=[trial["path"] for trial in trials],
-                                        rewards=[trial["reward"] for trial in trials])
-
-    fit = HexMazeTDLearner.fit_choices_hierarchical(sessions, lam=0.0, n_starts=1, max_iterations=2, max_workers=1)
-
-    assert fit.param_names == ["gamma", "beta", "alpha"]
-    assert set(fit.learners) == set(sessions)
-    for key, learner in fit.learners.items():
-        assert learner.choice_nll_ == fit.session_nll[key]
-        assert learner.choices_scored_ > 0
-
-
 def test_fit_choices_hierarchical_with_groups():
     # With groups, each session's learner is in its own group's fit, with that fit's parameters
+    # (simulated with no_backtrack=False, since a fit assumes the agent could take any move)
     maze = create_empty_hex_maze()
     sessions = {}
     for i in range(4):

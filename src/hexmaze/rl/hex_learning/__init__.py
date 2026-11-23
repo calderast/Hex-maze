@@ -8,6 +8,7 @@ from .retrieval_rules import (
     BestSweptRetrieval,
     BestSweptOrCachedRetrieval,
     FurthestSweptRetrieval,
+    pool_sweeps,
 )
 from .update_rules import UpdateRule, UpdateEvent, TDLambdaRule, ModelBasedRule, SWRRule
 from ..fitting import fit_many
@@ -16,6 +17,7 @@ __all__ = [
     "HexMazeTDLearner", "KrauszDualLearner", "SWRDualLearner",
     "BaseHexLearner", "UpdateRule", "UpdateEvent",
     "RetrievalRule", "LocalRetrieval", "BestSweptRetrieval", "BestSweptOrCachedRetrieval", "FurthestSweptRetrieval",
+    "pool_sweeps",
     "TDLambdaRule", "ModelBasedRule", "SWRRule",
     "fit_many",
 ]

@@ -18,6 +18,11 @@ arms of a junction, that's two separate sweeps).
 For a directional learner, each swept hex is read in the direction the sweep
 arrived at it from (the hex before it in that same sweep).
 
+By default, a choice only uses what the rat represented while at the hex it's choosing
+from. To also use what it represented on the way there (e.g. the last 3 hexes, or the
+whole trial so far), set the learner's sweep_window (which pools the sweeps with
+pool_sweeps).
+
 RetrievalRule (the base class) comes first, followed by LocalRetrieval
 (the default), which values a move by the hex it steps into.
 """
@@ -28,7 +33,63 @@ import numpy as np
 __all__ = [
     "RetrievalRule", "LocalRetrieval",
     "BestSweptRetrieval", "BestSweptOrCachedRetrieval", "FurthestSweptRetrieval",
+    "pool_sweeps",
 ]
+
+
+def pool_sweeps(swept_hexes, window):
+    """
+    Get what the rat represented at each hex and on the way there, so a choice can use
+    the sweeps the rat made leading up to it (not just at the hex it's choosing from).
+
+    Each hex gets one list of every hex represented at it and at the hexes before it in
+    the window, in the order they were represented. Repeats are kept (a hex represented
+    over and over shows up over and over). The retrieval rules use the maze to decide
+    which move each represented hex belongs to (see sweeps_along_move), and hexes behind
+    the rat don't count for any move.
+
+    A learner with sweep_window set does this for us (in choice_nll and animate_learning),
+    so we always pass in the sweeps as recorded.
+
+    Parameters:
+        swept_hexes (list[list[list[list[int]]]]): For each trial, one entry per hex of the
+            path, with the sweeps made at that hex (in either sweep format, see
+            RetrievalRule). A trial can be None (nothing represented)
+        window (int or "trial"): Which hexes to pool from: a number of hexes (e.g. 3 is
+            the hex the rat is at and the 2 hexes before it on its path), or "trial" for
+            every hex of the trial so far. 1 is just the hex the rat is at (the same as
+            not pooling, except sweeps split into separate sweeps become one list)
+
+    Returns:
+        list[list[list[int]]]: For each trial, one list of represented hexes per hex of the path
+    """
+    pooled = []
+    for trial_sweeps in swept_hexes:
+        if trial_sweeps is None:
+            pooled.append(None)
+            continue
+
+        # Get everything represented at each hex as one list (sweeps can also be split
+        # into separate sweeps, see RetrievalRule)
+        represented = []
+        for sweeps in trial_sweeps:
+            if sweeps and isinstance(sweeps[0], (list, tuple)):
+                represented.append([hex for sweep in sweeps for hex in sweep])
+            else:
+                represented.append(list(sweeps or []))
+
+        trial_pooled = []
+        for step in range(len(represented)):
+            # The first hex of the path in the window
+            if window == "trial":
+                first = 0
+            elif isinstance(window, int):
+                first = max(0, step - window + 1)
+            else:
+                raise ValueError(f'window must be a number of hexes or "trial", got {window!r}')
+            trial_pooled.append([hex for hexes in represented[first:step + 1] for hex in hexes])
+        pooled.append(trial_pooled)
+    return pooled
 
 
 class RetrievalRule:
