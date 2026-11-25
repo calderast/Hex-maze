@@ -1253,15 +1253,19 @@ class BaseHexLearner:
                 can fit, {name: value} for the parameters to fix, [names of the parameters
                 to fit], {name: value} for the constructor arguments)
         """
-        # Learner classes like KrauszDualLearner set their own rules, so build one to get
-        # them (BaseHexLearner needs the rules passed in)
+        # Learner classes like KrauszDualLearner (and PersistenceLearner) set their own rules,
+        # so build one to get them (BaseHexLearner needs the rules passed in)
         given = {name: value for name, value in kwargs.items() if value is not None}
-        learner_rules = rules if rules is not None else cls(maze, **given).rules
+        if rules is None:
+            learner = cls(maze, **given)
+            learner_rules, choice_rules = learner.rules, learner.choice_rules
+        else:
+            learner_rules, choice_rules = rules, list(kwargs.get("choice_rules") or [])
 
         # Get the parameters this learner can fit: every learner's, plus each update rule's
         # and choice rule's own
         fit_params = dict(cls.FIT_PARAMS)
-        for rule in learner_rules + list(kwargs.get("choice_rules") or []):
+        for rule in learner_rules + choice_rules:
             fit_params.update(rule.FIT_PARAMS)
 
         # A parameter passed with a value is fixed, and the rest are fit. Anything else

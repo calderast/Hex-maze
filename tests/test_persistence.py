@@ -1,6 +1,7 @@
 """
 Check PersistenceRule (src/hexmaze/rl/hex_learning/choice_rules.py), the bias toward repeating the move the rat
-made the last time it was in the same state:
+made the last time it was in the same state. Both tests use PersistenceLearner (persistence only, no value learning,
+so every value stays 0):
     test_persistence_favors_the_last_turn_at_a_junction   the softmax gets exactly the persistence bonus, and only
                                                           when coming through the junction the same way
     test_fit_recovers_persistence                         fitting gets back the persistence sessions were
@@ -15,16 +16,7 @@ import numpy as np
 import pytest
 
 from hexmaze import create_empty_hex_maze
-from hexmaze.rl import BaseHexLearner, PersistenceRule, TDLambdaRule
-
-
-def persistent_learner(maze, persistence, **kwargs):
-    """
-    A learner with persistence whose values never change (alpha=0, so every value stays 0), so the only thing that
-    affects its choices is persistence.
-    """
-    return BaseHexLearner(maze, rules=[TDLambdaRule()], choice_rules=[PersistenceRule()], alpha=0.0, gamma=0.9,
-                          lam=0.0, beta=1.0, persistence=persistence, **kwargs)
+from hexmaze.rl import BaseHexLearner, PersistenceLearner
 
 
 def first_junction_turn(learner, path):
@@ -41,7 +33,7 @@ def test_persistence_favors_the_last_turn_at_a_junction():
     random.seed(0)
     np.random.seed(0)
     maze = create_empty_hex_maze()
-    learner = persistent_learner(maze, persistence=2.0)
+    learner = PersistenceLearner(maze, persistence=2.0)
 
     # Run one trial, and learn from it (so the learner remembers each turn the rat made)
     path = BaseHexLearner(maze, no_backtrack=False).simulate(start_state=1, n_trials=1)[0]["path"]
@@ -66,17 +58,15 @@ def test_persistence_favors_the_last_turn_at_a_junction():
 
 
 def test_fit_recovers_persistence():
-    # Simulate an agent whose choices only depend on persistence, then fit persistence (with everything else fixed
-    # at the values it was simulated with)
+    # Simulate an agent whose choices only depend on persistence, then fit persistence (the only parameter
+    # PersistenceLearner has)
     random.seed(0)
     np.random.seed(0)
     maze = create_empty_hex_maze()
-    trials = persistent_learner(maze, persistence=1.5, reward_probs=[0.9, 0.5, 0.1],
+    trials = PersistenceLearner(maze, persistence=1.5, reward_probs=[0.9, 0.5, 0.1],
                                 no_backtrack=False).simulate(start_state=1, n_trials=40)
 
-    fitted = BaseHexLearner.fit_choices(
-        maze, [trial["path"] for trial in trials], [trial["reward"] for trial in trials],
-        rules=[TDLambdaRule()], choice_rules=[PersistenceRule()], alpha=0.0, gamma=0.9, lam=0.0, beta=1.0,
-        n_starts=1, max_workers=1,
+    fitted = PersistenceLearner.fit_choices(
+        maze, [trial["path"] for trial in trials], [trial["reward"] for trial in trials], n_starts=1, max_workers=1,
     )
     assert fitted.persistence == pytest.approx(1.5, abs=0.3)

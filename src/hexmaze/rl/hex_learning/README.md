@@ -15,7 +15,9 @@ hex_learning/
 ├── td_learner.py       # HexMazeTDLearner  (TD(λ))
 ├── dual_learner.py     # KrauszDualLearner (TD(λ) + model-based memory trace)
 ├── swr_learner.py      # SWRDualLearner    (TD(λ) + SWR replay)
+├── persistence_learner.py  # PersistenceLearner (persistence only, no value learning)
 ├── update_rules.py     # UpdateRule, TDLambdaRule, ModelBasedRule, SWRRule
+├── choice_rules.py     # ChoiceRule, PersistenceRule
 └── retrieval_rules.py  # RetrievalRule, LocalRetrieval, BestSwept..., FurthestSweptRetrieval
 ```
 
@@ -40,6 +42,7 @@ and once the rat reaches the port. Several rules can run on the same value table
 | `HexMazeTDLearner` | TD(λ) | `alpha=0.3`, `gamma=0.95`, `lam=0.0`, `beta=1.0` |
 | `KrauszDualLearner` | TD(λ) + model-based memory trace (Krausz et al. 2023) | + `gamma_mb=0.9`, `a_T=0.1`, `a_mb=0.1` |
 | `SWRDualLearner` | TD(λ) + SWR replay | + `a_swr=0.1` |
+| `PersistenceLearner` | none (only `PersistenceRule`, see Choice rules) | `persistence=0.0` (the only parameter that gets fit) |
 | `BaseHexLearner` | any list you pass as `rules=` | whatever those rules read |
 
 Any other combination of rules can be built directly:
@@ -144,6 +147,14 @@ number (negative is a bias toward switching).
 
 ```python
 fit = KrauszDualLearner.fit_choices_hierarchical(sessions, choice_rules=[PersistenceRule()], lam=0.0, ...)
+```
+
+`PersistenceLearner` is persistence alone, with no value learning (every move is worth the same, so gamma and beta
+don't do anything and aren't fit). It's the habit-only baseline: if a learner with persistence beats it, value
+learning explains choices on top of habit.
+
+```python
+fit = PersistenceLearner.fit_choices_hierarchical(sessions, score_at="junctions", ...)
 ```
 
 ## State space
