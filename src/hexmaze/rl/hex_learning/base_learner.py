@@ -1492,15 +1492,19 @@ class BaseHexLearner:
 
     def softmax_probabilities(self, hex, neighbors, context, sweeps=None, entry_hex=None):
         """
-        Get the softmax probability of choosing each neighbor.
+        Get the softmax probability of choosing each neighbor:
 
-        The value of each move comes from this learner's retrieval rule. Every
-        choice the model makes or scores goes through here: the simulated agent,
-        the choice likelihood, and the junction choices shown in animations.
+            P(move) ∝ exp( beta * value(move) + the bonus from each choice rule )
+
+        The value of each move comes from this learner's retrieval rule, and the
+        bonuses from its choice rules (e.g. PersistenceRule's bias toward repeating
+        the last move from this state). Every choice the model makes or scores goes
+        through here: the simulated agent, the choice likelihood, and the junction
+        choices shown in animations.
 
         The inverse temperature beta sets how strongly the agent prefers the better
         option: for large beta it almost always picks the highest-valued neighbor, and
-        near 0 its choices are closer to random.
+        near 0 its choices are closer to random (apart from any choice rule bonuses).
 
         Parameters:
             hex (int): The hex the agent is choosing from
@@ -1510,8 +1514,9 @@ class BaseHexLearner:
                 from this hex, or a single list of represented hexes (see RetrievalRule).
                 None if the rat didn't represent anything beyond its current location
             entry_hex (int or None): The hex the agent came from (None at the start of a
-                trial). Choice rules (e.g. PersistenceRule) use it to get the state the
-                agent is choosing from
+                trial). With `hex`, this is the state the agent is choosing from, which
+                the choice rules need (e.g. PersistenceRule looks up the last move the rat
+                made from this state)
 
         Returns:
             np.ndarray: One probability per neighbor, summing to 1
@@ -1519,12 +1524,11 @@ class BaseHexLearner:
         values = self.retrieval.action_values(self, hex, neighbors, context, sweeps)
         scaled = self.beta * values
 
-        # Add each choice rule's bonus: a bias on the choice that doesn't come from the
-        # values, so it isn't scaled by beta. E.g. PersistenceRule adds `persistence` to
-        # the move the rat made the last time it was in this state (and 0 to the others),
-        # making that move e^persistence times as likely as from the values alone.
-        # The state is where the agent is choosing from (for a directional learner, this
-        # hex as entered from entry_hex, so at a junction it's which way the agent came in)
+        # Add each choice rule's bonus. These bias the choice directly, so they aren't
+        # scaled by beta (e.g. PersistenceRule adds `persistence` to the move the rat made
+        # the last time it was in this state, and 0 to the others). For a directional
+        # learner, the state is this hex as entered from entry_hex, so at a junction it
+        # includes which way the agent came in
         state = self.state_key(entry_hex, hex)
         for rule in self.choice_rules:
             bonus = rule.bonus(self, context, state, neighbors)
