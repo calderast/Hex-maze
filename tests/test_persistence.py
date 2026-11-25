@@ -35,7 +35,8 @@ def test_persistence_favors_the_last_turn_at_a_junction():
     maze = create_empty_hex_maze()
     learner = PersistenceLearner(maze, persistence=2.0)
 
-    # Run one trial, and learn from it (so the learner remembers each turn the rat made)
+    # Simulate one random trial (BaseHexLearner with no rules picks every move at random), and learn from it (so
+    # the learner remembers each turn the rat made)
     path = BaseHexLearner(maze, no_backtrack=False).simulate(start_state=1, n_trials=1)[0]["path"]
     entry_hex, junction, turn = first_junction_turn(learner, path)
     learner.learn([path], [0.0])

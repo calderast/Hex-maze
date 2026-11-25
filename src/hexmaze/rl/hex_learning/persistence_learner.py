@@ -9,8 +9,9 @@ This is a BaseHexLearner with no update rules and one choice rule:
                        it was in the same state (e.g. the same turn the last time it
                        came through a junction the same way).
 
-No values are ever learned, so every move is worth the same (0, unless priors are
-given) and the agent picks each move with probability
+No values are ever learned, so every value stays 0 (with the default priors=None,
+otherwise values always stay at priors), every move is worth the same (with flat priors), 
+and the agent picks each move with probability
 
     P(move) ∝ exp( persistence * [move = the last move from this state] )
 
@@ -36,8 +37,8 @@ class PersistenceLearner(BaseHexLearner):
             e^persistence, and a negative persistence is a bias toward switching.
             Defaults to 0.0 (random choices)
 
-    persistence is the only parameter fit_choices fits. gamma and beta don't do
-    anything here (every value stays at its prior), so they aren't fit.
+    persistence is the only parameter fit_choices fits. With every value at 0,
+    gamma and beta don't do anything, so they aren't fit.
 
     All other arguments are passed through to BaseHexLearner, including the
     simulation options `reward_probs` and `no_backtrack`.
