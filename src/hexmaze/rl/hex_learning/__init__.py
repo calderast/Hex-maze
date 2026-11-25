@@ -11,6 +11,7 @@ from .retrieval_rules import (
     pool_sweeps,
 )
 from .update_rules import UpdateRule, UpdateEvent, TDLambdaRule, ModelBasedRule, SWRRule
+from .choice_rules import ChoiceRule, PersistenceRule
 from ..fitting import fit_many
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "RetrievalRule", "LocalRetrieval", "BestSweptRetrieval", "BestSweptOrCachedRetrieval", "FurthestSweptRetrieval",
     "pool_sweeps",
     "TDLambdaRule", "ModelBasedRule", "SWRRule",
+    "ChoiceRule", "PersistenceRule",
     "fit_many",
 ]

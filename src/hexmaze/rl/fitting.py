@@ -6,8 +6,9 @@ learners at once (fit_many).
 
 fit_from_starts fits parameters the way the Daw lab's em package does:
 - Each parameter is fit as an unbounded number, so the optimizer never gets stuck
-  against a bound. Parameters between 0 and 1 ("unit") are fit as their logit, and
-  parameters above 0 ("positive") are fit as their log.
+  against a bound. Parameters between 0 and 1 ("unit") are fit as their logit,
+  parameters above 0 ("positive") are fit as their log, and parameters that can be any
+  number ("real", e.g. a regression weight) are fit as they are.
 - The likelihood can have more than one local optimum, so we fit from several starting
   points (the given starting values, then random ones) and keep the best fit.
 
@@ -26,12 +27,19 @@ from scipy.special import expit, logit
 
 __all__ = ["fit_from_starts", "bic", "fit_many"]
 
+
+
+def _unchanged(value):
+    """A "real" parameter is already an unbounded number."""
+    return value
+
+
 # Turn a parameter into an unbounded number for the optimizer, and back
-_TO_UNBOUNDED = {"unit": logit, "positive": np.log}
-_FROM_UNBOUNDED = {"unit": expit, "positive": np.exp}
+_TO_UNBOUNDED = {"unit": logit, "positive": np.log, "real": _unchanged}
+_FROM_UNBOUNDED = {"unit": expit, "positive": np.exp, "real": _unchanged}
 
 # The range the random starting points are drawn from, for each kind of parameter
-_RANDOM_START_RANGE = {"unit": (0.05, 0.95), "positive": (0.5, 30.0)}
+_RANDOM_START_RANGE = {"unit": (0.05, 0.95), "positive": (0.5, 30.0), "real": (-2.0, 2.0)}
 
 
 def _to_unbounded(values, kinds):
@@ -76,7 +84,8 @@ def fit_from_starts(objective, start_values, kinds, n_starts=8, seed=0, max_work
             minimize (e.g. the NLL). To fit in parallel, it has to be something we can
             send to another process (e.g. a method of an object, not a lambda)
         start_values (list of float): The first starting point
-        kinds (list of str): "unit" (between 0 and 1) or "positive" (above 0) for each parameter
+        kinds (list of str): "unit" (between 0 and 1), "positive" (above 0), or "real" (any
+            number) for each parameter
         n_starts (int): How many starting points to fit from
         seed (int): Seed for the random starting points, so fits are reproducible
         max_workers (int or None): How many starting points to fit at once, one process

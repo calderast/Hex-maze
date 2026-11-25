@@ -1,0 +1,70 @@
+"""
+Check PersistenceRule (src/hexmaze/rl/hex_learning/choice_rules.py), the bias toward repeating the move the rat
+made the last time it was in the same state:
+    test_persistence_favors_the_last_turn_at_a_junction   the softmax gets exactly the persistence bonus, and only
+                                                          when coming through the junction the same way
+    test_fit_recovers_persistence                         fitting gets back the persistence sessions were
+                                                          simulated with
+
+Run with: pytest tests/
+"""
+
+import random
+
+import numpy as np
+import pytest
+
+from hexmaze import create_empty_hex_maze
+from hexmaze.rl import BaseHexLearner, PersistenceRule, TDLambdaRule
+
+
+def persistent_learner(maze, persistence, **kwargs):
+    """A learner whose values never change (alpha=0), so only persistence affects its choices."""
+    return BaseHexLearner(maze, rules=[TDLambdaRule()], choice_rules=[PersistenceRule()], alpha=0.0, gamma=0.9,
+                          lam=0.0, beta=1.0,
+                          persistence=persistence, **kwargs)
+
+
+def test_persistence_favors_the_last_turn_at_a_junction():
+    random.seed(0)
+    np.random.seed(0)
+    maze = create_empty_hex_maze()
+    learner = persistent_learner(maze, persistence=2.0)
+
+    # Run a trial, and find the first junction the rat turned left or right at
+    path = BaseHexLearner(maze, no_backtrack=False).simulate(start_state=1, n_trials=1)[0]["path"]
+    step = next(step for step in range(1, len(path) - 1)
+                if learner.junction_candidates(path[step], path[step - 1]) is not None
+                and path[step + 1] in learner.junction_candidates(path[step], path[step - 1]))
+    entry_hex, junction, turn = path[step - 1], path[step], path[step + 1]
+    candidates = learner.junction_candidates(junction, entry_hex)
+    learner.learn([path], [0.0])
+
+    # Coming through the same way, the same turn gets the bonus
+    probabilities = dict(zip(candidates, learner.softmax_probabilities(junction, candidates, None,
+                                                                       entry_hex=entry_hex)))
+    assert probabilities[turn] == pytest.approx(np.exp(2.0) / (np.exp(2.0) + 1))
+
+    # Coming in from a neighbor the rat never came from, there's no bonus
+    other_entry = next(neighbor for neighbor in learner.graph.neighbors(junction)
+                       if neighbor != entry_hex and learner.junction_candidates(junction, neighbor) is not None
+                       and (neighbor, junction) not in zip(path, path[1:]))
+    other_candidates = learner.junction_candidates(junction, other_entry)
+    np.testing.assert_allclose(learner.softmax_probabilities(junction, other_candidates, None,
+                                                             entry_hex=other_entry), [0.5, 0.5])
+
+
+def test_fit_recovers_persistence():
+    # Simulate an agent that only has persistence, and fit persistence (everything else fixed)
+    random.seed(0)
+    np.random.seed(0)
+    maze = create_empty_hex_maze()
+    trials = persistent_learner(maze, persistence=1.5, reward_probs=[0.9, 0.5, 0.1],
+                                no_backtrack=False).simulate(start_state=1, n_trials=40)
+
+    fitted = BaseHexLearner.fit_choices(
+        maze, [trial["path"] for trial in trials], [trial["reward"] for trial in trials],
+        rules=[TDLambdaRule()], choice_rules=[PersistenceRule()], alpha=0.0, gamma=0.9, lam=0.0, beta=1.0,
+        n_starts=1, max_workers=1,
+    )
+    assert fitted.persistence == pytest.approx(1.5, abs=0.3)
