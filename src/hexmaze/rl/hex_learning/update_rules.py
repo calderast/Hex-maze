@@ -63,8 +63,9 @@ class UpdateRule:
 
     Each rule lists the parameters it reads from the learner in FIT_PARAMS, so
     fit_choices knows what to fit: {name: (first starting value, kind)}, where kind
-    is "unit" for a parameter between 0 and 1, or "positive" for one above 0 (see
-    fit_from_starts). A new rule just has to list its own parameters to be fittable.
+    is "unit" for a parameter between 0 and 1, "positive" for one above 0, or "real"
+    for any number (see fit_from_starts). A new rule just has to list its own
+    parameters to be fittable.
     """
 
     FIT_PARAMS = {}

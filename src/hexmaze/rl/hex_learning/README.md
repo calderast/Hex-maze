@@ -15,7 +15,9 @@ hex_learning/
 ├── td_learner.py       # HexMazeTDLearner  (TD(λ))
 ├── dual_learner.py     # KrauszDualLearner (TD(λ) + model-based memory trace)
 ├── swr_learner.py      # SWRDualLearner    (TD(λ) + SWR replay)
+├── persistence_learner.py  # PersistenceLearner (persistence only, no value learning)
 ├── update_rules.py     # UpdateRule, TDLambdaRule, ModelBasedRule, SWRRule
+├── choice_rules.py     # ChoiceRule, PersistenceRule
 └── retrieval_rules.py  # RetrievalRule, LocalRetrieval, BestSwept..., FurthestSweptRetrieval
 ```
 
@@ -25,6 +27,8 @@ A learner is a `BaseHexLearner` with:
 
 - a list of **update rules**, which decide how the rat's experience changes hex values
 - one **retrieval rule**, which decides how the agent values each possible move when it makes a choice
+- optionally, a list of **choice rules**, which bias its choices directly instead of through the values (e.g. a habit
+  of repeating the last turn)
 - a **state space**, which decides what gets a value
 
 All learners share the same value table `V`, learning loop, fitting, and animation code.
@@ -38,6 +42,7 @@ and once the rat reaches the port. Several rules can run on the same value table
 | `HexMazeTDLearner` | TD(λ) | `alpha=0.3`, `gamma=0.95`, `lam=0.0`, `beta=1.0` |
 | `KrauszDualLearner` | TD(λ) + model-based memory trace (Krausz et al. 2023) | + `gamma_mb=0.9`, `a_T=0.1`, `a_mb=0.1` |
 | `SWRDualLearner` | TD(λ) + SWR replay | + `a_swr=0.1` |
+| `PersistenceLearner` | none (only `PersistenceRule`, see Choice rules) | `persistence=0.0` (the only parameter that gets fit) |
 | `BaseHexLearner` | any list you pass as `rules=` | whatever those rules read |
 
 Any other combination of rules can be built directly:
@@ -120,6 +125,37 @@ fit = HexMazeTDLearner.fit_choices(maze, trajectories, rewards, swept_hexes=swep
 sweeps themselves.
 
 Every window scores the same choices, so the NLLs of fits with different windows can be compared directly.
+
+## Choice rules
+
+Choice rules bias the agent's choices directly, instead of through the values. Each one adds its own term to each
+move's logit in the softmax, next to `beta * value` (so it isn't scaled by beta), and doesn't change any values. Pass
+any number of them as `choice_rules=`, to any learner. They see every move the rat makes, so they can remember what
+it did, and their parameters get fit like any other.
+
+**`PersistenceRule`**: remembers the move the rat made the last time it was in each state, and biases the next choice
+from that state toward the same move. For a directional learner, that's the turn the rat made the last time it came
+through a junction the same way. This lets habits (e.g. a rat shuttling between the same two ports whatever the reward
+probabilities are) be captured by the bias, instead of by the values.
+
+```text
+logit(move) = beta * value(move) + persistence * [move is the last move from this state]
+```
+
+So the last move is `e^persistence` times as likely as it would be from the values alone. `persistence` can be any
+number (negative is a bias toward switching).
+
+```python
+fit = KrauszDualLearner.fit_choices_hierarchical(sessions, choice_rules=[PersistenceRule()], lam=0.0, ...)
+```
+
+`PersistenceLearner` is persistence alone, with no value learning (every move is worth the same, so gamma and beta
+don't do anything and aren't fit). It's the habit-only baseline: if a learner with persistence beats it, value
+learning explains choices on top of habit.
+
+```python
+fit = PersistenceLearner.fit_choices_hierarchical(sessions, score_at="junctions", ...)
+```
 
 ## State space
 

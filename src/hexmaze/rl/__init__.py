@@ -2,6 +2,7 @@ from .hex_learning import (
     HexMazeTDLearner,
     KrauszDualLearner,
     SWRDualLearner,
+    PersistenceLearner,
     BaseHexLearner,
     UpdateRule,
     UpdateEvent,
@@ -14,6 +15,8 @@ from .hex_learning import (
     TDLambdaRule,
     ModelBasedRule,
     SWRRule,
+    ChoiceRule,
+    PersistenceRule,
     fit_many,
 )
 from .port_learning import (
@@ -29,6 +32,7 @@ __all__ = [
     "HexMazeTDLearner",
     "KrauszDualLearner",
     "SWRDualLearner",
+    "PersistenceLearner",
     "BaseHexLearner",
     "UpdateRule",
     "UpdateEvent",
@@ -41,6 +45,8 @@ __all__ = [
     "TDLambdaRule",
     "ModelBasedRule",
     "SWRRule",
+    "ChoiceRule",
+    "PersistenceRule",
     "fit_many",
     "fit_hierarchical",
     "HierarchicalFit",

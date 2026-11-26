@@ -34,6 +34,11 @@ How the agent turns values into a choice is supplied by a single RetrievalRule
 (see retrieval_rules.py). By default a move is worth the value of the hex it
 steps into. A retrieval rule can also read the hexes the rat swept to while
 deciding, and value a move by what it found by sweeping down that way.
+
+The agent can also have ChoiceRules (see choice_rules.py), which bias its choices
+directly instead of through the values, e.g. toward repeating the turn it made the
+last time it came through a junction (PersistenceRule). Each adds its own term to
+each move's logit in the softmax, next to beta * value.
 """
 
 import copy
@@ -149,8 +154,8 @@ class BaseHexLearner:
     """
 
     # The parameters every learner has, no matter which update rules it uses:
-    # {name: (first starting value for fit_choices, kind)}. Each update rule adds its
-    # own (see UpdateRule.FIT_PARAMS)
+    # {name: (first starting value for fit_choices, kind)}. Each update rule and choice
+    # rule adds its own (see UpdateRule.FIT_PARAMS and ChoiceRule.FIT_PARAMS)
     FIT_PARAMS = {"gamma": (0.9, "unit"), "beta": (2.0, "positive")}
 
     def __init__(
@@ -165,6 +170,7 @@ class BaseHexLearner:
         no_backtrack=True,
         retrieval=None,
         sweep_window=None,
+        choice_rules=None,
         reward_probs=None,
         **rule_kwargs,
     ):
@@ -209,6 +215,10 @@ class BaseHexLearner:
                 the hex it's choosing from. A number of hexes (e.g. 3 is that hex and the 2
                 before it on the path) or "trial" (every hex of the trial so far) also uses
                 what it represented on the way there (see pool_sweeps)
+            choice_rules (list of ChoiceRule): Biases on the agent's choices that don't
+                come from the values, e.g. [PersistenceRule()] (see choice_rules.py). Each
+                adds a term to each move's logit, next to beta * value. None (default) is
+                none
             reward_probs (list of float): [p1, p2, p3] reward probability at ports 1/A,
                 2/B, 3/C. Read when simulating only, to sample whether a reward is delivered.
             **rule_kwargs: Parameters for the update rules (e.g. alpha=, lam= for
@@ -238,6 +248,9 @@ class BaseHexLearner:
         self.no_backtrack = no_backtrack
         self.retrieval = LocalRetrieval() if retrieval is None else retrieval
         self.sweep_window = sweep_window
+        # Each learner gets its own copy of its choice rules, since they remember what the
+        # rat did (so two learners built from the same rules don't share a memory)
+        self.choice_rules = [copy.deepcopy(rule) for rule in choice_rules or []]
 
         for key, value in rule_kwargs.items():
             setattr(self, key, value)
@@ -330,7 +343,7 @@ class BaseHexLearner:
         # Only the session's very first trial may lack a real start port.
         self._is_first_trial = True
 
-        for rule in self.rules:
+        for rule in self.rules + self.choice_rules:
             rule.on_reset(self)
 
     def build_prior_table(self, priors):
@@ -618,6 +631,9 @@ class BaseHexLearner:
             events += rule.on_step(
                 self, context, state, next_state, reward if is_terminal else 0.0, is_terminal
             )
+        # Let the choice rules see the move too (e.g. to remember the turn the rat made here)
+        for rule in self.choice_rules:
+            rule.on_step(self, context, state, next_state)
         return events
 
     def end_trial(self, path, reward, context):
@@ -978,7 +994,7 @@ class BaseHexLearner:
         candidates = self.junction_candidates(cur_hex, entry_hex)
         if candidates is None or next_hex == entry_hex or next_hex not in candidates:
             return None
-        probabilities = self.softmax_probabilities(cur_hex, candidates, context, sweeps)
+        probabilities = self.softmax_probabilities(cur_hex, candidates, context, sweeps, entry_hex)
         probability_by_neighbor = dict(zip(candidates, probabilities.tolist()))
 
         # The values the agent compared to get the probabilities (if the rat swept
@@ -1108,7 +1124,7 @@ class BaseHexLearner:
                 # What the rat was representing while at this hex
                 step_sweeps = trial_sweeps[step] if trial_sweeps is not None else None
                 probabilities = self.softmax_probabilities(
-                    cur_hex, candidates, context, step_sweeps
+                    cur_hex, candidates, context, step_sweeps, entry_hex
                 )
                 probability_by_neighbor = dict(zip(candidates, probabilities.tolist()))
                 p_choice = probability_by_neighbor[next_hex]
@@ -1237,14 +1253,19 @@ class BaseHexLearner:
                 can fit, {name: value} for the parameters to fix, [names of the parameters
                 to fit], {name: value} for the constructor arguments)
         """
-        # Learner classes like KrauszDualLearner set their own rules, so build one to get
-        # them (BaseHexLearner needs the rules passed in)
+        # Learner classes like KrauszDualLearner (and PersistenceLearner) set their own rules,
+        # so build one to get them (BaseHexLearner needs the rules passed in)
         given = {name: value for name, value in kwargs.items() if value is not None}
-        learner_rules = rules if rules is not None else cls(maze, **given).rules
+        if rules is None:
+            learner = cls(maze, **given)
+            learner_rules, choice_rules = learner.rules, learner.choice_rules
+        else:
+            learner_rules, choice_rules = rules, list(kwargs.get("choice_rules") or [])
 
-        # Get the parameters this learner can fit: every learner's, plus each rule's own
+        # Get the parameters this learner can fit: every learner's, plus each update rule's
+        # and choice rule's own
         fit_params = dict(cls.FIT_PARAMS)
-        for rule in learner_rules:
+        for rule in learner_rules + choice_rules:
             fit_params.update(rule.FIT_PARAMS)
 
         # A parameter passed with a value is fixed, and the rest are fit. Anything else
@@ -1429,7 +1450,7 @@ class BaseHexLearner:
         while path[-1] not in goal_hexes:
             prev_hex = path[-2] if len(path) > 1 else None
             cur_hex = path[-1]
-            next_hex = self.choose_action(cur_hex, context, visited)
+            next_hex = self.choose_action(cur_hex, context, visited, prev_hex)
             path.append(next_hex)
             visited.add(next_hex)
 
@@ -1449,7 +1470,7 @@ class BaseHexLearner:
 
     #  Action selection
 
-    def choose_action(self, hex, context, visited):
+    def choose_action(self, hex, context, visited, entry_hex=None):
         """
         Pick the simulated agent's next hex by softmax over the value of each move.
 
@@ -1461,6 +1482,7 @@ class BaseHexLearner:
             hex (int): The hex the agent is choosing from
             context (int or None): The value table to read
             visited (set[int]): The hexes visited so far this trial
+            entry_hex (int or None): The hex the agent came from (None at the start of a trial)
 
         Returns:
             int: The hex the agent moves to
@@ -1469,20 +1491,24 @@ class BaseHexLearner:
         if self.no_backtrack:
             unvisited = [neighbor for neighbor in neighbors if neighbor not in visited]
             neighbors = unvisited or neighbors
-        probabilities = self.softmax_probabilities(hex, neighbors, context)
+        probabilities = self.softmax_probabilities(hex, neighbors, context, entry_hex=entry_hex)
         return int(np.random.choice(neighbors, p=probabilities))
 
-    def softmax_probabilities(self, hex, neighbors, context, sweeps=None):
+    def softmax_probabilities(self, hex, neighbors, context, sweeps=None, entry_hex=None):
         """
-        Get the softmax probability of choosing each neighbor.
+        Get the softmax probability of choosing each neighbor:
 
-        The value of each move comes from this learner's retrieval rule. Every
-        choice the model makes or scores goes through here: the simulated agent,
-        the choice likelihood, and the junction choices shown in animations.
+            P(move) ∝ exp( beta * value(move) + the bonus from each choice rule )
+
+        The value of each move comes from this learner's retrieval rule, and the
+        bonuses from its choice rules (e.g. PersistenceRule's bias toward repeating
+        the last move from this state). Every choice the model makes or scores goes
+        through here: the simulated agent, the choice likelihood, and the junction
+        choices shown in animations.
 
         The inverse temperature beta sets how strongly the agent prefers the better
         option: for large beta it almost always picks the highest-valued neighbor, and
-        near 0 its choices are closer to random.
+        near 0 its choices are closer to random (apart from any choice rule bonuses).
 
         Parameters:
             hex (int): The hex the agent is choosing from
@@ -1491,12 +1517,27 @@ class BaseHexLearner:
             sweeps (list[list[int]] or list[int], optional): The sweeps the rat made
                 from this hex, or a single list of represented hexes (see RetrievalRule).
                 None if the rat didn't represent anything beyond its current location
+            entry_hex (int or None): The hex the agent came from (None at the start of a
+                trial). With `hex`, this is the state the agent is choosing from, which
+                the choice rules need (e.g. PersistenceRule looks up the last move the rat
+                made from this state)
 
         Returns:
             np.ndarray: One probability per neighbor, summing to 1
         """
         values = self.retrieval.action_values(self, hex, neighbors, context, sweeps)
         scaled = self.beta * values
+
+        # Add each choice rule's bonus. These bias the choice directly, so they aren't
+        # scaled by beta (e.g. PersistenceRule adds `persistence` to the move the rat made
+        # the last time it was in this state, and 0 to the others). For a directional
+        # learner, the state is this hex as entered from entry_hex, so at a junction it
+        # includes which way the agent came in
+        state = self.state_key(entry_hex, hex)
+        for rule in self.choice_rules:
+            bonus = rule.bonus(self, context, state, neighbors)
+            if bonus is not None:
+                scaled = scaled + bonus
 
         # Subtract the max value to keep exp() from overflowing when beta (inverse
         # temperature) is big (this doesn't change the probabilities)

@@ -13,6 +13,8 @@ full covariance, the standard errors of the effects, and leave-one-subject-out c
 we added on top of em: groups (each rat its own group distribution), text covariates, checkpoints, and
 `fit_choices_hierarchical` with groups.
 
-Takes about 25 seconds.
+`test_persistence.py` checks `PersistenceRule`: the softmax gets exactly the persistence bonus for repeating the
+last turn at a junction (and only when coming through it the same way), and fitting gets back the persistence
+simulated sessions were made with.
 
 `em_reference/` has em's reference data and answers (see its [README](em_reference/README.md)).
