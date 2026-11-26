@@ -190,6 +190,8 @@ Use exactly one of these:
 - `replayed_hexes` (optional): one list of replayed hexes per trial (used by `SWRRule`).
 - `swept_hexes` (optional): for each trial, one entry per hex of the path, holding the sweeps made at that hex
   (each a list of hexes), or a single list of represented hexes (used by the sweep-based retrieval rules).
+- `dopamine` (optional): for each trial, one dopamine value per hex of the path, NaN for hexes to leave out (used by
+  `dopamine_nll` and `fit_dopamine_hierarchical`).
 
 Tracking errors in a trajectory (e.g. a jump between two hexes that aren't neighbors) are warned about and skipped.
 
@@ -200,7 +202,9 @@ Tracking errors in a trajectory (e.g. a jump between two hexes that aren't neigh
 | `learn(trajectories, rewards, ...)` | Learn from the rat's trajectories. `record="trial"` or `"step"` returns value snapshots |
 | `fit_choices(maze, trajectories, rewards, ...)` | (classmethod) Fit parameters to the rat's choices (see [How fitting works](#how-fitting-works)). Returns a fresh learner with `.choice_nll_`, `.choice_bic_`, `.choices_scored_` |
 | `fit_choices_hierarchical(sessions, ...)` | (classmethod) Fit many sessions at once, hierarchically (see [Hierarchical fitting](#hierarchical-fitting)). Returns a `HierarchicalFit` |
+| `fit_dopamine_hierarchical(sessions, ...)` | (classmethod) Fit many sessions at once to the rat's dopamine instead of its choices (see [Fitting to dopamine](#fitting-to-dopamine)). Returns a `HierarchicalFit` |
 | `choice_nll(trajectories, rewards, ...)` | NLL of the rat's choices under the current parameters. `record=True` also returns per-choice probabilities |
+| `dopamine_nll(trajectories, rewards, dopamine, ...)` | NLL of the rat's dopamine under the current parameters and dopamine regression. `record=True` also returns each hex's value, dopamine and prediction |
 | `value_timeseries(trajectories, rewards, sampled_hexes, represented_hexes=None, ...)` | Value of where the rat is (and what it's representing) at every sample, as a DataFrame |
 | `animate_learning(trajectories, rewards, ...)` | Animate learning one update at a time. `save_to=` writes an .mp4 or .gif |
 | `get_state_values(start_port)` | Current values as `{hex: value}` from one start port |
@@ -297,6 +301,29 @@ all run in parallel.
 ```python
 rat_fits = KrauszDualLearner.fit_choices_hierarchical(sessions, groups=..., cross_validate=True, ...)
 held_out = sum(sum(fit.held_out_nll.values()) for fit in rat_fits.values())  # lower is better
+```
+
+### Fitting to dopamine
+
+`fit_dopamine_hierarchical(sessions, ...)` fits the learner to the rat's dopamine instead of its choices, like Krausz
+et al. 2023's dopamine regression. The dopamine at each hex is modeled as a linear function of the value of the state
+the rat is in there, plus noise:
+
+    DA = da_intercept + da_slope * V(state) + noise,   noise ~ Normal(0, da_sd^2)
+
+V(state) is read right before the rat leaves that hex (so before that move updates anything), and the port the rat
+runs to isn't scored (there's no move out of it). Each session fits the learning parameters (not beta, which only
+affects choices) and `da_intercept`, `da_slope` and `da_sd`, and every one of them gets a group distribution.
+`da_intercept` and `da_slope` can be any number. Each session needs a `dopamine` entry (see
+[Data format](#data-format)), in the same units in every session (e.g. z-scored within each session), since they all
+share one group distribution. Groups, covariates and `cross_validate` work the same as for choices.
+
+```python
+rat_fits = KrauszDualLearner.fit_dopamine_hierarchical(
+    sessions, groups={key: key[0] for key in sessions}, lam=0.0,  # each session has a "dopamine" entry
+)
+rat_fits["IM-1871"].group_params()                   # including da_slope: how dopamine follows value
+rat_fits["IM-1871"].learners[key].dopamine_nll(...)  # record=True for each hex's value, dopamine and prediction
 ```
 
 How it works:

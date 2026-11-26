@@ -18,11 +18,13 @@ What we added on top of em (em has nothing to check these against):
     test_category_covariates                          text covariates (e.g. session type)
     test_checkpoint_*                                 picking up a fit that stopped partway
     test_fit_choices_hierarchical_with_groups         the hex learners hooking up to EM, with groups
+    test_fit_dopamine_hierarchical_recovers_parameters  fitting the dopamine regression (Krausz et al. 2023)
 
 Run with: pytest tests/
 """
 
 import math
+import random
 from pathlib import Path
 
 import numpy as np
@@ -266,3 +268,30 @@ def test_fit_choices_hierarchical_with_groups():
         for key, learner in fit.learners.items():
             assert [learner.gamma, learner.beta, learner.alpha] == fit.session_values[key]
             assert learner.choice_nll_ == fit.session_nll[key]
+
+
+def test_fit_dopamine_hierarchical_recovers_parameters():
+    # Simulate sessions, make up dopamine from a TD(0) learner's values with a known regression,
+    # and check fitting to the dopamine gets back the learning and regression parameters
+    random.seed(0)
+    np.random.seed(0)
+    rng = np.random.default_rng(0)
+    maze = create_empty_hex_maze()
+    sessions = {}
+    for i in range(4):
+        trials = HexMazeTDLearner(maze, alpha=0.3, gamma=0.9, beta=5.0, reward_probs=[0.9, 0.5, 0.1],
+                                  no_backtrack=False).simulate(start_state=1, n_trials=15)
+        trajectories, rewards = [trial["path"] for trial in trials], [trial["reward"] for trial in trials]
+        values = HexMazeTDLearner(maze, alpha=0.3, gamma=0.9).dopamine_values(trajectories, rewards)
+        dopamine = [0.5 + 2.0 * np.array(trial_values) + rng.normal(0, 0.3, len(trial_values))
+                    for trial_values in values]
+        sessions[i] = dict(maze=maze, trajectories=trajectories, rewards=rewards, dopamine=dopamine)
+
+    fit = HexMazeTDLearner.fit_dopamine_hierarchical(sessions, lam=0.0, n_starts=1, max_iterations=5)
+
+    medians = fit.group_params()["median"]
+    assert medians["gamma"] == pytest.approx(0.9, abs=0.1)
+    assert medians["alpha"] == pytest.approx(0.3, abs=0.1)
+    assert medians["da_intercept"] == pytest.approx(0.5, abs=0.05)
+    assert medians["da_slope"] == pytest.approx(2.0, abs=0.5)
+    assert medians["da_sd"] == pytest.approx(0.3, abs=0.05)
