@@ -77,21 +77,31 @@ class _ChoiceFit:
         self.data = data
         self.score_at = score_at
 
-    def build(self, free_values):
-        """Build a fresh learner with these values for the free parameters."""
+        # Pooling the sweeps (see sweep_window) doesn't depend on the parameters, so pool
+        # them once here instead of on every NLL. The learners we score with then use the
+        # pooled sweeps as they are (sweep_window=None)
+        self.scoring_data, self.scoring_kwargs = data, kwargs
+        if kwargs.get("sweep_window") is not None and data.get("swept_hexes") is not None:
+            self.scoring_data = {**data, "swept_hexes": pool_sweeps(data["swept_hexes"], kwargs["sweep_window"])}
+            self.scoring_kwargs = {**kwargs, "sweep_window": None}
+
+    def build(self, free_values, kwargs=None):
+        """Build a fresh learner with these values for the free parameters (and these
+        constructor arguments, instead of the fit's)."""
+        kwargs = self.kwargs if kwargs is None else kwargs
         params = dict(self.fixed)
         params.update(zip(self.free_names, free_values))
         if self.rules is None:
             # The class builds its own fresh rules on every call
-            return self.cls(self.maze, reward_probs=self.reward_probs, **params, **self.kwargs)
+            return self.cls(self.maze, reward_probs=self.reward_probs, **params, **kwargs)
         return self.cls(
             self.maze, rules=copy.deepcopy(self.rules), reward_probs=self.reward_probs,
-            **params, **self.kwargs,
+            **params, **kwargs,
         )
 
     def nll(self, free_values):
         """Get the choice NLL with these values for the free parameters."""
-        return self.build(free_values).choice_nll(**self.data, score_at=self.score_at)
+        return self.build(free_values, self.scoring_kwargs).choice_nll(**self.scoring_data, score_at=self.score_at)
 
 
 # Map each outline color name to a colormap used to shade a changed hex's outline by
@@ -261,6 +271,7 @@ class BaseHexLearner:
         self.prior_table = None  # {context: {hex: value}} or None
         self._hex_distances = None
         self._choice_points = {}
+        self._entry_directions = {}
         self.V = {}
         self.reset()
 
@@ -460,6 +471,7 @@ class BaseHexLearner:
         # Clear the cached distances and choice points (they were for the old maze)
         self._hex_distances = None
         self._choice_points = {}
+        self._entry_directions = {}
 
         # Get the states that exist in the new maze. Drop values for hexes that
         # are now barriers (so if that hex opens up again later, the agent has to
@@ -1278,7 +1290,7 @@ class BaseHexLearner:
     @classmethod
     def fit_choices_hierarchical(cls, sessions, rules=None, score_at="steps", covariates=None, groups=None,
                                  full_covariance=False, cross_validate=False, n_starts=8, seed=0, max_iterations=100,
-                                 tolerance=1e-3,
+                                 tolerance=1e-3, cross_validation_max_iterations=None,
                                  max_workers=None, checkpoint=None, verbose=False, **kwargs):
         """
         Fit the parameters that make the rat's hex-to-hex choices most likely, for many
@@ -1324,6 +1336,9 @@ class BaseHexLearner:
             max_iterations (int): The most EM iterations to run
             tolerance (float): Stop once the group parameters change by less than this
                 fraction between iterations (see fit_hierarchical)
+            cross_validation_max_iterations (int or None): The most EM iterations to run for
+                each cross validation refit (see fit_hierarchical). None (default) uses
+                max_iterations
             max_workers (int or None): How many sessions to fit at once, one process each.
                 None (default) uses one per core
             checkpoint (str, optional): A file to save the fit to after every EM iteration,
@@ -1380,6 +1395,7 @@ class BaseHexLearner:
             full_covariance=full_covariance,
             cross_validate=cross_validate,
             n_starts=n_starts, seed=seed, max_iterations=max_iterations, tolerance=tolerance,
+            cross_validation_max_iterations=cross_validation_max_iterations,
             max_workers=max_workers, checkpoint=checkpoint, verbose=verbose,
         )
 
@@ -1566,9 +1582,14 @@ class BaseHexLearner:
         from (or None, e.g. at the port a trial starts from), and we don't walk back
         through it, so hexes you can only reach by turning around aren't included.
 
+        This is computed the first time it's needed for each origin and prev_hex, and
+        cached until the maze changes (so don't change the dict it returns).
+
         Returns:
             dict: {hex: the hex you'd enter it from}
         """
+        if (origin, prev_hex) in self._entry_directions:
+            return self._entry_directions[(origin, prev_hex)]
         entry_from = {origin: prev_hex}
         visited = {origin} | ({prev_hex} if prev_hex is not None else set())
         frontier = [origin]
@@ -1581,6 +1602,7 @@ class BaseHexLearner:
                         entry_from[neighbor] = hex
                         next_frontier.append(neighbor)
             frontier = next_frontier
+        self._entry_directions[(origin, prev_hex)] = entry_from
         return entry_from
 
     def resolve_snapshot_entry_directions(self, path, step_index):
@@ -1602,8 +1624,13 @@ class BaseHexLearner:
         cur_hex = path[step_index]
         prev_hex = path[step_index - 1] if step_index > 0 else None
         ahead = self.bfs_entry_directions(cur_hex, prev_hex)
-        # A hex entered more than once this trial keeps its most recent direction
-        experienced = {path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)}
+        # A hex entered more than once this trial keeps its most recent direction. A jump
+        # between hexes that aren't neighbors (a tracking error) isn't a direction we have
+        # a value for, so that hex keeps the direction from walking out
+        experienced = {
+            path[i]: (path[i - 1] if i > 0 else None) for i in range(step_index + 1)
+            if i == 0 or self.graph.has_edge(path[i - 1], path[i])
+        }
         return {**start_directions, **ahead, **experienced}
 
     def plot_entry_directions(self, path, step_index, ax=None, **plot_kwargs):

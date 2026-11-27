@@ -203,7 +203,7 @@ class HierarchicalFit:
 
     Attributes:
         param_names (list of str): The fitted parameters, in order
-        kinds (list of str): "unit" or "positive" for each parameter
+        kinds (list of str): "unit", "positive", or "real" for each parameter
         group_effects (pd.DataFrame): How each column of the design matrix (the intercept,
             then the covariates) shifts the group mean of each parameter. One row per
             column of the design matrix, one column per parameter. With no covariates,
@@ -301,7 +301,8 @@ class HierarchicalFit:
         rows = {}
         group_mean = self.group_mean(**covariate_values)
         for name, kind, mean, sd in zip(self.param_names, self.kinds, group_mean, self.group_sd):
-            # expit for a parameter between 0 and 1, exp for a parameter above 0
+            # expit for a parameter between 0 and 1, exp for a parameter above 0, and nothing for
+            # a parameter that can be any number
             to_normal_units = _FROM_UNBOUNDED[kind]
             # 5% of a normal distribution is more than 1.645 sd below the mean (and 5% more
             # than 1.645 sd above). Turning these back into normal units keeps them in order,
@@ -339,7 +340,7 @@ class _SessionPosterior:
     def __init__(self, nll, kinds, group_mean, group_covariance):
         # The session's NLL (takes parameter values in normal units)
         self.nll = nll
-        # "unit" or "positive" for each parameter
+        # "unit", "positive", or "real" for each parameter
         self.kinds = kinds
         # This session's group mean, mu (unbounded numbers)
         self.group_mean = group_mean
@@ -587,7 +588,7 @@ def _run_em(session_nlls, kinds, group_keys, design_matrices, fits, session_star
 
     Parameters:
         session_nlls (dict): {session key: its NLL function}
-        kinds (list of str): "unit" or "positive" for each parameter
+        kinds (list of str): "unit", "positive", or "real" for each parameter
         group_keys (dict): {group: [its session keys, in order]}
         design_matrices (dict): {group: X (pd.DataFrame, one row per session in group_keys)}
         fits (dict): {group: where its EM is at: its effects, group_covariance, history,
@@ -734,6 +735,11 @@ def _held_out_nlls(session_nlls, kinds, group_keys, design_matrices, fits, setup
     _run_em(held_out_nlls, kinds, held_out_keys, held_out_designs, held_out_fits, starts,
             {**setup, "cross validation": True}, 1, seed, max_iterations, tolerance, full_covariance, pool,
             checkpoint, verbose)
+    not_converged = [held_out for held_out, fit in held_out_fits.items() if not fit["converged"]]
+    if not_converged:
+        warnings.warn(f"{len(not_converged)} of {len(held_out_fits)} cross validation refits hit {max_iterations} "
+                      f"iterations without converging (held out {not_converged}), so their held-out NLLs are "
+                      f"less reliable")
 
     # Score each held-out session given its refit group distribution
     jobs = []
@@ -749,7 +755,8 @@ def _held_out_nlls(session_nlls, kinds, group_keys, design_matrices, fits, setup
 
 def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covariates=None, groups=None,
                      full_covariance=False, cross_validate=False, n_starts=8, seed=0, max_iterations=100,
-                     tolerance=1e-3, max_workers=None, checkpoint=None, verbose=False):
+                     tolerance=1e-3, cross_validation_max_iterations=None, max_workers=None, checkpoint=None,
+                     verbose=False):
     """
     Fit the same model to many sessions hierarchically, with EM (see the module docstring).
 
@@ -763,7 +770,8 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             something we can send to another process (e.g. a method of an object, not a
             lambda). The key can be anything (e.g. (rat, date))
         start_values (list of float): The starting values of the parameters (normal units)
-        kinds (list of str): "unit" (between 0 and 1) or "positive" (above 0) for each parameter
+        kinds (list of str): "unit" (between 0 and 1), "positive" (above 0), or "real" (any
+            number) for each parameter
         param_names (list of str, optional): The name of each parameter (default "param 0", ...)
         covariates (pd.DataFrame, optional): Things we know about each session that the
             group mean can depend on. One row per session (indexed by session key), one
@@ -794,6 +802,10 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
             changes by more than this fraction between iterations (or by more than this,
             for ones under 0.01). The default 1e-3 is em's. With groups, each group stops
             on its own
+        cross_validation_max_iterations (int or None): The most EM iterations to run for each
+            cross validation refit. They start from the full fit, so they usually need far
+            fewer than it did. None (default) uses max_iterations. A refit that hits this
+            without converging is warned about
         max_workers (int or None): How many sessions to fit at once, one process each.
             None (default) uses one per core, and 1 fits them one at a time
         checkpoint (str, optional): A file to save the fit to after every iteration. If
@@ -864,7 +876,9 @@ def fit_hierarchical(session_nlls, start_values, kinds, param_names=None, covari
                 print("cross validating")
             root, extension = os.path.splitext(str(checkpoint)) if checkpoint is not None else (None, None)
             held_out_nll = _held_out_nlls(
-                session_nlls, kinds, group_keys, design_matrices, fits, setup, seed, max_iterations, tolerance,
+                session_nlls, kinds, group_keys, design_matrices, fits, setup, seed,
+                max_iterations if cross_validation_max_iterations is None else cross_validation_max_iterations,
+                tolerance,
                 full_covariance, pool, None if checkpoint is None else f"{root}_cross_validation{extension}", verbose,
             )
 
